@@ -2,16 +2,16 @@
   "name": "OmniFlow — private finance",
   "short_name": "OmniFlow",
   "description": "Zero-cost, private, offline-first personal finance PWA. Your data stays encrypted in your browser.",
-  "start_url": "/",
-  "scope": "/",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0f1115",
   "theme_color": "#0f1115",
   "categories": ["finance", "productivity"],
   "icons": [
-    { "src": "/icon-180.png",  "sizes": "180x180",  "type": "image/png", "purpose": "any" },
-    { "src": "/icon-192.png",  "sizes": "192x192",  "type": "image/png", "purpose": "any maskable" },
-    { "src": "/icon-512.png",  "sizes": "512x512",  "type": "image/png", "purpose": "any maskable" }
+    { "src": "icon-180.png",  "sizes": "180x180",  "type": "image/png", "purpose": "any" },
+    { "src": "icon-192.png",  "sizes": "192x192",  "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png",  "sizes": "512x512",  "type": "image/png", "purpose": "any maskable" }
   ]
 }

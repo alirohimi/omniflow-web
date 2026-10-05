@@ -25,16 +25,24 @@ const PBKDF2_ITERATIONS = 210_000; // OWASP-adjacent floor for SHA-256+PBKDF2
 const ENC = new TextEncoder();
 const DEC = new TextDecoder();
 
-function bufToB64(b: ArrayBuffer): string {
-  const s = Uint8Array.from(b);
+// TS >= 5.7 ships generic typed arrays. `new Uint8Array(n)` is
+// Uint8Array<ArrayBuffer> (backed by a plain ArrayBuffer) — a valid WebCrypto
+// BufferSource (ArrayBufferView<ArrayBuffer> | ArrayBuffer). We type every
+// buffer concretely as Uint8Array<ArrayBuffer> so the DOM lib's BufferSource
+// check passes. A bare `Uint8Array` (= Uint8Array<ArrayBufferLike>) would be
+// rejected in TS 5.8/5.9.
+type U8 = Uint8Array<ArrayBuffer>;
+
+function bufToB64(b: ArrayBuffer | U8): string {
+  const s = b instanceof Uint8Array ? b : new Uint8Array(b);
   let out = '';
   for (let i = 0; i < s.length; i++) out += String.fromCharCode(s[i]);
   return btoa(out);
 }
 
-function b64ToBuf(b: string): ArrayBuffer {
+function b64ToU8(b: string): U8 {
   const s = atob(b);
-  const out = new Uint8Array(s.length);
+  const out = new Uint8Array(s.length); // Uint8Array<ArrayBuffer>
   for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
   return out;
 }
@@ -42,7 +50,7 @@ function b64ToBuf(b: string): ArrayBuffer {
 /** Derive a usable AES-GCM CryptoKey from a passphrase + salt. */
 async function deriveKey(
   passphrase: string,
-  salt: Uint8Array,
+  salt: U8,
 ): Promise<CryptoKey> {
   const baseKey = await crypto.subtle.importKey(
     'raw',
@@ -65,8 +73,8 @@ export async function encryptVault(
   payload: unknown,
   passphrase: string,
 ): Promise<VaultCipher> {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const salt = crypto.getRandomValues(new Uint8Array(16)); // U8
+  const iv = crypto.getRandomValues(new Uint8Array(12)); // U8
   const key = await deriveKey(passphrase, salt);
   const body = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv },
@@ -81,14 +89,14 @@ export async function decryptVault<T>(
   c: VaultCipher,
   passphrase: string,
 ): Promise<T> {
-  const salt = b64ToBuf(c.salt);
-  const iv = b64ToBuf(c.iv);
-  const body = b64ToBuf(c.body);
-  const key = await deriveKey(passphrase, new Uint8Array(salt));
+  const salt = b64ToU8(c.salt);
+  const iv = b64ToU8(c.iv);
+  const body = b64ToU8(c.body);
+  const key = await deriveKey(passphrase, salt);
   const plain = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: new Uint8Array(iv) },
+    { name: 'AES-GCM', iv },
     key,
-    new Uint8Array(body),
+    body,
   );
   const text = DEC.decode(plain);
   return JSON.parse(text) as T;
@@ -103,4 +111,4 @@ export async function fingerprintSecret(
   return bufToB64(h).slice(0, 16);
 }
 
-export const __test = { bufToB64, b64ToBuf, PBKDF2_ITERATIONS };
+export const __test = { bufToB64, b64ToU8, PBKDF2_ITERATIONS };

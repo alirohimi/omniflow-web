@@ -1,0 +1,59 @@
+name: CI & Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+# Permissions required for the "Deploy to Pages" job.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+# GitHub Pages serves this repo at a project subpath (no user-site repo).
+env:
+  PAGES_BASE: /omniflow-web/
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      base_url: ${{ steps.base.outputs.base_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Unit tests
+        run: npm test -- --run
+      - name: Typecheck + build
+        env:
+          BASE_URL: ${{ env.PAGES_BASE }}
+        run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+        with:
+          # Project Pages -> subpath. Use 'root' only if you later create a
+          # user-site repo (alirohimi.github.io) and switch to that target.
+          route: 'project'

@@ -1,0 +1,107 @@
+// ============================================================================
+// Settings — preferences, BYOK LLM keys, security, demo data, danger zone.
+// ============================================================================
+
+import { useState } from 'react';
+import { useVaultStore } from '../store/store';
+import { CURRENCIES } from '../domain/enums';
+
+export function SettingsView() {
+  const store = useVaultStore();
+  const { vault } = store;
+  if (!vault) return null;
+
+  const [provider, setProvider] = useState<'none' | 'openai' | 'anthropic'>(vault.prefs.llmProvider);
+  const [key, setKey] = useState('');
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const prefs = vault.prefs;
+
+  const saveLlm = () => {
+    store.setLlmKey(provider, provider === 'none' ? '' : key.trim());
+    setKey('');
+    setMsg(provider === 'none' ? 'LLM key removed — categorization falls back to the on-device rule engine.' : `LLM key stored (${provider}). Categorization now uses the cloud tier.`);
+  };
+
+  return (
+    <>
+      <h2 className="section-title">Preferences</h2>
+      <div className="card">
+        <label className="field"><span>Display name</span>
+          <input value={prefs.displayName} onChange={(e) => store.setPrefs({ displayName: e.target.value })} />
+        </label>
+        <label className="field"><span>Base currency (all totals convert to this)</span>
+          <select value={prefs.baseCurrency} onChange={(e) => store.setPrefs({ baseCurrency: e.target.value })}>
+            {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.code} — {c.name}</option>)}
+          </select>
+        </label>
+        <div className="list" style={{ marginTop: 12 }}>
+          <label className="row">
+            <span>Auto-categorize new expenses (AI engine)</span>
+            <input type="checkbox" checked={prefs.autoCategorize} onChange={(e) => store.setPrefs({ autoCategorize: e.target.checked })} />
+          </label>
+          <label className="row">
+            <span>Advisor rules (overspend, concentration, pace)</span>
+            <input type="checkbox" checked={prefs.advisorRules} onChange={(e) => store.setPrefs({ advisorRules: e.target.checked })} />
+          </label>
+        </div>
+      </div>
+
+      <h2 className="section-title">AI — bring-your-own key (optional)</h2>
+      <div className="card">
+        <p className="muted small">
+          Without a key, OmniFlow categorizes with the free on-device rule engine.
+          Add a key to use the cloud LLM tier. The key is encrypted inside your
+          vault — it never leaves this device except to the provider API.
+        </p>
+        <label className="field"><span>Provider</span>
+          <select value={provider} onChange={(e) => setProvider(e.target.value as typeof provider)}>
+            <option value="none">None (on-device rules)</option>
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+          </select>
+        </label>
+        {provider !== 'none' && (
+          <label className="field"><span>{prefs.llmKeyFinger ? 'Replace key (current: …' + prefs.llmKeyFinger + ')' : 'API key'}</span>
+            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-…" />
+          </label>
+        )}
+        <button className="btn sm" onClick={saveLlm}>Save</button>
+        {msg && <div className="small muted" style={{ marginTop: 8 }}>{msg}</div>}
+      </div>
+
+      <h2 className="section-title">Data</h2>
+      <div className="card">
+        <div className="list">
+          <button className="btn ghost sm" onClick={() => { store.loadDemo(); setMsg('Demo data loaded.'); }}>Load demo data</button>
+          <button className="btn ghost sm" onClick={() => store.lock()}>Lock vault now</button>
+        </div>
+        <p className="muted small" style={{ marginTop: 8 }}>
+          {vault.expenses.length} expenses · {vault.holdings.length} holdings · {vault.accounts.length} accounts · updated {new Date(vault.updatedAt).toLocaleString()}
+        </p>
+      </div>
+
+      <h2 className="section-title">Security</h2>
+      <div className="card">
+        <p className="muted small">
+          Everything is encrypted at rest with AES-256-GCM using a key derived
+          from your passphrase (PBKDF2, 210k iterations). The ciphertext lives
+          only in this browser. A wrong passphrase fails to decrypt — there is
+          no bypass, no recovery, no server copy.
+        </p>
+      </div>
+
+      <h2 className="section-title">Danger zone</h2>
+      <div className="card">
+        <button className="btn danger sm"
+          onClick={() => {
+            if (confirm('Erase ALL OmniFlow data from this browser? This cannot be undone.')) {
+              void store.eraseAll();
+            }
+          }}>
+          Erase all data
+        </button>
+      </div>
+    </>
+  );
+}

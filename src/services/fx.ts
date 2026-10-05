@@ -118,24 +118,33 @@ export class CurrencyExchangeService {
     throw new Error(`FX unavailable: ${errors.join('; ')}`);
   }
 
-  /** Convert `amount` in `fromCurrency` to `toCurrency` using `rates`
-   *  (units-of-target per 1 source). Pure + cheap. */
+  /** Convert `amount` in `fromCurrency` to `toCurrency`. `rates` is a
+   *  per-1-base table (rates[code] = units of `code` per 1 base), so units
+   *  of `to` per 1 `from` = rates[to] / rates[from]. */
   convert(amount: number, from: string, to: string, rates: RatesForBase): number {
     if (from === to) return amount;
-    const direct = rates.rates[to];
-    if (direct === undefined) return NaN;
-    return amount * direct;
+    const f = rates.rates[from];
+    const t = rates.rates[to];
+    if (f === undefined || t === undefined || !isFinite(f) || !isFinite(t) || f === 0) return NaN;
+    return amount * (t / f);
   }
 
-  /** Convenience: convert to base currency. */
+  /** Convenience: convert `amount` in `fromCurrency` to the base currency.
+   *  units of base per 1 `from` = 1 / rates[from]. */
   toBase(amount: number, from: string, rates: RatesForBase): number {
-    return this.convert(amount, from, rates.base, rates);
+    if (from === rates.base) return amount;
+    const f = rates.rates[from];
+    if (f === undefined || !isFinite(f) || f === 0) return NaN;
+    return amount / f;
   }
 
-  /** Rate of `from` in `to`, i.e. units of `to` per 1 `from`. */
+  /** Rate of `from` in `to`, i.e. units of `to` per 1 `from` = rates[to] / rates[from]. */
   rate(from: string, to: string, rates: RatesForBase): number {
     if (from === to) return 1;
-    return rates.rates[to] ?? NaN;
+    const f = rates.rates[from];
+    const t = rates.rates[to];
+    if (f === undefined || t === undefined || f === 0) return NaN;
+    return t / f;
   }
 }
 

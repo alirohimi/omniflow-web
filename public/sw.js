@@ -1,17 +1,38 @@
-// OmniFlow service worker — app-shell cache for offline use.
+// OmniFlow service worker — offline app-shell caching.
+//
+// Subpath-safe: all cache keys are RELATIVE to the SW's own location, so it
+// works at both "/" (root) and "/omniflow-web/" (GitHub Pages subpath).
 //
 // Strategy:
-//   - network-first for navigations (fresh HTML), falling back to cache.
-//   - cache-first for immutable hashed assets (JS/CSS) — Vite fingerprints
-//     them, so once cached they are valid forever.
-//   - the PWA must keep working offline after the first load.
+//   - navigations: network-first, cache fallback (fresh deploys win offline).
+//   - hashed assets + manifest + icons: cache-first (immutable).
+//   - external API traffic (FX, CoinGecko, Yahoo, LLM providers) is never
+//     intercepted — the app layers handle their failures with cached/manual
+//     fallbacks.
 
-const CACHE = 'omniflow-v1';
-const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon-180.png', '/icon-192.png', '/icon-512.png'];
+const CACHE = 'omniflow-v2';
+const RELATIVE_SHELL = [
+  './',
+  './index.html',
+  './manifest.webmanifest',
+  './icon-180.png',
+  './icon-192.png',
+  './icon-512.png',
+];
+
+// Resolve a request URL to a cache key relative to the SW origin+scope.
+function cacheKey(req) {
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return null;
+  return url.pathname + (url.search || '');
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting())
+    caches
+      .open(CACHE)
+      .then((cache) => cache.addAll(RELATIVE_SHELL.map((p) => new URL(p, self.location).toString())))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -28,36 +49,41 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
 
-  // Only intercept same-origin + public (API calls, including Frankfurter /
-  // CoinGecko / Yahoo, are left to the network; the app handles their errors
-  // and falls back to manual prices).
   const url = new URL(req.url);
-  const isAppShell = url.origin === self.location.origin;
-  if (!isAppShell) return; // let external API traffic flow through normally
+  if (url.origin !== self.location.origin) return; // let external APIs flow.
 
-  // Navigations: network-first, cache fallback (so deploys update but
-  // offline still works).
+  const key = cacheKey(req);
+  if (!key) return;
+
   if (req.mode === 'navigate') {
     event.respondWith(
       fetch(req)
         .then((res) => {
           const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+          caches.open(CACHE).then((c) => c.put(key, copy)).catch(() => {});
           return res;
         })
-        .catch(() => caches.match('/index.html').then((m) => m || Response.error()))
+        .catch(async () => {
+          // Offline: fall back to the cached app shell.
+          const shell = await caches.match(new URL('./index.html', self.location).toString());
+          return shell ?? Response.error();
+        })
     );
     return;
   }
 
-  // Hashed assets: cache-first.
+  // Everything else same-origin: cache-first, fill from network.
   event.respondWith(
-    caches.match(req).then((hit) => hit || fetch(req).then((res) => {
-      if (res && res.status === 200) {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
-      }
-      return res;
-    }))
+    caches.match(key).then(
+      (hit) =>
+        hit ??
+        fetch(req).then((res) => {
+          if (res && res.status === 200) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(key, copy)).catch(() => {});
+          }
+          return res;
+        })
+    )
   );
 });

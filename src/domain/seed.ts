@@ -47,7 +47,7 @@ export function demoVault(): VaultBlob {
       baseCurrency: 'MYR',
       category: 'Food & Dining',
       aiTier: 'dictionary',
-      merchant: 'Lotus's Cheras',
+      merchant: "Lotus's Cheras",
       timestamp: now - 0 * day,
       paymentMethod: 'card',
       source: 'card',

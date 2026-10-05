@@ -28,7 +28,7 @@ import type {
   VaultBlob,
   Category,
 } from '../domain/types';
-import { emptyVault } from '../domain/seed';
+import { emptyVault, demoVault } from '../domain/seed';
 import { encryptVault, decryptVault, fingerprintSecret, type VaultCipher } from '../security/vault';
 import { hasVault, loadCipher, saveVault, wipe } from '../security/persistence';
 import { LLMConfig } from '../ai/categorize';
@@ -46,6 +46,8 @@ export interface NewExpenseInput {
   source: Expense['source'];
   note?: string;
   receiptText?: string;
+  /** Explicit timestamp (demo seed). Defaults to now. */
+  timestamp?: number;
 }
 
 export interface NewHoldingInput {
@@ -78,18 +80,20 @@ export interface VaultStore {
   vault: VaultBlob | null;
   llmConfig: LLMConfig | null;
 
-  addExpense: (input: NewExpenseInput) => void;
+  addExpense: (input: NewExpenseInput) => string;
   deleteExpense: (id: string) => void;
   addCategory: (name: string, icon: string) => void;
 
-  addAccount: (input: NewAccountInput) => void;
+  addAccount: (input: NewAccountInput) => string;
   deleteAccount: (id: string) => void;
-  addHolding: (input: NewHoldingInput) => void;
+  addHolding: (input: NewHoldingInput) => string;
   deleteHolding: (id: string) => void;
   updateHoldingPrice: (id: string, local: number, base: number) => void;
 
   setPrefs: (patch: Partial<UserPreferences>) => void;
   setLlmKey: (provider: 'none' | 'openai' | 'anthropic', key: string) => void;
+  /** Replace the current vault with the bundled demo dataset (keeps prefs). */
+  loadDemo: () => void;
 
   categories: Category[];
 }
@@ -107,19 +111,24 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [vault, setVault] = useState<VaultBlob | null>(null);
   const passRef = useRef<string>(''); // holds passphrase in-memory only
-  const saving = useRef(false);
+  const chainRef = useRef<Promise<void>>(Promise.resolve());
 
+  // Serialised persist: every mutation enqueues behind the previous one so a
+  // burst of rapid writes (e.g. loading demo data) is not dropped. Each entry
+  // encrypts the `next` it was given, so the LAST write always wins.
   const persist = useCallback(async (next: VaultBlob) => {
-    if (!passRef.current || saving.current) return;
-    saving.current = true;
-    try {
-      const cipher = await encryptVault(next, passRef.current);
-      await saveVault(cipher);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      saving.current = false;
-    }
+    const pass = passRef.current;
+    if (!pass) return;
+    chainRef.current = chainRef.current.then(
+      async () => {
+        try {
+          const cipher = await encryptVault(next, pass);
+          await saveVault(cipher);
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+      },
+    );
   }, []);
 
   // Initial probe: is there an existing vault?
@@ -189,20 +198,22 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   // ---- data mutators (guard: only when unlocked) ----
 
   const addExpense = useCallback(
-    (input: NewExpenseInput) => {
+    (input: NewExpenseInput): string => {
+      const id = `ex-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
       setVault((prev) => {
         if (!prev) return prev;
         const exp: Expense = {
-          id: `ex-${Date.now().toString(36)}`,
+          id,
           baseCurrency: prev.prefs.baseCurrency,
           baseAmount: input.originalAmount * input.fxRate,
-          timestamp: Date.now(),
+          timestamp: input.timestamp ?? Date.now(),
           ...input,
         };
         const next = { ...prev, expenses: [exp, ...prev.expenses], updatedAt: Date.now() };
         void persist(next);
         return next;
       });
+      return id;
     },
     [persist],
   );
@@ -236,11 +247,12 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   );
 
   const addAccount = useCallback(
-    (input: NewAccountInput) => {
+    (input: NewAccountInput): string => {
+      const id = `acc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
       setVault((prev) => {
         if (!prev) return prev;
         const acc: InvestmentAccount = {
-          id: `acc-${Date.now().toString(36)}`,
+          id,
           baseCurrencyValue: 0,
           lastUpdated: Date.now(),
           ...input,
@@ -249,6 +261,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         void persist(next);
         return next;
       });
+      return id;
     },
     [persist],
   );
@@ -271,11 +284,12 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   );
 
   const addHolding = useCallback(
-    (input: NewHoldingInput) => {
+    (input: NewHoldingInput): string => {
+      const id = `h-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
       setVault((prev) => {
         if (!prev) return prev;
         const h: InvestmentHolding = {
-          id: `h-${Date.now().toString(36)}`,
+          id,
           currentPriceLocal: input.currentPriceLocal ?? input.averageEntryPrice,
           currentPriceBase: input.currentPriceBase ?? input.averageEntryPrice,
           ...input,
@@ -284,6 +298,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         void persist(next);
         return next;
       });
+      return id;
     },
     [persist],
   );
@@ -354,6 +369,24 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     [persist],
   );
 
+  const loadDemo = useCallback(() => {
+    setVault((prev) => {
+      if (!prev) return prev;
+      const demo = demoVault();
+      // Preserve the user's real prefs (base currency, keys) — only replace
+      // the financial data, so demo load never clobbers security settings.
+      const next: VaultBlob = {
+        ...demo,
+        prefs: prev.prefs,
+        llmKey: prev.llmKey,
+        createdAt: prev.createdAt,
+        updatedAt: Date.now(),
+      };
+      void persist(next);
+      return next;
+    });
+  }, [persist]);
+
   const llmConfig = useMemo<LLMConfig | null>(() => {
     if (!vault || vault.prefs.llmProvider === 'none' || !vault.llmKey) return null;
     return { provider: vault.prefs.llmProvider, apiKey: vault.llmKey };
@@ -378,6 +411,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     updateHoldingPrice,
     setPrefs,
     setLlmKey,
+    loadDemo,
     categories: vault?.categories ?? [],
   };
 
