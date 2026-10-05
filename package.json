@@ -1,0 +1,29 @@
+{
+  "name": "omniflow-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "OmniFlow — zero-cost personal finance PWA (client-side, no backend).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "dexie": "^4.0.11",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.0",
+    "tesseract.js": "^5.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.5.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.0.5"
+  }
+}

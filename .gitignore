@@ -1,0 +1,28 @@
+# dependencies
+/node_modules
+
+# build output
+/dist
+/build
+*.tsbuildinfo
+
+# local env (BYOK keys, never committed)
+.env
+.env.local
+.env.*.local
+
+# editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.local
+
+# logs
+npm-debug.log*
+yarn-error.log*
+.eslintcache
+
+# vitest
+/test-results/
+/coverage
