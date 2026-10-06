@@ -61,7 +61,7 @@ function Shell() {
         <div className="gate">
           <div className="panel" style={{ textAlign: 'center', padding: '40px 24px' }}>
             <div style={{ marginBottom: 14, opacity: 0.8 }}>
-              <IUser size={40} style={{ margin: '0 auto', display: 'block' }} />
+              <IUser size={40} />
             </div>
             <h1>Checking your account…</h1>
             <p className="muted">Restoring your session.</p>
