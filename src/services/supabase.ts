@@ -41,7 +41,12 @@ export function getSupabase(): SupabaseClient | null {
         persistSession: true,
         autoRefreshToken: true,
         // Email-only auth; we never use OAuth providers.
-        detectSessionInUrl: false,
+        // Must be TRUE: after the user clicks the email-confirmation link,
+        // the browser lands on the app with ?code=…&type=signup and the
+        // client silently exchanges the code for a session here. If this is
+        // false, confirmation "succeeds" on the server but the app never
+        // learns the user is confirmed — the classic broken-confirmation bug.
+        detectSessionInUrl: true,
       },
     });
   }

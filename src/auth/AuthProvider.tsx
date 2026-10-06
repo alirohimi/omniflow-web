@@ -98,10 +98,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLastError(null);
       const sb = getSupabase();
       if (!sb) throw new Error('Cloud sync is not configured.');
+      // The email-confirmation link must land back on THIS app (with ?code=),
+      // where detectSessionInUrl completes the session. Always send the live
+      // origin + base path — never the Supabase project's default site URL
+      // (which often still points at a dev machine).
+      const emailRedirectTo =
+        window.location.origin + (import.meta.env.BASE_URL || '/');
       const { data, error } = await sb.auth.signUp({
         email,
         password,
-        options: { data: { display_name: displayName } },
+        options: {
+          data: { display_name: displayName },
+          emailRedirectTo,
+        },
       });
       if (error) {
         setLastError(error.message);
