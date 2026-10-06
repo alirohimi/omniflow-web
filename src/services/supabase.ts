@@ -18,9 +18,17 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
+// Tolerate a one-letter-missing "htps://" typo in the configured URL and
+// normalize it to a valid https scheme — so a single dropped character in a
+// CI secret can never silently disable the whole cloud layer.
+const normUrl = (() => {
+  const raw = (url ?? '').trim();
+  return /^htps:\//i.test(raw) ? raw.replace(/^htps:/i, 'https:') : raw;
+})();
+
 /** True when a Supabase endpoint is configured (enables Auth + cloud vault sync). */
 export const isCloudEnabled = (): boolean =>
-  !!url && !!anonKey && /^https:\/\//.test(url);
+  !!normUrl && !!anonKey && /^https:\/\/(www\.)?/.test(normUrl) && normUrl.includes('.');
 
 let _client: SupabaseClient | null = null;
 
@@ -28,7 +36,7 @@ let _client: SupabaseClient | null = null;
 export function getSupabase(): SupabaseClient | null {
   if (!isCloudEnabled()) return null;
   if (!_client) {
-    _client = createClient(url!, anonKey!, {
+    _client = createClient(normUrl!, anonKey!, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
