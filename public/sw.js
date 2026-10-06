@@ -10,7 +10,7 @@
 //     intercepted — the app layers handle their failures with cached/manual
 //     fallbacks.
 
-const CACHE = 'omniflow-v2';
+const CACHE = 'omniflow-v3';
 const RELATIVE_SHELL = [
   './',
   './index.html',

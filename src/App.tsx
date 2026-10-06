@@ -13,7 +13,7 @@ import { ExpensesView } from './views/ExpensesView';
 import { InvestmentsView } from './views/InvestmentsView';
 import { SettingsView } from './views/SettingsView';
 import { currencyInfo } from './domain/enums';
-import { IHome, IWallet, ITrend, IGear, ILock, IUser } from './icons';
+import { IHome, IWallet, ITrend, IGear, ILock } from './icons';
 
 type Tab = 'dashboard' | 'expenses' | 'investments' | 'settings';
 
@@ -60,8 +60,8 @@ function Shell() {
       return (
         <div className="gate">
           <div className="panel" style={{ textAlign: 'center', padding: '40px 24px' }}>
-            <div style={{ marginBottom: 14, opacity: 0.8 }}>
-              <IUser size={40} />
+            <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'center' }}>
+              <span className="spinner" />
             </div>
             <h1>Checking your account…</h1>
             <p className="muted">Restoring your session.</p>
@@ -113,7 +113,7 @@ function Shell() {
             aria-current={tab === t.id}
             onClick={() => setTab(t.id)}
           >
-            <t.ico size={20} />
+            <span className="tab-ico"><t.ico size={20} /></span>
             {t.label}
           </button>
         ))}

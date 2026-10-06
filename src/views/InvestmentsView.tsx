@@ -202,7 +202,7 @@ export function InvestmentsView() {
             </select>
           </label>
         </div>
-        <button className="btn" style={{ width: '100%' }} disabled={!accountId} onClick={() => void addHolding()}>
+        <button className={`btn sm${accountId ? '' : ' ghost'}`} style={{ width: '100%' }} disabled={!accountId} onClick={() => void addHolding()}>
           {accountId ? 'Add holding' : 'Set a target account first'}
         </button>
       </div>
