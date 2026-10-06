@@ -4,10 +4,12 @@
 
 import { useState } from 'react';
 import { useVaultStore } from '../store/store';
+import { useAuthStore } from '../auth/AuthProvider';
 import { CURRENCIES } from '../domain/enums';
 
 export function SettingsView() {
   const store = useVaultStore();
+  const auth = useAuthStore();
   const { vault } = store;
   if (!vault) return null;
 
@@ -79,6 +81,52 @@ export function SettingsView() {
         <p className="muted small" style={{ marginTop: 8 }}>
           {vault.expenses.length} expenses · {vault.holdings.length} holdings · {vault.accounts.length} accounts · updated {new Date(vault.updatedAt).toLocaleString()}
         </p>
+      </div>
+
+      <h2 className="section-title">Account &amp; Sync</h2>
+      <div className="card">
+        {auth.cloudAvailable ? (
+          auth.user ? (
+            <>
+              <div className="list">
+                <div className="row">
+                  <span>Signed in</span>
+                  <span className="muted small">{auth.user.email}</span>
+                </div>
+                <div className="row">
+                  <span>Vault sync</span>
+                  <span className="badge">
+                    {store.syncState === 'synced' ? 'synced' : store.syncState === 'error' ? 'error' : store.syncState}
+                  </span>
+                </div>
+              </div>
+              <p className="muted small" style={{ marginTop: 8 }}>
+                Your encrypted vault is shared with every device signed in to{' '}
+                {auth.user.user_metadata?.display_name
+                  ? `${auth.user.user_metadata.display_name} `
+                  : ''}
+                ({auth.user.email}). Only ciphertext is stored.
+              </p>
+              <button className="btn ghost sm" style={{ marginTop: 8 }} onClick={() => void auth.signOut()}>
+                Sign out
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="muted small">
+                No account on this device. Your vault is local-only until you
+                sign in at the top of the app or create an account.
+              </p>
+            </>
+          )
+        ) : (
+          <p className="muted small">
+            Cloud sync is not configured. Build the app with
+            {' '}<code>VITE_SUPABASE_URL</code> and{' '}
+            <code>VITE_SUPABASE_ANON_KEY</code> to enable multi-device sync for
+            multiple users. Your data stays 100% local otherwise.
+          </p>
+        )}
       </div>
 
       <h2 className="section-title">Security</h2>

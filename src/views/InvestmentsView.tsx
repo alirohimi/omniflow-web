@@ -6,9 +6,11 @@
 import { useMemo, useState } from 'react';
 import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
+import { useToast } from '../components/Toast';
+import { DelButton } from '../components/DelButton';
 import { fxService } from '../services';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
-import { IRefresh, IClose, IPlus } from '../icons';
+import { IRefresh, IPlus } from '../icons';
 import type { InvestmentAccount, InvestmentHolding } from '../domain/types';
 
 const ASSET_CLASSES = ['equity-us', 'equity-local', 'etf', 'crypto', 'cash', 'mmf'] as const;
@@ -16,6 +18,7 @@ const ASSET_CLASSES = ['equity-us', 'equity-local', 'etf', 'crypto', 'cash', 'mm
 export function InvestmentsView() {
   const store = useVaultStore();
   const live = useLiveData();
+  const { toast } = useToast();
   const { vault } = store;
   if (!vault) return null;
   const base = vault.prefs.baseCurrency;
@@ -48,10 +51,12 @@ export function InvestmentsView() {
   };
 
   const addAccount = () => {
-    if (!platform.trim()) return;
-    const id = store.addAccount({ platformName: platform.trim(), accountType: acctType });
+    const name = platform.trim();
+    if (!name) return;
+    const id = store.addAccount({ platformName: name, accountType: acctType });
     setAccountId(id);
     setPlatform('');
+    toast(`Account "${name}" created and set as target`);
   };
 
   const addHolding = async () => {
@@ -79,6 +84,15 @@ export function InvestmentsView() {
       currentPriceBase: priceBase || undefined,
     });
     setSymbol(''); setUnits(''); setEntry('');
+    toast(`Added ${symbol.trim().toUpperCase()} to target account`);
+  };
+
+  const removeAccount = (id: string) => {
+    const acc = vault.accounts.find((a) => a.id === id);
+    const count = vault.holdings.filter((h) => h.accountId === id).length;
+    store.deleteAccount(id);
+    if (accountId === id) setAccountId('');
+    toast(`Deleted "${acc?.platformName ?? 'account'}"` + (count > 0 ? ` and ${count} holding${count === 1 ? '' : 's'}` : ''));
   };
 
   return (
@@ -110,13 +124,13 @@ export function InvestmentsView() {
         </div>
       </div>
 
-      <h2 className="section-title">Add account</h2>
+      <h2 className="section-title">Accounts</h2>
       <div className="card">
-        <div style={{ display: 'flex', gap: 8 }}>
-          <label className="field" style={{ flex: 1.5 }}><span>Platform (Luno, IBKR, Moomoo…)</span>
+        <div className="cols">
+          <label className="field"><span>Platform (Luno, IBKR, Moomoo…)</span>
             <input value={platform} onChange={(e) => setPlatform(e.target.value)} placeholder="StashAway" />
           </label>
-          <label className="field" style={{ flex: 1 }}><span>Type</span>
+          <label className="field"><span>Type</span>
             <select value={acctType} onChange={(e) => setAcctType(e.target.value as typeof acctType)}>
               <option value="broker">Broker</option>
               <option value="robo">Robo-advisor</option>
@@ -127,41 +141,69 @@ export function InvestmentsView() {
           </label>
         </div>
         <button className="btn ghost sm" onClick={addAccount}><IPlus size={16} /> Create account</button>
+
         {vault.accounts.length > 0 && (
-          <select value={accountId} onChange={(e) => setAccountId(e.target.value)} style={{ width: '100%', marginTop: 8 }} className="field">
-            <option value="">— target account —</option>
-            {vault.accounts.map((a) => <option key={a.id} value={a.id}>{a.platformName} ({a.accountType})</option>)}
-          </select>
+          <div className="list">
+            {vault.accounts.map((a) => {
+              const holdings = vault.holdings.filter((h) => h.accountId === a.id).length;
+              const isTarget = a.id === accountId;
+              return (
+                <div className="item" key={a.id}>
+                  <div className="grow">
+                    <div className="title">
+                      {a.platformName}
+                      {isTarget && <span className="chip sm" style={{ marginLeft: 8 }}>target</span>}
+                    </div>
+                    <div className="meta">{a.accountType} · {holdings} holding{holdings === 1 ? '' : 's'}</div>
+                  </div>
+                  <button
+                    className={`btn ghost sm${isTarget ? ' active' : ''}`}
+                    aria-pressed={isTarget}
+                    onClick={() => setAccountId(a.id)}
+                  >
+                    {isTarget ? 'Target set' : 'Set target'}
+                  </button>
+                  <DelButton label={`Delete ${a.platformName}`} onConfirm={() => removeAccount(a.id)} />
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {vault.accounts.length === 0 && (
+          <div className="empty">No accounts yet — create one above (or load demo data in Settings).</div>
         )}
       </div>
 
       <h2 className="section-title">Add holding</h2>
       <div className="card">
-        <div style={{ display: 'flex', gap: 8 }}>
-          <label className="field" style={{ flex: 1 }}><span>Symbol</span>
+        {!accountId && (
+          <div className="small muted" style={{ marginBottom: 8 }}>
+            Set a target account above, then add holdings to it.
+          </div>
+        )}
+        <div className="cols">
+          <label className="field"><span>Symbol</span>
             <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="AAPL / CSPX.L / BTC / 1155.KL" />
           </label>
-          <label className="field" style={{ flex: 1 }}><span>Asset class</span>
+          <label className="field"><span>Asset class</span>
             <select value={assetClass} onChange={(e) => setAssetClass(e.target.value as typeof assetClass)}>
               {ASSET_CLASSES.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </label>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <label className="field" style={{ flex: 1 }}><span>Units</span>
+          <label className="field"><span>Units</span>
             <input type="number" inputMode="decimal" value={units} onChange={(e) => setUnits(e.target.value)} placeholder="10" />
           </label>
-          <label className="field" style={{ flex: 1 }}><span>Avg entry</span>
+          <label className="field"><span>Avg entry</span>
             <input type="number" inputMode="decimal" value={entry} onChange={(e) => setEntry(e.target.value)} placeholder="12.40" />
           </label>
-          <label className="field" style={{ flex: 1 }}><span>Holding cur</span>
+          <label className="field"><span>Holding cur</span>
             <select value={holdCur} onChange={(e) => setHoldCur(e.target.value)}>
               {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
             </select>
           </label>
         </div>
         <button className="btn" style={{ width: '100%' }} disabled={!accountId} onClick={() => void addHolding()}>
-          {accountId ? 'Add holding' : 'Create an account first'}
+          {accountId ? 'Add holding' : 'Set a target account first'}
         </button>
       </div>
 
@@ -188,7 +230,13 @@ export function InvestmentsView() {
                     {sym}{val.toFixed(0)}
                     <span className={ret >= 0 ? 'pos small' : 'neg small'}> {ret >= 0 ? '+' : ''}{ret.toFixed(1)}%</span>
                   </div>
-                  <button className="del" title="Delete" aria-label="Delete holding" onClick={() => store.deleteHolding(h.id)}><IClose size={16} /></button>
+                  <DelButton
+                    label={`Delete ${h.symbol} holding`}
+                    onConfirm={() => {
+                      store.deleteHolding(h.id);
+                      toast(`Deleted ${h.symbol} holding`);
+                    }}
+                  />
                 </div>
               );
             })}

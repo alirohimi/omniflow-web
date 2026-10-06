@@ -76,6 +76,14 @@ body {
 }
 .brandbar h1 { font-size: 18px; margin: 0; font-weight: 700; letter-spacing: -0.2px; }
 .brandbar .sub { color: var(--muted); font-size: 12px; margin-top: 1px; }
+/* Manual lock (top bar): one tap wipes the in-memory passphrase -> gate */
+.brandbar { position: relative; }
+.lockbtn {
+  position: absolute; right: 20px; top: 18px;
+  background: none; border: 0; color: var(--faint); cursor: pointer;
+  padding: 8px; border-radius: 10px; display: grid; place-items: center;
+}
+.lockbtn:hover { color: var(--text); background: var(--bg-2); }
 
 .content { flex: 1; padding: 10px 16px 96px; }
 
@@ -155,6 +163,18 @@ body {
 /* ---------- Form controls ---------- */
 label.field { display: block; margin: 12px 0; font-size: 12px; color: var(--muted); }
 label.field > span { display: block; margin-bottom: 5px; font-weight: 550; }
+/* Multi-column form rows: 2 cols on phones (never cramped), 3 on wide
+   screens. Replaces the old inline-flex rows that squeezed money inputs. */
+.cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+@media (min-width: 640px) {
+  .cols { grid-template-columns: 1fr 1fr 1fr; }
+}
+.cols > .field { margin: 0; }
+.cols > .field:first-child, .cols > .field:nth-child(2) { margin-top: 0; }
 input, select, textarea {
   width: 100%; background: var(--bg-2); color: var(--text);
   border: 1px solid var(--line); border-radius: var(--radius-sm);
@@ -176,14 +196,27 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .btn.danger { background: transparent; border: 1px solid #4a2b2b; color: var(--bad); }
 .btn.danger:hover { background: rgba(255, 107, 107, 0.06); filter: none; }
 .btn.sm { padding: 7px 12px; font-size: 13px; }
+.btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn.active:hover { filter: brightness(1.08); }
 
 .chip {
   display: inline-flex; align-items: center; gap: 6px;
   background: var(--bg-2); border: 1px solid var(--line);
   border-radius: 999px; padding: 5px 12px; font-size: 12px; color: var(--muted);
 }
+.chip.sm { padding: 2px 9px; font-size: 11px; }
 .chip svg { color: inherit; }
 .chip.neg { color: var(--bad); border-color: #4a2b2b; }
+
+/* ---------- Status badge (sync state, etc.) ---------- */
+.badge {
+  display: inline-flex; align-items: center;
+  background: var(--bg-2); border: 1px solid var(--line);
+  border-radius: 999px; padding: 2px 10px; font-size: 11px;
+  color: var(--muted); text-transform: uppercase; letter-spacing: .5px;
+}
+.badge.synced { color: #3fa66a; border-color: #2f5c43; }
+.badge.error { color: var(--bad); border-color: #4a2b2b; }
 
 /* ---------- Lists ---------- */
 .list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
@@ -201,6 +234,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   padding: 5px; border-radius: 8px; display: grid; place-items: center;
 }
 .item .del:hover { color: var(--bad); background: rgba(255, 107, 107, 0.08); }
+/* Two-tap armed state: first tap turns the button red, second confirms */
+.del.armed {
+  color: #fff !important; background: var(--bad);
+  min-width: 44px; min-height: 44px;
+  animation: del-pulse 0.5s ease-in-out infinite alternate;
+}
+@keyframes del-pulse { from { filter: brightness(1); } to { filter: brightness(1.25); } }
 
 /* ---------- Progress ---------- */
 .bar { height: 6px; background: var(--bg-2); border-radius: 99px; overflow: hidden; margin-top: 12px; }
@@ -209,11 +249,23 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   border-radius: 99px; transition: width .4s ease;
 }
 
+/* ---------- Toast stack (action feedback) ---------- */
+.toasts {
+  position: fixed; left: 0; right: 0;
+  bottom: calc(76px + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  z-index: 80; pointer-events: none;
+}
 .toast {
-  position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%);
   background: var(--card-2); border: 1px solid var(--line);
-  padding: 10px 16px; border-radius: 10px; font-size: 13px; z-index: 60;
+  padding: 10px 16px; border-radius: 10px; font-size: 13px;
   box-shadow: var(--shadow); max-width: 90%;
+  animation: toast-in .18s ease-out;
+}
+.toast.err { border-color: #4a2b2b; color: var(--bad); }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
 }
 
 .seg { display: flex; gap: 6px; }
@@ -242,6 +294,17 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .gate p { color: var(--muted); font-size: 13px; margin: 8px 0 18px; line-height: 1.5; }
 
 .err { color: var(--bad); font-size: 12px; margin-top: 10px; min-height: 14px; }
+.notice {
+  margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+  background: var(--bg-2); border: 1px solid var(--line);
+  color: var(--muted); font-size: 12px; line-height: 1.5;
+}
+.divider {
+  display: flex; align-items: center; gap: 10px;
+  margin: 16px 0; color: var(--muted); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .8px;
+}
+.divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: var(--line); }
 
 /* ---------- Motion discipline ---------- */
 @media (prefers-reduced-motion: reduce) {

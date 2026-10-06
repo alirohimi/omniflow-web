@@ -83,13 +83,31 @@ export function VaultGate({ onReady }: { onReady: () => void }) {
 
         <label className="field">
           <span>Passphrase</span>
-          <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} autoFocus placeholder="••••••••" />
+          <input
+            type="password"
+            value={pass}
+            onChange={(e) => setPass(e.target.value)}
+            placeholder="••••••••"
+            // No autoFocus on touch: the on-screen keyboard covers the whole
+            // panel on phones. Desktop users can just click / Tab into it.
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void submit();
+            }}
+          />
         </label>
 
         {isCreating && (
           <label className="field">
             <span>Confirm passphrase</span>
-            <input type="password" value={pass2} onChange={(e) => setPass2(e.target.value)} placeholder="••••••••" />
+            <input
+              type="password"
+              value={pass2}
+              onChange={(e) => setPass2(e.target.value)}
+              placeholder="••••••••"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void submit();
+              }}
+            />
           </label>
         )}
 

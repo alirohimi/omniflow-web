@@ -2,10 +2,12 @@
 // OmniFlow — store (app-level state).
 //
 // Holds the decrypted VaultBlob in memory. The raw AES-GCM ciphertext is what
-// persists to IndexedDB. On every mutation the vault is re-encrypted and
-// saved. A wrong passphrase surfaces a decrypt failure (never a partial read).
+// persists to IndexedDB (offline cache). When a Supabase account is signed in
+// the same ciphertext is also upserted to a per-user Postgres row (RLS-scoped
+// to auth.uid()), giving multi-user sync. Plaintext never leaves the device;
+// the passphrase stays in memory only.
 //
-// Usage (in App.tsx):
+// Usage (in App.tsx, inside <AuthProvider>):
 //   const [creating, setCreating] = useState(true);
 //   const store = useVaultStore(() => { setCreating(false); });
 // ============================================================================
@@ -30,10 +32,13 @@ import type {
 } from '../domain/types';
 import { emptyVault, demoVault } from '../domain/seed';
 import { encryptVault, decryptVault, fingerprintSecret, type VaultCipher } from '../security/vault';
-import { hasVault, loadCipher, saveVault, wipe } from '../security/persistence';
+import { hasVaultFor, loadCipherFor, saveVaultFor, wipeFor, wipeAllLocal } from '../security/persistence';
 import { LLMConfig } from '../ai/categorize';
+import { useAuthStore } from '../auth/AuthProvider';
+import { fetchCloudVault, saveCloudVault, deleteCloudVault } from '../services/cloudVault';
 
 export type VaultStatus = 'locked' | 'creating' | 'unlocked' | 'unavailable';
+export type SyncState = 'idle' | 'syncing' | 'synced' | 'error';
 
 export interface NewExpenseInput {
   originalAmount: number;
@@ -70,11 +75,20 @@ export interface VaultStore {
   status: VaultStatus;
   error: string | null;
 
+  // identity / sync
+  /** 'local' when no account; otherwise the signed-in user's id. */
+  scope: string;
+  cloudSynced: boolean;
+  syncState: SyncState;
+
   // lifecycle
   createVault: (passphrase: string, prefs?: Partial<UserPreferences>) => Promise<void>;
   unlock: (passphrase: string) => Promise<void>;
   lock: () => void;
+  /** Wipe this scope's local cache and cloud row; return to first-run. */
   eraseAll: () => Promise<void>;
+  /** Wipe every cached vault on this device (all scopes). */
+  eraseAllLocal: () => Promise<void>;
 
   // data (no-ops when locked)
   vault: VaultBlob | null;
@@ -107,42 +121,90 @@ export function useVaultStore(): VaultStore {
 }
 
 export function VaultProvider({ children }: { children: ReactNode }) {
+  const auth = useAuthStore();
+  const scope = auth.user?.id ?? 'local';
+  // Cloud sync only when a real account is signed in (local-only never syncs).
+  const cloudOn = auth.cloudAvailable && auth.user?.id != null;
+
   const [status, setStatus] = useState<VaultStatus>('locked');
   const [error, setError] = useState<string | null>(null);
   const [vault, setVault] = useState<VaultBlob | null>(null);
+  const [syncState, setSyncState] = useState<SyncState>('idle');
   const passRef = useRef<string>(''); // holds passphrase in-memory only
+  const cipherRef = useRef<VaultCipher | null>(null); // last encrypted blob
   const chainRef = useRef<Promise<void>>(Promise.resolve());
+
+  // ---- cloud/local blob resolution (cloud wins, local is the offline cache) ----
+  const resolveCipher = useCallback(
+    async (): Promise<VaultCipher | undefined> => {
+      if (cloudOn) {
+        const remote = await fetchCloudVault(scope).catch(() => undefined);
+        if (remote) return remote;
+      }
+      return (await loadCipherFor(scope).catch(() => undefined))?.cipher;
+    },
+    [cloudOn, scope],
+  );
 
   // Serialised persist: every mutation enqueues behind the previous one so a
   // burst of rapid writes (e.g. loading demo data) is not dropped. Each entry
   // encrypts the `next` it was given, so the LAST write always wins.
-  const persist = useCallback(async (next: VaultBlob) => {
-    const pass = passRef.current;
-    if (!pass) return;
-    chainRef.current = chainRef.current.then(
-      async () => {
-        try {
-          const cipher = await encryptVault(next, pass);
-          await saveVault(cipher);
-        } catch (e) {
-          setError(e instanceof Error ? e.message : String(e));
-        }
-      },
-    );
-  }, []);
+  const persist = useCallback(
+    async (next: VaultBlob) => {
+      const pass = passRef.current;
+      if (!pass) return;
+      chainRef.current = chainRef.current.then(
+        async () => {
+          try {
+            setSyncState(cloudOn ? 'syncing' : 'idle');
+            const cipher = await encryptVault(next, pass);
+            cipherRef.current = cipher;
+            await saveVaultFor(scope, cipher); // offline cache (always)
+            if (cloudOn) {
+              await saveCloudVault(scope, cipher);
+              setSyncState('synced');
+            }
+          } catch (e) {
+            setSyncState('error');
+            setError(e instanceof Error ? e.message : String(e));
+          }
+        },
+      );
+    },
+    [scope, cloudOn],
+  );
 
-  // Initial probe: is there an existing vault?
+  // ---- re-probe on mount and whenever the active scope / cloud changes ----
+  const probeKey = `${scope}|${cloudOn}`;
   useEffect(() => {
+    let alive = true;
+    // Reset any in-memory secrets for the previous scope.
+    passRef.current = '';
+    cipherRef.current = null;
+    setVault(null);
+    setError(null);
+    setSyncState('idle');
     (async () => {
-      const exists = await hasVault();
+      const exists = cloudOn
+        ? (await resolveCipher()) != null
+        : await hasVaultFor(scope);
+      if (!alive) return;
       setStatus(exists ? 'locked' : 'creating');
-    })().catch(() => setStatus('creating'));
-  }, []);
+    })().catch(() => {
+      if (alive) setStatus('creating');
+    });
+    return () => {
+      alive = false;
+    };
+  }, [probeKey, scope, cloudOn, resolveCipher]);
 
-  const applyVault = useCallback((v: VaultBlob) => {
-    setVault(v);
-    void persist(v);
-  }, [persist]);
+  const applyVault = useCallback(
+    (v: VaultBlob) => {
+      setVault(v);
+      void persist(v);
+    },
+    [persist],
+  );
 
   const createVault = useCallback(
     async (passphrase: string, prefs?: Partial<UserPreferences>) => {
@@ -161,36 +223,54 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     [applyVault],
   );
 
-  const unlock = useCallback(async (passphrase: string) => {
-    setError(null);
-    try {
-      const cipher = await loadCipher();
-      if (!cipher) {
-        setStatus('creating');
-        return;
+  const unlock = useCallback(
+    async (passphrase: string) => {
+      setError(null);
+      try {
+        const cipher = await resolveCipher();
+        if (!cipher) {
+          setStatus('creating');
+          return;
+        }
+        const v = await decryptVault<VaultBlob>(cipher, passphrase);
+        cipherRef.current = cipher;
+        passRef.current = passphrase;
+        setVault(v);
+        setStatus('unlocked');
+      } catch {
+        setError('Wrong passphrase. Data is unreadable without it.');
+        setStatus('locked');
       }
-      const v = await decryptVault<VaultBlob>(cipher, passphrase);
-      passRef.current = passphrase;
-      setVault(v);
-      setStatus('unlocked');
-      // refresh from disk (no re-save needed; already at rest)
-    } catch {
-      setError('Wrong passphrase. Data is unreadable without it.');
-      setStatus('locked');
-    }
-  }, []);
+    },
+    [resolveCipher],
+  );
 
   const lock = useCallback(() => {
     setVault(null);
     passRef.current = '';
+    cipherRef.current = null;
+    setSyncState('idle');
     setStatus((s) => (s === 'unlocked' ? 'locked' : s));
     setError(null);
   }, []);
 
   const eraseAll = useCallback(async () => {
-    await wipe();
+    await wipeFor(scope);
+    if (cloudOn) await deleteCloudVault(scope);
     setVault(null);
     passRef.current = '';
+    cipherRef.current = null;
+    setSyncState('idle');
+    setStatus('creating');
+    setError(null);
+  }, [scope, cloudOn]);
+
+  const eraseAllLocal = useCallback(async () => {
+    await wipeAllLocal();
+    setVault(null);
+    passRef.current = '';
+    cipherRef.current = null;
+    setSyncState('idle');
     setStatus('creating');
     setError(null);
   }, []);
@@ -395,10 +475,14 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const store: VaultStore = {
     status,
     error,
+    scope,
+    cloudSynced: cloudOn,
+    syncState,
     createVault,
     unlock,
     lock,
     eraseAll,
+    eraseAllLocal,
     vault,
     llmConfig,
     addExpense,

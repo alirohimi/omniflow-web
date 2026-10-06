@@ -116,3 +116,10 @@ export const ILock = (p: P) => (
     <path d="M12 14.5v2" />
   </S>
 );
+
+export const IUser = (p: P) => (
+  <S {...p}>
+    <circle cx="12" cy="8" r="3.4" />
+    <path d="M5 19.5a7 7 0 0 1 14 0" />
+  </S>
+);

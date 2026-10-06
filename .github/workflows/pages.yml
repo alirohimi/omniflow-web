@@ -38,6 +38,10 @@ jobs:
       - name: Typecheck + build
         env:
           BASE_URL: ${{ env.PAGES_BASE }}
+          # Multi-user Supabase sync. These are public (publishable) values;
+          # RLS protects the data. Unset -> app builds in local-only mode.
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:

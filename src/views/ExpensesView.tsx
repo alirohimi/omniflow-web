@@ -9,17 +9,20 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { useVaultStore } from '../store/store';
+import { useToast } from '../components/Toast';
+import { DelButton } from '../components/DelButton';
 import { fxService } from '../services';
 import { parseReceipt } from '../services';
 import { categorize } from '../ai';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
-import { IReceipt, IScan, IClose } from '../icons';
+import { IReceipt, IScan } from '../icons';
 import type { Expense } from '../domain/types';
 
 const PAYMENT_METHODS = ['card', 'qr', 'ewallet', 'cash', 'bank', 'other'] as const;
 
 export function ExpensesView() {
   const store = useVaultStore();
+  const { toast } = useToast();
   const { vault } = store;
   if (!vault) return null;
   const base = vault.prefs.baseCurrency;
@@ -99,6 +102,7 @@ export function ExpensesView() {
       source: 'manual',
       note: note.trim() || undefined,
     });
+    toast(`Saved ${merchant.trim()} · ${formatMoney(a, cur)}${cur !== base ? ` → ${base}` : ''}`);
     setAmount(''); setMerchant(''); setNote(''); setCat(''); setAiMsg(null);
   };
 
@@ -131,13 +135,13 @@ export function ExpensesView() {
         <label className="field"><span>Amount</span>
           <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />
         </label>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <label className="field" style={{ flex: 1 }}><span>Currency</span>
+        <div className="cols">
+          <label className="field"><span>Currency</span>
             <select value={cur} onChange={(e) => setCur(e.target.value)}>
               {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.code} ({c.name})</option>)}
             </select>
           </label>
-          <label className="field" style={{ flex: 1 }}><span>Payment</span>
+          <label className="field"><span>Payment</span>
             <select value={pm} onChange={(e) => setPm(e.target.value as typeof pm)}>
               {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
@@ -190,7 +194,13 @@ export function ExpensesView() {
               </div>
             </div>
             <div className="amt">{sym}{e.baseAmount.toFixed(2)}</div>
-            <button className="del" title="Delete" aria-label="Delete expense" onClick={() => store.deleteExpense(e.id)}><IClose size={16} /></button>
+            <DelButton
+              label={`Delete ${e.merchant}`}
+              onConfirm={() => {
+                store.deleteExpense(e.id);
+                toast(`Deleted ${e.merchant}`);
+              }}
+            />
           </div>
         ))}
         {sorted.length === 0 && <div className="empty">No expenses yet. Add one above or load the demo data in Settings.</div>}
