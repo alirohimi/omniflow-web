@@ -13,7 +13,7 @@ import { ExpensesView } from './views/ExpensesView';
 import { InvestmentsView } from './views/InvestmentsView';
 import { SettingsView } from './views/SettingsView';
 import { currencyInfo } from './domain/enums';
-import { IHome, IWallet, ITrend, IGear, ILock } from './icons';
+import { IHome, IWallet, ITrend, IGear, ILock, IUser } from './icons';
 
 type Tab = 'dashboard' | 'expenses' | 'investments' | 'settings';
 
@@ -50,10 +50,29 @@ function Shell() {
     };
   }, [store]);
 
-  // Cloud is configured, no account signed in, and the user hasn't opted into
-  // local-only mode: pick an account (or continue on this device) first.
-  if (auth.cloudAvailable && auth.user === null && !auth.restoring && !auth.localMode) {
-    return <AccountGate />;
+  // Cloud is configured: the account gate (or a brief "restoring session"
+  // loader) is the entry point — the old local-only VaultGate must never
+  // flash through while we're waiting on Supabase. Only a user who
+  // explicitly chose "continue on this device" (localMode) falls through to
+  // the vault screen.
+  if (auth.cloudAvailable && !auth.localMode) {
+    if (auth.restoring) {
+      return (
+        <div className="gate">
+          <div className="panel" style={{ textAlign: 'center', padding: '40px 24px' }}>
+            <div style={{ marginBottom: 14, opacity: 0.8 }}>
+              <IUser size={40} style={{ margin: '0 auto', display: 'block' }} />
+            </div>
+            <h1>Checking your account…</h1>
+            <p className="muted">Restoring your session.</p>
+          </div>
+        </div>
+      );
+    }
+    if (auth.user === null) {
+      return <AccountGate />;
+    }
+    // signed in: fall through to the vault (passphrase) below.
   }
 
   if (store.status !== 'unlocked') return <VaultGate onReady={() => {}} />;

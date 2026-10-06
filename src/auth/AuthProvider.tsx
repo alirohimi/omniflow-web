@@ -65,16 +65,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     const sb = getSupabase()!;
     let mounted = true;
-    sb.auth.getSession().then(({ data }) => {
-      if (!mounted) return;
-      setUser(data.session?.user ?? null);
-      setRestoring(false);
-    });
+    // Safety: even if getSession() hangs or rejects (offline, blocked, bot
+    // wall), `restoring` must clear so the app can't get stuck on the old
+    // local-only screen. 8s is well past a normal restore.
+    const watchdog = window.setTimeout(() => {
+      if (mounted) setRestoring(false);
+    }, 8000);
+    sb.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!mounted) return;
+        setUser(data.session?.user ?? null);
+        setRestoring(false);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setRestoring(false);
+      })
+      .finally(() => window.clearTimeout(watchdog));
     const { data: sub } = sb.auth.onAuthStateChange((_e, session) => {
       setUser(session?.user ?? null);
     });
     return () => {
       mounted = false;
+      window.clearTimeout(watchdog);
       sub.subscription.unsubscribe();
     };
   }, [cloudAvailable]);
