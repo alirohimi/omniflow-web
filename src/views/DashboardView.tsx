@@ -1,5 +1,7 @@
 // ============================================================================
-// Dashboard — net worth, spending pace, advisor cards.
+// Dashboard — Monitor surface. One dominant number (net worth), a secondary
+// stat, then advisor + pacing. Density and glanceable hierarchy; no hero-plus-
+// three-cards, no decoration.
 // ============================================================================
 
 import { useMemo } from 'react';
@@ -7,6 +9,7 @@ import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
 import { currencyInfo, formatMoney } from '../domain/enums';
 import { runRules, spendOverLastDays } from '../ai';
+import { IPlus, IRefresh, IChevron } from '../icons';
 
 type Tab = 'dashboard' | 'expenses' | 'investments' | 'settings';
 
@@ -20,7 +23,6 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
 
   const spend30 = spendOverLastDays(vault.expenses, 30, base);
   const dailyPace = spend30 / 30;
-  const dayOfMonth = new Date().getDate();
   const projected = dailyPace * 31;
 
   const advice = useMemo(
@@ -52,48 +54,50 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
       .reduce((s, e) => s + e.baseAmount, 0);
   }, [vault.expenses]);
 
+  const ret = live.portfolio?.totalReturnPct ?? null;
+  const pacePct = projected > 0 ? Math.min(100, (spentThisMonth / projected) * 100) : 0;
+
   return (
     <>
-      <h2 className="section-title">Net worth</h2>
+      <h2 className="section-title">Portfolio</h2>
       <div className="card">
-        <div className="kpi">
-          <div className="cell">
-            <div className="num">{formatMoney(live.portfolio?.totalValueBase ?? 0, base)}</div>
-            <div className="lbl">Portfolio</div>
-          </div>
-          <div className="cell">
-            <div className="num">
-              <span className={live.portfolio?.totalReturnPct && live.portfolio.totalReturnPct >= 0 ? 'pos' : 'neg'}>
-                {live.portfolio?.totalReturnPct != null
-                  ? `${live.portfolio.totalReturnPct >= 0 ? '+' : ''}${live.portfolio.totalReturnPct.toFixed(1)}%`
-                  : '—'}
-              </span>
+        <div className="hero">
+          <div>
+            <div className="hero-lbl">Net worth · {base}</div>
+            <div className="hero-num">{formatMoney(live.portfolio?.totalValueBase ?? 0, base)}</div>
+            <div className="hero-sub">
+              {ret != null ? (
+                <span className={ret >= 0 ? 'pos' : 'neg'}>
+                  {ret >= 0 ? '▲' : '▼'} {Math.abs(ret).toFixed(1)}% vs cost
+                </span>
+              ) : (
+                <span className="muted">No holdings yet</span>
+              )}
             </div>
-            <div className="lbl">Return</div>
           </div>
+          <button className="btn ghost sm" onClick={live.refresh} disabled={live.loading}>
+            <IRefresh size={16} /> {live.loading ? '…' : 'Refresh'}
+          </button>
         </div>
-        <div className="row small muted" style={{ marginTop: 12 }}>
+        <div className="row small muted meta-row">
           <span>{live.loading ? 'Fetching live quotes…' : `${live.portfolio?.liveQuoteCount ?? 0} live · ${live.portfolio?.staleQuoteCount ?? 0} cached`}</span>
-          <button className="btn ghost sm" onClick={live.refresh} disabled={live.loading}>Refresh</button>
         </div>
       </div>
 
-      <h2 className="section-title">Spending</h2>
+      <h2 className="section-title">Spending this month</h2>
       <div className="card">
-        <div className="kpi">
-          <div className="cell">
-            <div className="num">{formatMoney(spentThisMonth, base)}</div>
-            <div className="lbl">This month</div>
-          </div>
-          <div className="cell">
-            <div className="num">{sym}{dailyPace.toFixed(0)}/d</div>
-            <div className="lbl">Daily pace</div>
-          </div>
-          <div className="cell">
-            <div className="num">{formatMoney(projected, base)}</div>
-            <div className="lbl">Projected mo</div>
+        <div className="hero">
+          <div>
+            <div className="hero-lbl">Spent</div>
+            <div className="hero-num">{formatMoney(spentThisMonth, base)}</div>
+            <div className="hero-sub">
+              <span className="muted">{sym}{dailyPace.toFixed(0)}/d pace</span>
+              {' · '}
+              <span className="muted">proj {formatMoney(projected, base)}</span>
+            </div>
           </div>
         </div>
+        <div className="bar"><i style={{ width: `${pacePct}%` }} /></div>
       </div>
 
       {advice.length > 0 && (
@@ -102,9 +106,7 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
           <div className="list">
             {advice.map((a) => (
               <div className="item" key={a.id}>
-                <div className={`chip ${a.priority === 'high' ? 'neg' : ''}`}>
-                  {a.priority === 'high' ? '▲' : a.priority === 'medium' ? '●' : '▽'} {a.priority}
-                </div>
+                <span className={`prio ${a.priority}`} aria-label={`${a.priority} priority`} />
                 <div className="grow">
                   <div className="title">{a.title}</div>
                   <div className="meta">{a.detail}</div>
@@ -132,9 +134,13 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
         </>
       )}
 
-      <div className="row" style={{ marginTop: 18 }}>
-        <button className="btn sm" onClick={() => onOpenTab('expenses')}>+ Add expense</button>
-        <button className="btn ghost sm" onClick={() => onOpenTab('investments')}>View portfolio</button>
+      <div className="row" style={{ marginTop: 20, gap: 10 }}>
+        <button className="btn sm" onClick={() => onOpenTab('expenses')} style={{ flex: 1, justifyContent: 'center' }}>
+          <IPlus size={16} /> Add expense
+        </button>
+        <button className="btn ghost sm" onClick={() => onOpenTab('investments')} style={{ flex: 1, justifyContent: 'center' }}>
+          Portfolio <IChevron size={16} />
+        </button>
       </div>
     </>
   );

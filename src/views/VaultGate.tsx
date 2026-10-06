@@ -9,9 +9,10 @@
 import { useState } from 'react';
 import { useVaultStore } from '../store/store';
 import { currencyInfo, CURRENCIES } from '../domain/enums';
+import { IShield, ILock } from '../icons';
 
 export function VaultGate({ onReady }: { onReady: () => void }) {
-  const { status, error, createVault, unlock, setLlmKey, setPrefs } = useVaultStore();
+  const { status, error, createVault, unlock } = useVaultStore();
   const [pass, setPass] = useState('');
   const [pass2, setPass2] = useState('');
   const [base, setBase] = useState('MYR');
@@ -22,7 +23,7 @@ export function VaultGate({ onReady }: { onReady: () => void }) {
     return (
       <div className="gate">
         <div className="panel">
-          <div className="emblem">🔒</div>
+          <div className="emblem"><ILock size={40} /></div>
           <h1>Locked out</h1>
           <p>{error ?? 'The existing vault could not be read. Your encrypted data is intact — try again, or erase it to start fresh.'}</p>
           <button className="btn ghost sm" onClick={() => location.reload()}>Retry</button>
@@ -59,7 +60,7 @@ export function VaultGate({ onReady }: { onReady: () => void }) {
   return (
     <div className="gate">
       <div className="panel">
-        <div className="emblem">🛡️</div>
+        <div className="emblem"><IShield size={40} /></div>
         <h1>{isCreating ? 'Create your vault' : 'Unlock OmniFlow'}</h1>
         <p>
           {isCreating

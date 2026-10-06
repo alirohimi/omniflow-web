@@ -1,5 +1,5 @@
 // ============================================================================
-// App shell — brand bar, tab navigation, content, PWA install hint.
+// App shell — brand bar, tab navigation (SVG icons), content, PWA install hint.
 // ============================================================================
 
 import { useEffect, useState } from 'react';
@@ -10,14 +10,15 @@ import { ExpensesView } from './views/ExpensesView';
 import { InvestmentsView } from './views/InvestmentsView';
 import { SettingsView } from './views/SettingsView';
 import { currencyInfo } from './domain/enums';
+import { IHome, IWallet, ITrend, IGear } from './icons';
 
 type Tab = 'dashboard' | 'expenses' | 'investments' | 'settings';
 
-const TABS: { id: Tab; label: string; ico: string }[] = [
-  { id: 'dashboard', label: 'Home', ico: '🏠' },
-  { id: 'expenses', label: 'Expenses', ico: '🧾' },
-  { id: 'investments', label: 'Portfolio', ico: '📈' },
-  { id: 'settings', label: 'Settings', ico: '⚙️' },
+const TABS: { id: Tab; label: string; ico: (p: { size?: number }) => JSX.Element }[] = [
+  { id: 'dashboard', label: 'Home', ico: IHome },
+  { id: 'expenses', label: 'Expenses', ico: IWallet },
+  { id: 'investments', label: 'Portfolio', ico: ITrend },
+  { id: 'settings', label: 'Settings', ico: IGear },
 ];
 
 function Shell() {
@@ -52,9 +53,7 @@ function Shell() {
         <div className="logo">O</div>
         <div>
           <h1>OmniFlow</h1>
-          <div className="sub">
-            {base} · {symbol} · encrypted locally
-          </div>
+          <div className="sub">{base} · {symbol} · encrypted locally</div>
         </div>
       </header>
 
@@ -73,7 +72,7 @@ function Shell() {
             aria-current={tab === t.id}
             onClick={() => setTab(t.id)}
           >
-            <span className="ico">{t.ico}</span>
+            <t.ico size={20} />
             {t.label}
           </button>
         ))}

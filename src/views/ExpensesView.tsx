@@ -13,6 +13,7 @@ import { fxService } from '../services';
 import { parseReceipt } from '../services';
 import { categorize } from '../ai';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
+import { IReceipt, IScan, IClose } from '../icons';
 import type { Expense } from '../domain/types';
 
 const PAYMENT_METHODS = ['card', 'qr', 'ewallet', 'cash', 'bank', 'other'] as const;
@@ -123,8 +124,8 @@ export function ExpensesView() {
       <h2 className="section-title">Capture</h2>
       <div className="card">
         <div className="row">
-          <span className="chip">🧾 Manual / Apple Pay</span>
-          <span className="chip">📷 QR / e-wallet OCR</span>
+          <span className="chip"><IReceipt size={14} /> Manual / Apple Pay</span>
+          <span className="chip"><IScan size={14} /> QR / e-wallet OCR</span>
         </div>
 
         <label className="field"><span>Amount</span>
@@ -189,7 +190,7 @@ export function ExpensesView() {
               </div>
             </div>
             <div className="amt">{sym}{e.baseAmount.toFixed(2)}</div>
-            <button className="del" title="Delete" onClick={() => store.deleteExpense(e.id)}>✕</button>
+            <button className="del" title="Delete" aria-label="Delete expense" onClick={() => store.deleteExpense(e.id)}><IClose size={16} /></button>
           </div>
         ))}
         {sorted.length === 0 && <div className="empty">No expenses yet. Add one above or load the demo data in Settings.</div>}

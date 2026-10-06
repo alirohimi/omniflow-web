@@ -8,6 +8,7 @@ import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
 import { fxService } from '../services';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
+import { IRefresh, IClose, IPlus } from '../icons';
 import type { InvestmentAccount, InvestmentHolding } from '../domain/types';
 
 const ASSET_CLASSES = ['equity-us', 'equity-local', 'etf', 'crypto', 'cash', 'mmf'] as const;
@@ -105,7 +106,7 @@ export function InvestmentsView() {
         {live.error && <div className="small neg" style={{ marginTop: 10 }}>{live.error}</div>}
         <div className="row small muted" style={{ marginTop: 10 }}>
           <span>FX: {live.fxSource ?? '…'} · live {live.portfolio?.liveQuoteCount ?? 0} · cached {live.portfolio?.staleQuoteCount ?? 0}</span>
-          <button className="btn ghost sm" onClick={live.refresh} disabled={live.loading}>Refresh</button>
+          <button className="btn ghost sm" onClick={live.refresh} disabled={live.loading}><IRefresh size={16} /> Refresh</button>
         </div>
       </div>
 
@@ -125,7 +126,7 @@ export function InvestmentsView() {
             </select>
           </label>
         </div>
-        <button className="btn ghost sm" onClick={addAccount}>+ Create account</button>
+        <button className="btn ghost sm" onClick={addAccount}><IPlus size={16} /> Create account</button>
         {vault.accounts.length > 0 && (
           <select value={accountId} onChange={(e) => setAccountId(e.target.value)} style={{ width: '100%', marginTop: 8 }} className="field">
             <option value="">— target account —</option>
@@ -187,7 +188,7 @@ export function InvestmentsView() {
                     {sym}{val.toFixed(0)}
                     <span className={ret >= 0 ? 'pos small' : 'neg small'}> {ret >= 0 ? '+' : ''}{ret.toFixed(1)}%</span>
                   </div>
-                  <button className="del" title="Delete" onClick={() => store.deleteHolding(h.id)}>✕</button>
+                  <button className="del" title="Delete" aria-label="Delete holding" onClick={() => store.deleteHolding(h.id)}><IClose size={16} /></button>
                 </div>
               );
             })}
