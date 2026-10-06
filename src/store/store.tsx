@@ -1,11 +1,13 @@
 // ============================================================================
 // OmniFlow — store (app-level state).
 //
-// Holds the decrypted VaultBlob in memory. The raw AES-GCM ciphertext is what
-// persists to IndexedDB (offline cache). When a Supabase account is signed in
-// the same ciphertext is also upserted to a per-user Postgres row (RLS-scoped
-// to auth.uid()), giving multi-user sync. Plaintext never leaves the device;
-// the passphrase stays in memory only.
+// Holds the decrypted VaultBlob in memory. The raw AES-GCM ciphertext is the
+// ONLY persisted form, and it lives in the per-user Supabase Postgres row
+// (omniflow_vaults, RLS-scoped to auth.uid()). There is no local copy: no
+// IndexedDB, no localStorage. The database is the single source of truth —
+// every mutation re-encrypts the whole blob and upserts the ciphertext.
+// Plaintext financial data never reaches the DB; the passphrase stays in
+// memory only and is re-entered on each session.
 //
 // Usage (in App.tsx, inside <AuthProvider>):
 //   const [creating, setCreating] = useState(true);
@@ -32,7 +34,6 @@ import type {
 } from '../domain/types';
 import { emptyVault, demoVault } from '../domain/seed';
 import { encryptVault, decryptVault, fingerprintSecret, type VaultCipher } from '../security/vault';
-import { hasVaultFor, loadCipherFor, saveVaultFor, wipeFor, wipeAllLocal } from '../security/persistence';
 import { LLMConfig } from '../ai/categorize';
 import { useAuthStore } from '../auth/AuthProvider';
 import { fetchCloudVault, saveCloudVault, deleteCloudVault } from '../services/cloudVault';
@@ -85,10 +86,8 @@ export interface VaultStore {
   createVault: (passphrase: string, prefs?: Partial<UserPreferences>) => Promise<void>;
   unlock: (passphrase: string) => Promise<void>;
   lock: () => void;
-  /** Wipe this scope's local cache and cloud row; return to first-run. */
+  /** Wipe this user's DB row and reset to first-run. */
   eraseAll: () => Promise<void>;
-  /** Wipe every cached vault on this device (all scopes). */
-  eraseAllLocal: () => Promise<void>;
 
   // data (no-ops when locked)
   vault: VaultBlob | null;
@@ -122,8 +121,10 @@ export function useVaultStore(): VaultStore {
 
 export function VaultProvider({ children }: { children: ReactNode }) {
   const auth = useAuthStore();
+  // DB-only: the vault row is always the signed-in user's. 'local' is a
+  // fallback key that is never persisted (cloudVault is a no-op without a
+  // real user id), so the vault exists only in memory until sign-in.
   const scope = auth.user?.id ?? 'local';
-  // Cloud sync only when a real account is signed in (local-only never syncs).
   const cloudOn = auth.cloudAvailable && auth.user?.id != null;
 
   const [status, setStatus] = useState<VaultStatus>('locked');
@@ -134,35 +135,33 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const cipherRef = useRef<VaultCipher | null>(null); // last encrypted blob
   const chainRef = useRef<Promise<void>>(Promise.resolve());
 
-  // ---- cloud/local blob resolution (cloud wins, local is the offline cache) ----
-  const resolveCipher = useCallback(
-    async (): Promise<VaultCipher | undefined> => {
-      if (cloudOn) {
-        const remote = await fetchCloudVault(scope).catch(() => undefined);
-        if (remote) return remote;
-      }
-      return (await loadCipherFor(scope).catch(() => undefined))?.cipher;
-    },
-    [cloudOn, scope],
-  );
+  // ---- blob resolution (the DB row is the single source of truth) ----
+  const resolveCipher = useCallback(async (): Promise<VaultCipher | undefined> => {
+    if (!cloudOn) return undefined;
+    return fetchCloudVault(scope).catch(() => undefined);
+  }, [cloudOn, scope]);
 
   // Serialised persist: every mutation enqueues behind the previous one so a
   // burst of rapid writes (e.g. loading demo data) is not dropped. Each entry
-  // encrypts the `next` it was given, so the LAST write always wins.
+  // re-encrypts the whole blob it was given, so the LAST write wins in the DB.
+  // There is no local write path — the DB row is the only copy.
   const persist = useCallback(
     async (next: VaultBlob) => {
       const pass = passRef.current;
-      if (!pass) return;
+      if (!pass || !cloudOn) return; // unsigned-in scope: in-memory only
       chainRef.current = chainRef.current.then(
         async () => {
           try {
-            setSyncState(cloudOn ? 'syncing' : 'idle');
+            setSyncState('syncing');
             const cipher = await encryptVault(next, pass);
             cipherRef.current = cipher;
-            await saveVaultFor(scope, cipher); // offline cache (always)
-            if (cloudOn) {
-              await saveCloudVault(scope, cipher);
+            const ok = await saveCloudVault(scope, cipher);
+            if (ok) {
               setSyncState('synced');
+              setError(null);
+            } else {
+              setSyncState('error');
+              setError('Cloud save failed — your latest change is in memory only. Retry or it will be lost on reload.');
             }
           } catch (e) {
             setSyncState('error');
@@ -185,9 +184,8 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setError(null);
     setSyncState('idle');
     (async () => {
-      const exists = cloudOn
-        ? (await resolveCipher()) != null
-        : await hasVaultFor(scope);
+      // DB-only: a vault exists iff the signed-in user has a row.
+      const exists = cloudOn ? (await resolveCipher()) != null : false;
       if (!alive) return;
       setStatus(exists ? 'locked' : 'creating');
     })().catch(() => {
@@ -255,7 +253,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const eraseAll = useCallback(async () => {
-    await wipeFor(scope);
+    // DB-only: the DB row is the only persisted copy — delete it, not a cache.
     if (cloudOn) await deleteCloudVault(scope);
     setVault(null);
     passRef.current = '';
@@ -264,16 +262,6 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setStatus('creating');
     setError(null);
   }, [scope, cloudOn]);
-
-  const eraseAllLocal = useCallback(async () => {
-    await wipeAllLocal();
-    setVault(null);
-    passRef.current = '';
-    cipherRef.current = null;
-    setSyncState('idle');
-    setStatus('creating');
-    setError(null);
-  }, []);
 
   // ---- data mutators (guard: only when unlocked) ----
 
@@ -482,7 +470,6 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     unlock,
     lock,
     eraseAll,
-    eraseAllLocal,
     vault,
     llmConfig,
     addExpense,

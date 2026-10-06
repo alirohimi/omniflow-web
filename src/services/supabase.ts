@@ -1,13 +1,12 @@
 // ============================================================================
-// OmniFlow — Supabase client (multi-user cloud sync).
+// OmniFlow — Supabase client (per-user encrypted vault rows in Postgres).
 //
-// When VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY are configured the app gains
-// email accounts (Supabase Auth) and syncs each user's *encrypted* vault blob
-// to a per-user Postgres row (omniflow_vaults, RLS-scoped to auth.uid()).
-//
-// When they are NOT configured, `supabase` is null and the app runs in
-// local-only mode exactly as before (IndexedDB, one global vault) — so the
-// zero-trust guarantee never depends on the cloud being reachable.
+// When VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY are configured the app
+// enables email accounts (Supabase Auth) and persists each user's *encrypted*
+// vault blob to a per-user Postgres row (omniflow_vaults, RLS-scoped to
+// auth.uid()). That DB row is the ONLY persisted copy of user data — there is
+// no local storage layer. When the env vars are missing (local dev), the app
+// still runs, but the vault is in-memory only: nothing is written to disk.
 //
 // The DB stores only AES-GCM ciphertext + salt + iv. No plaintext financial
 // data ever reaches Supabase; the passphrase stays device-local.

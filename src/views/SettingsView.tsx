@@ -101,11 +101,11 @@ export function SettingsView() {
                 </div>
               </div>
               <p className="muted small" style={{ marginTop: 8 }}>
-                Your encrypted vault is shared with every device signed in to{' '}
+                Your encrypted vault is stored in the database under this
                 {auth.user.user_metadata?.display_name
-                  ? `${auth.user.user_metadata.display_name} `
-                  : ''}
-                ({auth.user.email}). Only ciphertext is stored.
+                  ? ` ${auth.user.user_metadata.display_name}'s`
+                  : ''}{' '}
+                account ({auth.user.email}). Only ciphertext is stored.
               </p>
               <button className="btn ghost sm" style={{ marginTop: 8 }} onClick={() => void auth.signOut()}>
                 Sign out
@@ -114,17 +114,17 @@ export function SettingsView() {
           ) : (
             <>
               <p className="muted small">
-                No account on this device. Your vault is local-only until you
-                sign in at the top of the app or create an account.
+                Not signed in. Sign in or create an account at the top of the
+                app to load your vault from the database.
               </p>
             </>
           )
         ) : (
           <p className="muted small">
-            Cloud sync is not configured. Build the app with
-            {' '}<code>VITE_SUPABASE_URL</code> and{' '}
-            <code>VITE_SUPABASE_ANON_KEY</code> to enable multi-device sync for
-            multiple users. Your data stays 100% local otherwise.
+            Database is not configured. Build the app with{' '}
+            <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code>{' '}
+            to store your encrypted vault in the shared database. Without it
+            the vault exists only in this session and is lost on reload.
           </p>
         )}
       </div>
@@ -133,9 +133,10 @@ export function SettingsView() {
       <div className="card">
         <p className="muted small">
           Everything is encrypted at rest with AES-256-GCM using a key derived
-          from your passphrase (PBKDF2, 210k iterations). The ciphertext lives
-          only in this browser. A wrong passphrase fails to decrypt — there is
-          no bypass, no recovery, no server copy.
+          from your passphrase (PBKDF2, 210k iterations). Only the ciphertext
+          is written to the database; your passphrase and decrypted data never
+          leave this device. A wrong passphrase fails to decrypt — there is
+          no bypass and no recovery.
         </p>
       </div>
 
@@ -143,7 +144,7 @@ export function SettingsView() {
       <div className="card">
         <button className="btn danger sm"
           onClick={() => {
-            if (confirm('Erase ALL OmniFlow data from this browser? This cannot be undone.')) {
+            if (confirm('Erase ALL OmniFlow data from the database? This cannot be undone.')) {
               void store.eraseAll();
             }
           }}>

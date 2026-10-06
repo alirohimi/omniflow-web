@@ -7,10 +7,11 @@
 //
 //   PBKDF2(passphrase, salt, 210_000 iters, SHA-256)  ->  AES-256-GCM key
 //
-// The ciphertext (header + salt + IV + body) is what gets persisted to
-// IndexedDB. Without the passphrase, the bytes are unrecoverable — no
-// server, no plaintext at rest. A wrong passphrase surfaces a decrypt
-// failure (auth-tag mismatch), never a partial read.
+// The ciphertext (header + salt + IV + body) is what gets persisted to the
+// shared database (one encrypted row per user, RLS-scoped). Without the
+// passphrase, the bytes are unrecoverable — no plaintext anywhere. A wrong
+// passphrase surfaces a decrypt failure (auth-tag mismatch), never a partial
+// read.
 // ============================================================================
 
 export interface VaultCipher {

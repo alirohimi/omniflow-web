@@ -51,11 +51,11 @@ function Shell() {
   }, [store]);
 
   // Cloud is configured: the account gate (or a brief "restoring session"
-  // loader) is the entry point — the old local-only VaultGate must never
-  // flash through while we're waiting on Supabase. Only a user who
-  // explicitly chose "continue on this device" (localMode) falls through to
-  // the vault screen.
-  if (auth.cloudAvailable && !auth.localMode) {
+  // loader) is the entry point — data lives only in the DB, so the old
+  // local-only VaultGate must never flash through while we're waiting on
+  // Supabase. Once a user is signed in, the vault (passphrase) gate takes
+  // over for that user's encrypted row.
+  if (auth.cloudAvailable) {
     if (auth.restoring) {
       return (
         <div className="gate">
@@ -84,8 +84,7 @@ function Shell() {
         <div>
           <h1>OmniFlow</h1>
           <div className="sub">
-            {base} · {symbol} · encrypted locally
-            {cloudOn ? ' · cloud sync on' : ''}
+            {base} · {symbol} · encrypted{cloudOn ? ' · stored in your account' : ' · this session only'}
           </div>
         </div>
         <button

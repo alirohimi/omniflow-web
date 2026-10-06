@@ -1,7 +1,8 @@
 // ============================================================================
 // OmniFlow — domain types (browser edition).
 // Mirrors the iOS SwiftData schema, ported to JSON-serializable TS objects.
-// Everything here is what gets encrypted + persisted to IndexedDB.
+// Everything here is what gets encrypted; the ciphertext is persisted to the
+// shared database (one row per user). No local copy is kept.
 // ============================================================================
 
 export type AssetClass =
@@ -87,7 +88,7 @@ export interface UserPreferences {
   advisorRules: boolean;
 }
 
-/** The encrypted-at-rest shape stored in IndexedDB. */
+/** The encrypted-at-rest shape stored in the database. */
 export interface VaultBlob {
   schema: number;
   createdAt: number;

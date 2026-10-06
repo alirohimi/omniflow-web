@@ -2,9 +2,10 @@
 // OmniFlow — AuthProvider (Supabase email auth, multi-user accounts).
 //
 // Wraps @supabase/supabase-js auth. Exposes the current user + a small set of
-// actions. When the cloud client is NOT configured, the whole provider is
-// inert (cloudAvailable = false) and the app runs in the existing local-only
-// mode — so nothing depends on the cloud being reachable.
+// actions. Data lives ONLY in the Supabase DB (per-user encrypted vault row),
+// so signing in is required for any persistence — the gate that presents the
+// sign-in / sign-up choice is part of the app entry point (App.tsx), not of
+// this provider.
 //
 // The auth layer only manages *identity* (who is the user). It never touches
 // the passphrase or the encrypted vault; those stay in the SecurityManager.
@@ -25,19 +26,15 @@ import { getSupabase, isCloudEnabled } from '../services/supabase';
 export interface AuthStore {
   /** Cloud (Supabase) is configured and reachable as a client. */
   cloudAvailable: boolean;
-  /** Current signed-in user, or null when logged out / local-only. */
+  /** Current signed-in user, or null when logged out. */
   user: User | null;
   /** True while restoring an existing session on first load. */
   restoring: boolean;
-  /** User chose "continue on this device" — skip the account gate, stay local. */
-  localMode: boolean;
   lastError: string | null;
 
   signUp: (email: string, password: string, displayName: string) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
-  /** Opt out of the account gate on this device (use the local-only vault). */
-  enterLocalMode: () => void;
   clearError: () => void;
 }
 
@@ -52,7 +49,6 @@ export function useAuthStore(): AuthStore {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [restoring, setRestoring] = useState(true);
-  const [localMode, setLocalMode] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
 
   const cloudAvailable = isCloudEnabled();
@@ -144,14 +140,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!sb) return;
     await sb.auth.signOut();
     setUser(null);
-    setLocalMode(false); // after signing out, offer the account gate again
-    setLastError(null);
-  }, []);
-
-  const enterLocalMode = useCallback(() => {
-    // "Continue on this device": no account, use the local-only vault.
-    setUser(null);
-    setLocalMode(true);
     setLastError(null);
   }, []);
 
@@ -162,15 +150,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       cloudAvailable,
       user,
       restoring,
-      localMode,
       lastError,
       signUp,
       signIn,
       signOut,
-      enterLocalMode,
       clearError,
     }),
-    [cloudAvailable, user, restoring, localMode, lastError, signUp, signIn, signOut, enterLocalMode, clearError],
+    [cloudAvailable, user, restoring, lastError, signUp, signIn, signOut, clearError],
   );
 
   return <Ctx.Provider value={store}>{children}</Ctx.Provider>;

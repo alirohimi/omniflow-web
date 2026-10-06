@@ -7,8 +7,8 @@
 // for the ~30 majors; no MYR).
 //
 // Pure math (convert, invert) is separated from network so it is
-// unit-testable. The service caches the last good rate set so the app keeps
-// working offline with the most recent rates.
+// unit-testable. The service keeps the last good rate set in memory so a
+// session never hard-breaks mid-offline; nothing is written to local storage.
 // ============================================================================
 
 const ER_API = 'https://open.er-api.com/v6/latest/';
@@ -21,8 +21,6 @@ export interface RatesForBase {
   asOf: number;
   source: 'er-api' | 'frankfurter' | 'cache';
 }
-
-const CACHE_KEY = 'omniflow-fx-rates';
 
 /** Pure: convert `amount` in `from` to `to` using units-of-`to`-per-1-`from`. */
 export function convert(
@@ -76,37 +74,19 @@ async function fetchFrankfurter(base: string): Promise<RatesForBase> {
 export class CurrencyExchangeService {
   private cache: RatesForBase | null = null;
 
-  constructor() {
-    this.restoreCache();
-  }
-
-  private restoreCache() {
-    try {
-      const raw = localStorage.getItem(CACHE_KEY);
-      if (raw) this.cache = JSON.parse(raw);
-    } catch {
-      this.cache = null;
-    }
-  }
-
-  private persist(r: RatesForBase) {
-    this.cache = r;
-    try {
-      localStorage.setItem(CACHE_KEY, JSON.stringify(r));
-    } catch {
-      /* storage full/blocked — non-fatal */
-    }
+  private remember(r: RatesForBase) {
+    this.cache = r; // session-only: never written to local storage
   }
 
   /** Fetch freshest rates for `base`, trying er-api then frankfurter.
-   *  Falls back to cached rates (flagged source='cache') if the network
-   *  fails entirely, so the app never hard-breaks offline. */
+   *  Falls back to the in-session rate set (flagged source='cache') if the
+   *  network fails, so a session never hard-breaks offline. */
   async latest(base: string): Promise<RatesForBase> {
     const errors: string[] = [];
     for (const fn of [() => fetchER(base), () => fetchFrankfurter(base)]) {
       try {
         const r = await fn();
-        this.persist(r);
+        this.remember(r);
         return r;
       } catch (e) {
         errors.push(e instanceof Error ? e.message : String(e));
@@ -150,4 +130,4 @@ export class CurrencyExchangeService {
 
 export const fxService = new CurrencyExchangeService();
 
-export const __test = { convert, retargetToBase, CACHE_KEY, fetchER, fetchFrankfurter };
+export const __test = { convert, retargetToBase, fetchER, fetchFrankfurter };

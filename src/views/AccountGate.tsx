@@ -1,13 +1,12 @@
 // ============================================================================
 // AccountGate — multi-user account picker (Supabase email auth).
 //
-// Shown when the cloud client is configured but no account is signed in and
-// the user hasn't opted into local-only mode. Signing in establishes which
-// user's encrypted vault blob to fetch from Postgres; the vault passphrase is
-// still requested on the next screen (VaultGate) and never leaves the device.
-//
-// "Continue on this device" keeps the existing local-only behaviour so the
-// app is fully usable even without an account.
+// Shown when a cloud DB is configured and no account is signed in. Data lives
+// ONLY in the database (one encrypted vault row per user, RLS-scoped to
+// auth.uid()), so this gate is mandatory — there is no local-only escape
+// hatch. Signing in establishes which user's encrypted vault blob to fetch;
+// the vault passphrase is still requested on the next screen (VaultGate) and
+// never leaves the device.
 // ============================================================================
 
 import { useState, type FormEvent } from 'react';
@@ -117,15 +116,10 @@ export function AccountGate() {
           {mode === 'signin' ? 'New here? Create an account' : 'Already have one? Sign in'}
         </button>
 
-        <div className="divider" role="separator"><span>or</span></div>
-
-        <button className="btn ghost" style={{ width: '100%' }} onClick={auth.enterLocalMode}>
-          Continue on this device only (no account)
-        </button>
-
         <p className="muted small" style={{ marginTop: 12 }}>
-          <IShield size={13} /> Data is encrypted locally before sync; the server
-          only ever holds AES-GCM ciphertext.
+          <IShield size={13} /> Data is encrypted in your browser before it is
+          saved; the database only ever holds AES-GCM ciphertext. Your
+          passphrase never leaves this device.
         </p>
       </div>
     </div>

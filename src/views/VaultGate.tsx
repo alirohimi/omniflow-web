@@ -1,7 +1,7 @@
 // ============================================================================
 // VaultGate — the app's zero-trust front door.
 //
-// First launch: create a passphrase vault (AES-GCM in IndexedDB).
+// First launch: create a passphrase vault (AES-GCM blob stored in the DB).
 // Returning: unlock with the passphrase. A wrong passphrase always fails
 // decrypt (authenticated crypto), never a partial read.
 // ============================================================================
