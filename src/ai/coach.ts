@@ -238,11 +238,18 @@ const INTENTS: Intent[] = [
 
 /** The deterministic coach. Returns null only for truly empty briefs on
  *  intents that need data — the caller still gets a generic fallback. */
-export function coachFallback(question: string, brief: CoachBrief): { text: string; source: 'rules' | 'system' } {
+export function coachFallback(
+  question: string,
+  brief: CoachBrief,
+  hasImage = false,
+): { text: string; source: 'rules' | 'system' } {
+  const imgNote = hasImage
+    ? " You attached an image, but without an LLM key I can't read images on-device — tell me what it shows (amount, merchant, currency) and I'll work the numbers."
+    : '';
   for (const it of INTENTS) {
     if (it.match.test(question)) {
       const ans = it.answer(brief);
-      if (ans) return { text: ans, source: 'rules' };
+      if (ans) return { text: ans + imgNote, source: 'rules' };
     }
   }
   // Generic, still grounded.
@@ -251,7 +258,7 @@ export function coachFallback(question: string, brief: CoachBrief): { text: stri
     bits.push(`Your portfolio is ${money(brief.netWorthBase, brief.baseCurrency)}${brief.portfolioReturnPct != null ? ` (${brief.portfolioReturnPct >= 0 ? '+' : ''}${brief.portfolioReturnPct}% vs cost)` : ''}.`);
   bits.push(`You're spending ~${money(brief.dailyPace, brief.baseCurrency)}/day.`);
   bits.push('I can go deep on allocation, spending pace, currency exposure, or a buy-with-discipline plan — ask which one to look at first, and I will anchor it to those numbers.');
-  return { text: bits.join(' '), source: 'system' };
+  return { text: bits.join(' ') + imgNote, source: 'system' };
 }
 
 // ---------------------------------------------------------------------------
@@ -265,13 +272,16 @@ export interface CoachAnswer {
 
 /** Ask the coach. `llm` may be null (no key) -> pure rule engine. A
  *  transport failure is never fatal: we degrade to rules so the chat always
- *  answers, and surface the degrade flag so the UI can note it. */
+ *  answers, and surface the degrade flag so the UI can note it. `images`
+ *  carries the user's attached data-URLs (receipt, chart, screenshot); only
+ *  the LLM tier consumes them — the rule tier is told it cannot read them. */
 export async function coachAsk(
   question: string,
   ctx: CoachContext,
   llm: LLMConfig | null,
   history: CoachMessage[] = [],
-  transport: (cfg: LLMConfig, sys: string, user: string) => Promise<string> = callLLMDefault,
+  images: string[] = [],
+  transport: (cfg: LLMConfig, sys: string, user: string, images?: string[]) => Promise<string> = callLLMDefault,
 ): Promise<CoachAnswer & { degraded: boolean }> {
   const brief = buildBrief(ctx);
 
@@ -283,7 +293,7 @@ export async function coachAsk(
         .map((m) => `${m.role === 'user' ? 'User' : 'Coach'}: ${m.text}`)
         .join('\n');
       const user = tail ? `${tail}\nUser: ${question}` : question;
-      const raw = await transport(llm, sys, user);
+      const raw = await transport(llm, sys, user, images);
       const text = raw.trim();
       if (text.length > 0) return { text, source: 'llm', degraded: false };
     } catch {
@@ -291,7 +301,7 @@ export async function coachAsk(
     }
   }
 
-  const fb = coachFallback(question, brief);
+  const fb = coachFallback(question, brief, images.length > 0);
   return { ...fb, degraded: Boolean(llm) };
 }
 

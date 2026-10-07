@@ -103,7 +103,7 @@ export async function categorizeByLLM(
     currency: input.currency ?? null,
   });
 
-  const raw = await callLLM(cfg, sys, user);
+  const raw = await callLLM(cfg, sys, user, [], true);
   let parsed: any;
   try {
     parsed = JSON.parse(raw);
@@ -126,9 +126,29 @@ export async function categorizeByLLM(
 // LLM transport — one branch per provider.
 // ---------------------------------------------------------------------------
 
-export async function callLLM(cfg: LLMConfig, sys: string, user: string): Promise<string> {
+export async function callLLM(
+  cfg: LLMConfig,
+  sys: string,
+  user: string,
+  images: string[] = [],
+  jsonMode = false,
+): Promise<string> {
+  const imgs = images.filter(Boolean);
   if (cfg.provider === 'anthropic') {
     const model = cfg.model ?? 'claude-3-5-sonnet-latest';
+    // With images the user content becomes a block list: text + image.
+    const content: unknown = imgs.length === 0
+      ? user
+      : [
+          ...imgs.map((d) => {
+            const m = d.match(/^data:([^;]+);base64,(.*)$/);
+            return {
+              type: 'image',
+              source: { type: 'base64', media_type: m?.[1] ?? 'image/jpeg', data: m?.[2] ?? d },
+            };
+          }),
+          { type: 'text', text: user },
+        ];
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -141,7 +161,7 @@ export async function callLLM(cfg: LLMConfig, sys: string, user: string): Promis
         model,
         max_tokens: 256,
         system: sys,
-        messages: [{ role: 'user', content: user }],
+        messages: [{ role: 'user', content }],
       }),
     });
     if (!res.ok) throw new Error(`anthropic ${res.status}`);
@@ -157,13 +177,21 @@ export async function callLLM(cfg: LLMConfig, sys: string, user: string): Promis
       'https://generativelanguage.googleapis.com/v1beta/models/' +
       encodeURIComponent(model) +
       ':generateContent?key=' + encodeURIComponent(cfg.apiKey);
+    const parts: Record<string, unknown>[] = [{ text: user }];
+    for (const d of imgs) {
+      const m = d.match(/^data:([^;]+);base64,(.*)$/);
+      parts.push({ inline_data: { mime_type: m?.[1] ?? 'image/jpeg', data: m?.[2] ?? d } });
+    }
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: `${sys}\n${user}` }] }],
+        contents: [{ role: 'user', parts }],
         systemInstruction: { parts: [{ text: sys }] },
-        generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+        generationConfig: {
+          temperature: 0,
+          ...(jsonMode ? { responseMimeType: 'application/json' } : {}),
+        },
       }),
     });
     if (!res.ok) throw new Error(`gemini ${res.status}`);
@@ -173,6 +201,12 @@ export async function callLLM(cfg: LLMConfig, sys: string, user: string): Promis
 
   // Default: OpenAI.
   const model = cfg.model ?? 'gpt-4o-mini';
+  const content: unknown = imgs.length === 0
+    ? user
+    : [
+        { type: 'text', text: user },
+        ...imgs.map((d) => ({ type: 'image_url', image_url: { url: d } })),
+      ];
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -182,10 +216,10 @@ export async function callLLM(cfg: LLMConfig, sys: string, user: string): Promis
     body: JSON.stringify({
       model,
       temperature: 0,
-      response_format: { type: 'json_object' },
+      ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
       messages: [
         { role: 'system', content: sys },
-        { role: 'user', content: user },
+        { role: 'user', content },
       ],
     }),
   });

@@ -143,3 +143,11 @@ export const ICoach = (p: P) => (
     <path d="M8.5 8.5h7M8.5 11.5h4.5" />
   </S>
 );
+
+export const IImage = (p: P) => (
+  <S {...p}>
+    <rect x="3.5" y="5" width="17" height="14" rx="2" />
+    <circle cx="8.5" cy="9.5" r="1.5" />
+    <path d="m20.5 13.5-4.5-4L7 19" />
+  </S>
+);

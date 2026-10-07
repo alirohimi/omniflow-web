@@ -112,7 +112,7 @@ describe('coach orchestration', () => {
 
   it('Tier 1: returns LLM answer when key present', async () => {
     const fake = async () => 'Invest with margin of safety.';
-    const a = await coachAsk('should I buy more', ctx(), llm, [], fake);
+    const a = await coachAsk('should I buy more', ctx(), llm, [], [], fake);
     expect(a.source).toBe('llm');
     expect(a.degraded).toBe(false);
     expect(a.text).toContain('margin of safety');
@@ -127,6 +127,7 @@ describe('coach orchestration', () => {
       ctx({ holdings: [{ symbol: 'AAPL', assetClass: 'equity', units: 1, holdingCurrency: 'USD', currentPriceBase: 500 } as never] }),
       llm,
       [],
+      [],
       fake,
     );
     expect(a.source).toBe('rules');
@@ -137,5 +138,37 @@ describe('coach orchestration', () => {
     const a = await coachAsk('hello', ctx(), null, [] as CoachMessage[]);
     expect(a.source).toBe('system');
     expect(a.degraded).toBe(false);
+  });
+
+  it('images are forwarded to the LLM transport, one entry per attachment', async () => {
+    let got: string[] | undefined;
+    const fake = async (_c: LLMConfig, _s: string, _u: string, images?: string[]) => {
+      got = images;
+      return 'ok';
+    };
+    await coachAsk('what does this receipt show?', ctx(), llm, [], ['data:image/jpeg;base64,AAA'], fake);
+    expect(got).toEqual(['data:image/jpeg;base64,AAA']);
+  });
+
+  it('rules tier with an image says it cannot read images on-device', async () => {
+    const fake = async (): Promise<string> => {
+      throw new Error('down');
+    };
+    const a = await coachAsk(
+      'how is my portfolio allocated',
+      ctx({ holdings: [{ symbol: 'AAPL', assetClass: 'equity', units: 1, holdingCurrency: 'USD', currentPriceBase: 500 } as never] }),
+      llm,
+      [],
+      ['data:image/png;base64,AAA'],
+      fake,
+    );
+    expect(a.source).toBe('rules');
+    expect(a.degraded).toBe(true);
+    expect(a.text).toMatch(/can'?t read images/i);
+  });
+
+  it('rules tier without images has no image note', () => {
+    const fb = coachFallback('hello', buildBrief(ctx()));
+    expect(fb.text).not.toMatch(/read images/i);
   });
 });

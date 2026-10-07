@@ -12,8 +12,9 @@ import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
 import { coachAsk } from '../ai';
 import type { CoachContext } from '../ai/coach';
-import { ICoach, IClose } from '../icons';
+import { ICoach, IClose, IImage } from '../icons';
 import { useToast } from '../components/Toast';
+import { compressImageToDataUrl } from '../lib/image';
 
 const SUGGESTIONS = [
   'Where should I put new money?',
@@ -35,8 +36,10 @@ export function CoachView() {
   const { toast } = useToast();
   const { vault, coachLog } = store;
   const [draft, setDraft] = useState('');
+  const [attach, setAttach] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const hasLLM = store.llmConfig != null;
 
@@ -61,11 +64,23 @@ export function CoachView() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [coachLog.length, pending]);
 
-  const send = async (text: string) => {
+  const pickImage = async (f: File | null) => {
+    if (!f) return;
+    const url = await compressImageToDataUrl(f);
+    if (!url) {
+      toast('Could not read that image — try a JPEG or PNG screenshot.', 'err');
+      return;
+    }
+    setAttach(url);
+  };
+
+  const send = async (text: string, image?: string) => {
     const q = text.trim();
-    if (!q || !ctx || pending) return;
+    const img = image ?? attach;
+    if ((!q && !img) || !ctx || pending) return;
     setDraft('');
-    store.pushCoachMessage({ role: 'user', text: q, at: Date.now() });
+    setAttach(null);
+    store.pushCoachMessage({ role: 'user', text: q, image: img ?? undefined, at: Date.now() });
     setPending(true);
     try {
       const ans = await coachAsk(
@@ -73,6 +88,7 @@ export function CoachView() {
         ctx,
         store.llmConfig,
         coachLog,
+        img ? [img] : [],
       );
       store.pushCoachMessage({
         role: 'coach',
@@ -147,7 +163,8 @@ export function CoachView() {
         {coachLog.map((m) => (
           <div key={m.id} className={`msg ${m.role}`}>
             <div className="msg-body">
-              <div className="bubble">{m.text}</div>
+              {m.image ? <img className="coach-msg-img" src={m.image} alt="Attached" /> : null}
+              {m.text ? <div className="bubble">{m.text}</div> : null}
               <div className="msg-meta">
                 {m.role === 'coach' && m.source ? (
                   <span>{BADGE[m.source] ?? m.source}</span>
@@ -176,16 +193,42 @@ export function CoachView() {
           void send(draft);
         }}
       >
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Ask about your portfolio, spend, or exposure…"
-          aria-label="Ask the coach"
-          disabled={pending}
-        />
-        <button className="btn sm" type="submit" disabled={pending || !draft.trim()}>
-          Send
-        </button>
+        {attach && (
+          <div className="coach-attach-strip">
+            <img className="coach-attach-thumb" src={attach} alt="Attachment preview" />
+            <button
+              type="button"
+              className="btn ghost sm"
+              aria-label="Remove attachment"
+              onClick={() => setAttach(null)}
+            >
+              <IClose size={14} />
+            </button>
+          </div>
+        )}
+        <div className="coach-composer-row">
+          <button
+            type="button"
+            className="btn ghost sm"
+            aria-label="Attach image"
+            title="Attach an image (receipt, screenshot)"
+            onClick={() => fileRef.current?.click()}
+            disabled={pending}
+          >
+            <IImage size={16} />
+          </button>
+          <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { void pickImage(e.target.files?.[0] ?? null); e.target.value = ''; }} />
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Ask about your portfolio, spend, or exposure…"
+            aria-label="Ask the coach"
+            disabled={pending}
+          />
+          <button className="btn sm" type="submit" disabled={pending || (!draft.trim() && !attach)}>
+            Send
+          </button>
+        </div>
       </form>
     </>
   );

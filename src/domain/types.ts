@@ -117,6 +117,11 @@ export interface CoachMessage {
   id: string;
   role: 'user' | 'coach';
   text: string;
+  /** Optional compressed image attachment (JPEG data URL), persisted inside
+ *  the encrypted vault. The LLM tier receives it as a vision input; the
+ *  rule engine notes it cannot read it. Compressed to keep the vault blob
+ *  small (max long side ~1600px). */
+  image?: string;
   source?: 'llm' | 'rules' | 'system';
   at: number;
 }

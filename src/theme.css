@@ -184,15 +184,32 @@ h1, h2, h3 { font-family: var(--font-display); }
 .msg-meta { display: flex; gap: 8px; font-size: 10.5px; color: var(--faint); padding: 0 4px; }
 
 .coach-composer {
-  display: flex; gap: 8px; padding: 10px 2px 6px;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 2px 6px;
   border-top: 1px solid var(--line); margin-top: 4px;
 }
-.coach-composer input {
+.coach-composer-row { display: flex; gap: 8px; align-items: center; }
+.coach-composer input[type='text'],
+.coach-composer-row input {
   flex: 1; min-height: 42px; border-radius: 12px;
   background: var(--card); border: 1px solid var(--line-2);
   color: var(--text); font: inherit; font-size: 14px; padding: 0 13px;
 }
-.coach-composer input:focus { border-color: var(--accent); }
+.coach-composer-row input:focus { border-color: var(--accent); }
+.coach-attach-strip {
+  display: flex; gap: 8px; align-items: center;
+  padding: 6px; background: var(--card-2);
+  border: 1px solid var(--line); border-radius: 10px; max-width: 220px;
+}
+.coach-attach-thumb {
+  width: 44px; height: 44px; object-fit: cover;
+  border-radius: 8px; border: 1px solid var(--line);
+}
+.coach-msg-img {
+  max-width: 220px; max-height: 220px; width: auto; height: auto;
+  border-radius: 10px; border: 1px solid var(--line);
+  background: var(--card); object-fit: contain;
+}
 
 /* ---------- Cards ---------- */
 .card {
