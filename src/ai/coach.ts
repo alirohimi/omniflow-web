@@ -282,8 +282,9 @@ export async function coachAsk(
   history: CoachMessage[] = [],
   images: string[] = [],
   transport: (cfg: LLMConfig, sys: string, user: string, images?: string[]) => Promise<string> = callLLMDefault,
-): Promise<CoachAnswer & { degraded: boolean }> {
+): Promise<CoachAnswer & { degraded: boolean; llmError?: string }> {
   const brief = buildBrief(ctx);
+  let llmError: string | undefined;
 
   if (llm) {
     try {
@@ -296,13 +297,15 @@ export async function coachAsk(
       const raw = await transport(llm, sys, user, images);
       const text = raw.trim();
       if (text.length > 0) return { text, source: 'llm', degraded: false };
-    } catch {
-      // fall through to rules — a failed BYOK call must not kill the chat.
+    } catch (e) {
+      // Fall through to rules — a failed BYOK call must not kill the chat —
+      // but keep the provider's reason so the UI can explain the fallback.
+      llmError = e instanceof Error ? e.message : String(e);
     }
   }
 
   const fb = coachFallback(question, brief, images.length > 0);
-  return { ...fb, degraded: Boolean(llm) };
+  return { ...fb, degraded: Boolean(llm), llmError };
 }
 
 export const __test = { buildBrief, coachSystemPrompt, coachFallback, INTENTS };

@@ -126,6 +126,25 @@ export async function categorizeByLLM(
 // LLM transport — one branch per provider.
 // ---------------------------------------------------------------------------
 
+// Pull a human-readable reason out of a provider's error body so the UI can
+// show *why* a call failed (invalid key, quota, blocked content, ...). The
+// key itself is never echoed; only the provider's message field.
+async function apiErrorBody(res: Response): Promise<string> {
+  try {
+    const t = await res.text();
+    try {
+      const j = JSON.parse(t);
+      const m = j?.error?.message ?? j?.message;
+      if (typeof m === 'string' && m) return m;
+    } catch {
+      /* not JSON — fall through to raw (truncated) text */
+    }
+    return t.slice(0, 160);
+  } catch {
+    return 'no response body';
+  }
+}
+
 export async function callLLM(
   cfg: LLMConfig,
   sys: string,
@@ -164,7 +183,7 @@ export async function callLLM(
         messages: [{ role: 'user', content }],
       }),
     });
-    if (!res.ok) throw new Error(`anthropic ${res.status}`);
+    if (!res.ok) throw new Error(`anthropic ${res.status}: ${await apiErrorBody(res)}`);
     const j = await res.json();
     return j?.content?.[0]?.text ?? '';
   }
@@ -194,9 +213,16 @@ export async function callLLM(
         },
       }),
     });
-    if (!res.ok) throw new Error(`gemini ${res.status}`);
+    if (!res.ok) throw new Error(`gemini ${res.status}: ${await apiErrorBody(res)}`);
     const j = await res.json();
-    return j?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    // A blocked/failed generation returns no candidates — surface the reason.
+    const parts2 = j?.candidates?.[0]?.content?.parts;
+    if (!parts2?.length && j?.candidates?.length) {
+      const reason = j.candidates[0]?.finishReason ? ` (finishReason: ${j.candidates[0].finishReason})` : '';
+      throw new Error(`gemini empty response${reason}`);
+    }
+    if (!parts2?.length) throw new Error(`gemini empty response: ${JSON.stringify(j).slice(0, 160)}`);
+    return parts2[0].text ?? '';
   }
 
   // Default: OpenAI.
@@ -223,7 +249,7 @@ export async function callLLM(
       ],
     }),
   });
-  if (!res.ok) throw new Error(`openai ${res.status}`);
+  if (!res.ok) throw new Error(`openai ${res.status}: ${await apiErrorBody(res)}`);
   const j = await res.json();
   return j?.choices?.[0]?.message?.content ?? '';
 }
@@ -249,4 +275,23 @@ export async function categorize(
   return dictResult;
 }
 
-export const __test = { RULES, categorizeByDictionary, categorizeByLLM, callLLM };
+// ---------------------------------------------------------------------------
+// Key health check — a minimal one-token call so Settings can confirm a key
+// actually works before the user relies on it. Returns { ok, detail } where
+// detail carries the provider's own error message on failure (key problems,
+// quota, model not found). The key never leaves this function's scope.
+// ---------------------------------------------------------------------------
+
+export async function testLLMKey(
+  cfg: LLMConfig,
+): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const out = await callLLM(cfg, 'Reply with exactly: OK', 'ping', []);
+    if (out.trim()) return { ok: true, detail: 'Connected' };
+    return { ok: false, detail: 'Empty response from the model' };
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export const __test = { RULES, categorizeByDictionary, categorizeByLLM, callLLM, testLLMKey };

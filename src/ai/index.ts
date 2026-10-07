@@ -6,6 +6,7 @@ export {
   categorize,
   categorizeByDictionary,
   categorizeByLLM,
+  testLLMKey,
   type CategorizeInput,
   type CategorizeResult,
   type LLMConfig,

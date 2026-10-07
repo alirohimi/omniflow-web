@@ -123,7 +123,13 @@ export interface VaultStore {
   updateHoldingPrice: (id: string, local: number, base: number) => void;
 
   setPrefs: (patch: Partial<UserPreferences>) => void;
-  setLlmKey: (provider: 'none' | 'openai' | 'anthropic' | 'gemini', key: string) => void;
+  setLlmKey: (
+    provider: 'none' | 'openai' | 'anthropic' | 'gemini',
+    key: string,
+    model?: string,
+  ) => Promise<boolean>;
+  /** Re-push the in-memory vault after a failed cloud save. */
+  retrySync: () => void;
   /** Replace the current vault with the bundled demo dataset (keeps prefs). */
   loadDemo: () => void;
 
@@ -541,18 +547,26 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   );
 
   const setLlmKey = useCallback(
-    async (_provider: 'none' | 'openai' | 'anthropic' | 'gemini', _key: string) => {
+    async (
+      _provider: 'none' | 'openai' | 'anthropic' | 'gemini',
+      _key: string,
+      _model?: string,
+    ): Promise<boolean> => {
       // The BYOK key is stored encrypted inside the vault (re-decrypted per
       // session). Compute the display fingerprint outside the updater.
       const fp = _key ? (await fingerprintSecret(_key).catch(() => '')) : '';
+      const model = _model?.trim() || undefined;
+      let updated = false;
       setVault((prev) => {
         if (!prev) return prev;
+        updated = true;
         const next = {
           ...prev,
           prefs: {
             ...prev.prefs,
             llmProvider: _key ? _provider : 'none',
             llmKeyFinger: fp.slice(0, 8),
+            llmModel: model,
           },
           llmKey: _key,
           updatedAt: Date.now(),
@@ -560,9 +574,16 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         void persist(next);
         return next;
       });
+      return updated;
     },
     [persist],
   );
+
+  /** Re-push the current in-memory vault after a failed cloud save. */
+  const retrySync = useCallback(() => {
+    if (!vault) return;
+    void persist(vault);
+  }, [vault, persist]);
 
   const loadDemo = useCallback(() => {
     setVault((prev) => {
@@ -619,7 +640,12 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
   const llmConfig = useMemo<LLMConfig | null>(() => {
     if (!vault || vault.prefs.llmProvider === 'none' || !vault.llmKey) return null;
-    return { provider: vault.prefs.llmProvider, apiKey: vault.llmKey };
+    const model = vault.prefs.llmModel?.trim();
+    return {
+      provider: vault.prefs.llmProvider,
+      apiKey: vault.llmKey,
+      model: model || undefined,
+    };
   }, [vault]);
 
   const store: VaultStore = {
@@ -646,6 +672,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     updateHoldingPrice,
     setPrefs,
     setLlmKey,
+    retrySync,
     loadDemo,
     coachLog: vault?.coachLog ?? [],
     pushCoachMessage,

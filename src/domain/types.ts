@@ -88,6 +88,8 @@ export interface UserPreferences {
   displayName: string;
   llmProvider: LLMProvider;
   llmKeyFinger: string; // SHA-256 fingerprint of the stored key (for display)
+  /** BYOK model override; empty = the provider's default. */
+  llmModel?: string;
   autoCategorize: boolean;
   advisorRules: boolean;
 }

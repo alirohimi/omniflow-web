@@ -102,6 +102,32 @@ function Shell() {
       </header>
 
       <main className="content">
+        {store.error && store.cloudSynced && (
+          <div
+            role="alert"
+            style={{
+              margin: '0 12px 8px',
+              padding: '8px 12px',
+              borderRadius: 10,
+              border: '1px solid var(--bad)',
+              background: 'color-mix(in srgb, var(--bad) 12%, transparent)',
+              fontSize: 13,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              flexWrap: 'wrap',
+            }}
+          >
+            <span style={{ flex: 1, minWidth: 180 }}>{store.error}</span>
+            <button
+              className="btn ghost sm"
+              style={{ padding: '3px 10px' }}
+              onClick={() => store.retrySync()}
+            >
+              Retry
+            </button>
+          </div>
+        )}
         {tab === 'dashboard' && <DashboardView onOpenTab={setTab} />}
         {tab === 'expenses' && <ExpensesView />}
         {tab === 'investments' && <InvestmentsView />}

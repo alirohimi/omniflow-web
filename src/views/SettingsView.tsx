@@ -6,6 +6,8 @@ import { useState } from 'react';
 import { useVaultStore } from '../store/store';
 import { useAuthStore } from '../auth/AuthProvider';
 import { CURRENCIES } from '../domain/enums';
+import { testLLMKey } from '../ai';
+import type { LLMConfig } from '../ai/categorize';
 
 export function SettingsView() {
   const store = useVaultStore();
@@ -15,7 +17,10 @@ export function SettingsView() {
 
   const [provider, setProvider] = useState<'none' | 'openai' | 'anthropic' | 'gemini'>(vault.prefs.llmProvider);
   const [key, setKey] = useState('');
+  const [model, setModel] = useState(vault.prefs.llmModel ?? '');
   const [msg, setMsg] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; detail: string } | null>(null);
 
   // change-password form
   const [pwCurrent, setPwCurrent] = useState('');
@@ -26,10 +31,36 @@ export function SettingsView() {
 
   const prefs = vault.prefs;
 
-  const saveLlm = () => {
-    store.setLlmKey(provider, provider === 'none' ? '' : key.trim());
+  const saveLlm = async () => {
+    const k = key.trim();
+    const ok = await store.setLlmKey(provider, provider === 'none' ? '' : k, model.trim() || undefined);
+    setTestResult(null);
+    if (!ok) {
+      setMsg('Could not save - the vault is not unlocked.');
+      return;
+    }
     setKey('');
-    setMsg(provider === 'none' ? 'LLM key removed — categorization falls back to the on-device rule engine.' : `LLM key stored (${provider}). Categorization now uses the cloud tier.`);
+    setMsg(provider === 'none' ? 'LLM key removed - categorization falls back to the on-device rule engine.' : `LLM key stored (${provider}). Categorization now uses the cloud tier.`);
+    // A cloud-sync failure must be explicit, not silent: check the store state
+    // a beat later (persist is asynchronous) and say so.
+    setTimeout(() => {
+      if (store.syncState === 'error') {
+        setMsg('Saved in memory, but cloud sync failed - your account could not be reached. Use Retry before closing the tab.');
+      }
+    }, 350);
+  };
+
+  const testKey = async () => {
+    setTesting(true);
+    setTestResult(null);
+    const cfg: LLMConfig = {
+      provider,
+      apiKey: key.trim() || store.llmConfig?.apiKey || '',
+      model: model.trim() || undefined,
+    };
+    const r = await testLLMKey(cfg);
+    setTestResult(r);
+    setTesting(false);
   };
 
   const changePw = async () => {
@@ -98,12 +129,40 @@ export function SettingsView() {
           </select>
         </label>
         {provider !== 'none' && (
-          <label className="field"><span>{prefs.llmKeyFinger ? 'Replace key (current: …' + prefs.llmKeyFinger + ')' : 'API key'}</span>
-            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-…" />
-          </label>
+          <>
+            <label className="field"><span>{prefs.llmKeyFinger ? 'Replace key (current: …' + prefs.llmKeyFinger + ')' : 'API key'}</span>
+              <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-…" autoComplete="off" />
+            </label>
+            <label className="field"><span>Model override (optional - leave blank for the provider default)</span>
+              <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="e.g. gemini-2.0-flash, gpt-4o-mini" />
+            </label>
+            <div className="list" style={{ marginTop: 8 }}>
+              <button
+                className="btn ghost sm"
+                disabled={testing}
+                onClick={() => void testKey()}
+              >
+                {testing ? 'Testing…' : 'Test key'}
+              </button>
+            </div>
+            {testResult && (
+              <div className="small" style={{ marginTop: 6, color: testResult.ok ? 'var(--good)' : 'var(--bad)' }}>
+                {testResult.ok ? 'Key works — ' : 'Key failed — '}
+                {testResult.detail}
+              </div>
+            )}
+          </>
         )}
-        <button className="btn sm" onClick={saveLlm}>Save</button>
+        <button className="btn sm" onClick={() => void saveLlm()}>Save</button>
         {msg && <div className="small muted" style={{ marginTop: 8 }}>{msg}</div>}
+        {store.error && (
+          <div className="card" style={{ marginTop: 10, borderColor: 'var(--bad)' }}>
+            <div className="small" style={{ color: 'var(--bad)' }}>{store.error}</div>
+            <button className="btn ghost sm" style={{ marginTop: 6 }} onClick={() => store.retrySync()}>
+              Retry cloud save
+            </button>
+          </div>
+        )}
       </div>
 
       <h2 className="section-title">Data</h2>

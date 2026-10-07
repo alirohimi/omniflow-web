@@ -97,7 +97,8 @@ export function CoachView() {
         at: Date.now(),
       });
       if (ans.degraded) {
-        toast('Advisor key call failed — answered with the on-device rule engine.', 'err');
+        const why = ans.llmError ? ` (${ans.llmError.slice(0, 140)})` : '';
+        toast(`Advisor key call failed${why} — answered with the on-device rule engine. Fix it in Settings (Test key shows the provider's exact error).`, 'err');
       }
     } catch (e) {
       store.pushCoachMessage({
