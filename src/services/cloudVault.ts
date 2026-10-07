@@ -21,6 +21,38 @@ interface VaultRow {
   body: string;
 }
 
+/**
+ * Strict read: `undefined` only on a genuine no-row, but THROWS on any
+ * database / network error. Callers that must distinguish "no data" from
+ * "couldn't reach the DB" (e.g. the auto-create path) use this so a
+ * transient failure can never be mistaken for first-run and wipe a real
+ * vault. The lenient `fetchCloudVault` above is kept for fire-and-forget
+ * reads that are happy to treat an error as "no row yet".
+ */
+export async function fetchCloudVaultStrict(userId: string): Promise<VaultCipher | undefined> {
+  if (!isCloudEnabled()) return undefined;
+  const sb: SupabaseClient = getSupabase()!;
+  const { data, error } = await sb
+    .from('omniflow_vaults')
+    .select('v, salt, iv, body')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) {
+    // RLS deny (no policy yet) is a configuration gap, not a real failure —
+    // surface it as "no cloud row" so local dev still works. Everything else
+    // (network, PostgREST down) is a genuine error: throw so the caller
+    // falls back to an "unavailable / retry" state instead of wiping data.
+    if (/row-level security|policy|permission/i.test(error.message)) {
+      console.warn('[cloudVault] fetch (RLS deny, treating as no row):', error.message);
+      return undefined;
+    }
+    throw error;
+  }
+  const r = data as unknown as VaultRow | null;
+  if (!r) return undefined;
+  return { v: r.v, salt: r.salt, iv: r.iv, body: r.body };
+}
+
 /** Read the encrypted blob for a user, or undefined when none / cloud off. */
 export async function fetchCloudVault(userId: string): Promise<VaultCipher | undefined> {
   if (!isCloudEnabled()) return undefined;

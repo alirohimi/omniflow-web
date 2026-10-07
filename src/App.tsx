@@ -53,8 +53,9 @@ function Shell() {
   // Cloud is configured: the account gate (or a brief "restoring session"
   // loader) is the entry point — data lives only in the DB, so the old
   // local-only VaultGate must never flash through while we're waiting on
-  // Supabase. Once a user is signed in, the vault (passphrase) gate takes
-  // over for that user's encrypted row.
+  // Supabase. Once a user is signed in, the single-credential flow takes
+  // over: their password auto-creates (first run) or auto-unlocks (returning)
+  // the vault; a refresh or manual lock falls through to the one-field gate.
   if (auth.cloudAvailable) {
     if (auth.restoring) {
       return (
@@ -72,7 +73,8 @@ function Shell() {
     if (auth.user === null) {
       return <AccountGate />;
     }
-    // signed in: fall through to the vault (passphrase) below.
+    // signed in: the vault auto-unlocks with the account password; a refresh
+    // or manual lock lands on the one-field password gate (VaultGate) below.
   }
 
   if (store.status !== 'unlocked') return <VaultGate onReady={() => {}} />;

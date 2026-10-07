@@ -7,8 +7,10 @@
 // sign-in / sign-up choice is part of the app entry point (App.tsx), not of
 // this provider.
 //
-// The auth layer only manages *identity* (who is the user). It never touches
-// the passphrase or the encrypted vault; those stay in the SecurityManager.
+// Single-credential design: the account password doubles as the vault key.
+// It is held in memory (never persisted) and handed to the vault store for
+// PBKDF2 -> AES-GCM after sign-in / email-code confirmations. The auth layer
+// never touches the encrypted vault itself — only the password that keys it.
 // ============================================================================
 
 import {
@@ -32,9 +34,20 @@ export interface AuthStore {
   restoring: boolean;
   lastError: string | null;
 
+  /**
+   * The account password that just authenticated this session. In-memory
+   * only (never written to storage). This is also the vault encryption key —
+   * the store re-encrypts and auto-unlocks the vault with it.
+   */
+  accountPassword: string | null;
+  /** Store the account password for the current session (in memory only). */
+  setAccountPassword: (p: string) => void;
+
   signUp: (email: string, password: string, displayName: string) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
+  /** Change the Supabase auth password (used by the vault-key migration). */
+  updateAccountPassword: (current: string, next: string) => Promise<void>;
   clearError: () => void;
 }
 
@@ -50,7 +63,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [restoring, setRestoring] = useState(true);
   const [lastError, setLastError] = useState<string | null>(null);
+  // The account password that authenticated this session. In-memory only — it
+  // is the vault encryption key (PBKDF2 -> AES-GCM), held here so the vault
+  // store can auto-create / auto-unlock after sign-in without a second gate.
+  const [accountPassword, setAccountPasswordState] = useState<string | null>(null);
 
+  const setAccountPassword = useCallback((p: string) => setAccountPasswordState(p), []);
   const cloudAvailable = isCloudEnabled();
 
   // Restore any persisted session + subscribe to auth changes on mount.
@@ -119,6 +137,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           'Account created. Please confirm your email, then sign in.',
         );
       }
+      // Keep the password as the in-memory vault key even while a session is
+      // returned, so first-run vault creation is auto-unlocked on the next
+      // screen without re-prompting.
+      setAccountPasswordState(password);
     },
     [],
   );
@@ -133,15 +155,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw error;
     }
     setUser(data.user);
+    // Single credential: the password that just signed in is the vault key.
+    setAccountPasswordState(password);
   }, []);
 
   const signOut = useCallback(async () => {
     const sb = getSupabase();
-    if (!sb) return;
-    await sb.auth.signOut();
+    if (sb) await sb.auth.signOut();
     setUser(null);
     setLastError(null);
+    // Wipe the in-memory vault key on sign-out — zero-trust: nothing
+    // survives the session.
+    setAccountPasswordState(null);
   }, []);
+
+  const updateAccountPassword = useCallback(
+    async (current: string, next: string) => {
+      const sb = getSupabase();
+      if (!sb) throw new Error('Cloud sync is not configured.');
+      const { data, error } = await sb.auth.updateUser({
+        password: next,
+      });
+      if (error) {
+        setLastError(error.message);
+        throw error;
+      }
+      if (data.user) setUser(data.user);
+      // The new password becomes the active vault key.
+      setAccountPasswordState(next);
+    },
+    [],
+  );
 
   const clearError = useCallback(() => setLastError(null), []);
 
@@ -151,12 +195,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       restoring,
       lastError,
+      accountPassword,
+      setAccountPassword,
       signUp,
       signIn,
       signOut,
+      updateAccountPassword,
       clearError,
     }),
-    [cloudAvailable, user, restoring, lastError, signUp, signIn, signOut, clearError],
+    [cloudAvailable, user, restoring, lastError, accountPassword, setAccountPassword, signUp, signIn, signOut, updateAccountPassword, clearError],
   );
 
   return <Ctx.Provider value={store}>{children}</Ctx.Provider>;

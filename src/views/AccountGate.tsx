@@ -3,10 +3,9 @@
 //
 // Shown when a cloud DB is configured and no account is signed in. Data lives
 // ONLY in the database (one encrypted vault row per user, RLS-scoped to
-// auth.uid()), so this gate is mandatory — there is no local-only escape
-// hatch. Signing in establishes which user's encrypted vault blob to fetch;
-// the vault passphrase is still requested on the next screen (VaultGate) and
-// never leaves the device.
+// auth.uid()). The account password doubles as the vault key: on first run
+// the vault is auto-created under it, on later sign-ins it auto-unlocks.
+// There is no second passphrase — one credential, end to end.
 // ============================================================================
 
 import { useState, type FormEvent } from 'react';
@@ -52,8 +51,8 @@ export function AccountGate() {
         <h1>{mode === 'signin' ? 'Sign in to OmniFlow' : 'Create an account'}</h1>
         <p>
           Each account syncs its own <em>encrypted</em> vault across devices.
-          Your passphrase and data are decrypted only on-device; the cloud stores
-          ciphertext. No plaintext ever reaches the server.
+          Your password doubles as the vault key: data is decrypted only on-device,
+          and the cloud stores ciphertext. No plaintext ever reaches the server.
         </p>
 
         {notice && (
@@ -119,7 +118,7 @@ export function AccountGate() {
         <p className="muted small" style={{ marginTop: 12 }}>
           <IShield size={13} /> Data is encrypted in your browser before it is
           saved; the database only ever holds AES-GCM ciphertext. Your
-          passphrase never leaves this device.
+          password never leaves this device.
         </p>
       </div>
     </div>

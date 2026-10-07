@@ -17,12 +17,39 @@ export function SettingsView() {
   const [key, setKey] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
 
+  // change-password form
+  const [pwCurrent, setPwCurrent] = useState('');
+  const [pwNext, setPwNext] = useState('');
+  const [pwNext2, setPwNext2] = useState('');
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwMsg, setPwMsg] = useState<string | null>(null);
+
   const prefs = vault.prefs;
 
   const saveLlm = () => {
     store.setLlmKey(provider, provider === 'none' ? '' : key.trim());
     setKey('');
     setMsg(provider === 'none' ? 'LLM key removed — categorization falls back to the on-device rule engine.' : `LLM key stored (${provider}). Categorization now uses the cloud tier.`);
+  };
+
+  const changePw = async () => {
+    if (pwNext !== pwNext2) {
+      setPwMsg('New passwords do not match.');
+      return;
+    }
+    setPwBusy(true);
+    setPwMsg(null);
+    try {
+      await store.changePassword(pwCurrent, pwNext);
+      setPwCurrent('');
+      setPwNext('');
+      setPwNext2('');
+      setPwMsg('Password changed. The vault was re-encrypted under the new key.');
+    } catch (e) {
+      setPwMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPwBusy(false);
+    }
   };
 
   return (
@@ -133,12 +160,43 @@ export function SettingsView() {
       <div className="card">
         <p className="muted small">
           Everything is encrypted at rest with AES-256-GCM using a key derived
-          from your passphrase (PBKDF2, 210k iterations). Only the ciphertext
-          is written to the database; your passphrase and decrypted data never
-          leave this device. A wrong passphrase fails to decrypt — there is
+          from your password (PBKDF2, 210k iterations). Only the ciphertext
+          is written to the database; your password and decrypted data never
+          leave this device. A wrong password fails to decrypt — there is
           no bypass and no recovery.
         </p>
       </div>
+
+      {auth.cloudAvailable && auth.user && (
+        <>
+          <h2 className="section-title">Change password</h2>
+          <div className="card">
+            <p className="muted small">
+              Your password is the vault key. Changing it re-encrypts the whole
+              vault under the new key, so the two can never get out of sync.
+              At least 6 characters, must differ from the current one.
+            </p>
+            <label className="field"><span>Current password</span>
+              <input type="password" value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} placeholder="••••••••" autoComplete="current-password" />
+            </label>
+            <label className="field"><span>New password</span>
+              <input type="password" value={pwNext} onChange={(e) => setPwNext(e.target.value)} placeholder="min 6 characters" autoComplete="new-password" />
+            </label>
+            <label className="field"><span>Confirm new password</span>
+              <input type="password" value={pwNext2} onChange={(e) => setPwNext2(e.target.value)} placeholder="repeat new password" autoComplete="new-password" />
+            </label>
+            <button
+              className="btn sm"
+              style={{ marginTop: 8 }}
+              disabled={pwBusy || !pwCurrent || !pwNext || !pwNext2}
+              onClick={() => void changePw()}
+            >
+              {pwBusy ? 'Re-encrypting…' : 'Change password'}
+            </button>
+            {pwMsg && <div className="small muted" style={{ marginTop: 8 }}>{pwMsg}</div>}
+          </div>
+        </>
+      )}
 
       <h2 className="section-title">Danger zone</h2>
       <div className="card">
