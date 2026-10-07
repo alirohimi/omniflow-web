@@ -13,7 +13,7 @@ const IMG = 'data:image/jpeg;base64,QU9L';
 const CFG: Record<string, LLMConfig> = {
   openai: { provider: 'openai', apiKey: 'sk-test' },
   anthropic: { provider: 'anthropic', apiKey: 'sk-ant-test' },
-  gemini: { provider: 'gemini', apiKey: 'aiza-test' },
+  gemini: { provider: 'gemini', apiKey: 'AQ.gemini-test' },
 };
 
 function stubFetch() {
@@ -53,6 +53,24 @@ describe('callLLM text-only (no images)', () => {
     calls.length = 0;
     await callLLM(CFG.gemini, 'sys', 'user');
     expect(calls[0].body!.generationConfig.responseMimeType).toBeUndefined();
+  });
+
+  it('gemini: key goes in the x-goog-api-key header, never in the URL', async () => {
+    // Authorization keys (AQ…, the AI Studio default since May 2026) are only
+    // accepted via header auth; the legacy ?key=*** query form is rejected
+    // with API_KEY_INVALID even for valid keys.
+    const fn = vi.fn(async (_url: any, init?: any) => {
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } } ] }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fn);
+    await callLLM(CFG.gemini, 'sys', 'user');
+    const url = String(fn.mock.calls[0][0]);
+    const headers: Record<string, string> = fn.mock.calls[0][1]?.headers ?? {};
+    expect(url).not.toContain('key=');
+    expect(headers['x-goog-api-key']).toBe('AQ.gemini-test');
+    expect(headers['x-goog-api-key'].length).toBeGreaterThan(0);
+    // Default model must be a live one (2.0-flash was retired).
+    expect(url).toContain('gemini-3.8-flash');
   });
 });
 

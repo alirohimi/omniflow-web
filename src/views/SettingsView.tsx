@@ -121,7 +121,18 @@ export function SettingsView() {
           vault — it never leaves this device except to the provider API.
         </p>
         <label className="field"><span>Provider</span>
-          <select value={provider} onChange={(e) => setProvider(e.target.value as typeof provider)}>
+          <select
+            value={provider}
+            onChange={(e) => {
+              // One key at a time: switching provider resets the draft form
+              // (different key format, different model names) so an old
+              // provider's key is never silently saved under a new provider.
+              setProvider(e.target.value as typeof provider);
+              setKey('');
+              setModel('');
+              setTestResult(null);
+            }}
+          >
             <option value="none">None (on-device rules)</option>
             <option value="openai">OpenAI</option>
             <option value="anthropic">Anthropic</option>
@@ -130,11 +141,18 @@ export function SettingsView() {
         </label>
         {provider !== 'none' && (
           <>
-            <label className="field"><span>{prefs.llmKeyFinger ? 'Replace key (current: …' + prefs.llmKeyFinger + ')' : 'API key'}</span>
+            <label className="field">
+              <span>
+                {provider === prefs.llmProvider && prefs.llmKeyFinger
+                  ? 'Replace key (current: …' + prefs.llmKeyFinger + ')'
+                  : provider !== prefs.llmProvider && prefs.llmKeyFinger
+                    ? 'API key (replaces the ' + (prefs.llmProvider === 'none' ? '' : prefs.llmProvider + ' ') + 'key — one active key at a time)'
+                    : 'API key'}
+              </span>
               <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-…" autoComplete="off" />
             </label>
             <label className="field"><span>Model override (optional - leave blank for the provider default)</span>
-              <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="e.g. gemini-2.0-flash, gpt-4o-mini" />
+              <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="e.g. gemini-3.8-flash, gpt-4o-mini" />
             </label>
             <div className="list" style={{ marginTop: 8 }}>
               <button

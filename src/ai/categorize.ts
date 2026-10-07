@@ -189,30 +189,44 @@ export async function callLLM(
   }
 
   if (cfg.provider === 'gemini') {
-    // Gemini (AI Studio) — $0 free tier; the browser call uses the key in the
-    // query string (that's the documented generativelanguage pattern).
-    const model = cfg.model ?? 'gemini-2.0-flash';
+    // Gemini (AI Studio) — $0 free tier. Since May 2026 AI Studio issues
+    // "authorization keys" (AQ…) by default; those are ONLY accepted via
+    // header auth (x-goog-api-key) — the legacy ?key=*** query form is
+    // rejected with API_KEY_INVALID even for perfectly valid keys. Legacy
+    // AIza… keys work either way, so we always send the header. The
+    // preflight from a static origin explicitly allows this header.
+    // Default model tracks the current API recommendation; override via
+    // prefs.llmModel if a different model is wanted.
+    const model = cfg.model ?? 'gemini-3.8-flash';
     const url =
       'https://generativelanguage.googleapis.com/v1beta/models/' +
-      encodeURIComponent(model) +
-      ':generateContent?key=' + encodeURIComponent(cfg.apiKey);
+      encodeURIComponent(model) + ':generateContent';
     const parts: Record<string, unknown>[] = [{ text: user }];
     for (const d of imgs) {
       const m = d.match(/^data:([^;]+);base64,(.*)$/);
       parts.push({ inline_data: { mime_type: m?.[1] ?? 'image/jpeg', data: m?.[2] ?? d } });
     }
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts }],
-        systemInstruction: { parts: [{ text: sys }] },
-        generationConfig: {
-          temperature: 0,
-          ...(jsonMode ? { responseMimeType: 'application/json' } : {}),
-        },
-      }),
+    const body = JSON.stringify({
+      contents: [{ role: 'user', parts }],
+      systemInstruction: { parts: [{ text: sys }] },
+      generationConfig: {
+        temperature: 0,
+        ...(jsonMode ? { responseMimeType: 'application/json' } : {}),
+      },
     });
+    // The free tier sheds load with 503 "high demand" and 429 rate limits;
+    // both are transient, so retry with backoff before declaring failure.
+    // Bounded so a permanently-unavailable model still fails fast-ish.
+    let res: Response;
+    for (let attempt = 0; ; attempt++) {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': cfg.apiKey },
+        body,
+      });
+      if (res.ok || !(res.status === 503 || res.status === 429) || attempt >= 2) break;
+      await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+    }
     if (!res.ok) throw new Error(`gemini ${res.status}: ${await apiErrorBody(res)}`);
     const j = await res.json();
     // A blocked/failed generation returns no candidates — surface the reason.
