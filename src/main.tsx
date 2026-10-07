@@ -21,5 +21,12 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
       .catch(() => {
         /* offline caching is a bonus, never block the app */
       });
+    // Self-heal: the SW (skipWaiting + clients.claim) takes control the
+    // moment a newer deploy activates. Force one reload so the running
+    // page drops stale cached hashed assets and re-fetches the new
+    // bundle. Without this, a device can keep serving an old build.
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      window.location.reload();
+    });
   });
 }
