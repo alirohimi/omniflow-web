@@ -84,11 +84,16 @@ export interface VaultStore {
   /** 'local' when no account; otherwise the signed-in user's id. */
   scope: string;
   cloudSynced: boolean;
+  // cloud sync status (supabase)
   syncState: SyncState;
 
   // lifecycle
   createVault: (password: string, prefs?: Partial<UserPreferences>) => Promise<void>;
-  unlock: (password: string) => Promise<void>;
+  /**
+   * Returns the resulting vault status so callers can react: 'creating'
+   * means "no vault row exists yet" and the caller should auto-create.
+   */
+  unlock: (password: string) => Promise<VaultStatus>;
   lock: () => void;
   /**
    * Change the account password. The password doubles as the vault key:
@@ -245,7 +250,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   );
 
   const unlock = useCallback(
-    async (password: string) => {
+    async (password: string): Promise<VaultStatus> => {
       setError(null);
       let cipher: VaultCipher | undefined;
       try {
@@ -255,11 +260,13 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         // password case — 'unavailable' shows a retry screen instead.
         setError(e instanceof Error ? e.message : 'Could not reach your data store.');
         setStatus('unavailable');
-        return;
+        return 'unavailable';
       }
       if (!cipher) {
+        // No vault row yet: the caller (App) sees 'creating' and auto-
+        // creates a fresh vault under this password.
         setStatus('creating');
-        return;
+        return 'creating';
       }
       try {
         const v = await decryptVault<VaultBlob>(cipher, password);
@@ -267,9 +274,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         passRef.current = password;
         setVault(v);
         setStatus('unlocked');
+        return 'unlocked';
       } catch {
         setError('Wrong password. Your data stays encrypted until you type it right.');
         setStatus('locked');
+        return 'locked';
       }
     },
     [resolveCipher],
