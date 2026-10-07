@@ -109,7 +109,12 @@ export function ExpensesView() {
   const runOcr = async (file: File) => {
     setOcrBusy(true); setOcrResult(null); setOcrProgress(0);
     try {
-      const parsed = await parseReceipt(file, base, (p) => setOcrProgress(Math.round(p * 100)));
+      const parsed = await parseReceipt(
+        file,
+        base,
+        (p) => setOcrProgress(Math.round(p * 100)),
+        store.llmConfig ?? undefined,
+      );
       setOcrResult(parsed);
       if (parsed.merchant) void categorizeMerchant(parsed.merchant);
       if (parsed.amount != null) setAmount(String(parsed.amount));

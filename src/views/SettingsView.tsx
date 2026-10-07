@@ -13,7 +13,7 @@ export function SettingsView() {
   const { vault } = store;
   if (!vault) return null;
 
-  const [provider, setProvider] = useState<'none' | 'openai' | 'anthropic'>(vault.prefs.llmProvider);
+  const [provider, setProvider] = useState<'none' | 'openai' | 'anthropic' | 'gemini'>(vault.prefs.llmProvider);
   const [key, setKey] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -88,6 +88,7 @@ export function SettingsView() {
             <option value="none">None (on-device rules)</option>
             <option value="openai">OpenAI</option>
             <option value="anthropic">Anthropic</option>
+            <option value="gemini">Gemini (free tier)</option>
           </select>
         </label>
         {provider !== 'none' && (

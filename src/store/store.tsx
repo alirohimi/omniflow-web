@@ -122,7 +122,7 @@ export interface VaultStore {
   updateHoldingPrice: (id: string, local: number, base: number) => void;
 
   setPrefs: (patch: Partial<UserPreferences>) => void;
-  setLlmKey: (provider: 'none' | 'openai' | 'anthropic', key: string) => void;
+  setLlmKey: (provider: 'none' | 'openai' | 'anthropic' | 'gemini', key: string) => void;
   /** Replace the current vault with the bundled demo dataset (keeps prefs). */
   loadDemo: () => void;
 
@@ -534,7 +534,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   );
 
   const setLlmKey = useCallback(
-    async (_provider: 'none' | 'openai' | 'anthropic', _key: string) => {
+    async (_provider: 'none' | 'openai' | 'anthropic' | 'gemini', _key: string) => {
       // The BYOK key is stored encrypted inside the vault (re-decrypted per
       // session). Compute the display fingerprint outside the updater.
       const fp = _key ? (await fingerprintSecret(_key).catch(() => '')) : '';

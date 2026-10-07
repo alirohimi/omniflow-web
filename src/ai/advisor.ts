@@ -17,7 +17,7 @@ import type {
   UserPreferences,
 } from '../domain/types';
 import { currencyInfo } from '../domain/enums';
-import { LLMConfig } from './categorize';
+import { LLMConfig, callLLM } from './categorize';
 
 export interface Advisory {
   id: string;
@@ -171,10 +171,9 @@ export async function adviseWithLLM(
     topHolding: input.holdings[0]?.symbol,
   });
 
-  // Reuse the LLM transport from categorize (openai/anthropic).
-  const { __test } = await import('./categorize');
+  // Reuse the LLM transport from categorize (openai/anthropic/gemini).
   try {
-    const raw = await __test.callLLM(cfg, sys, user);
+    const raw = await callLLM(cfg, sys, user);
     return [
       ...rules,
       {

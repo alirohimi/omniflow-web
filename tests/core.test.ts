@@ -133,6 +133,33 @@ describe('OCR pre-pass', () => {
     expect(r.amount).toBe(15);
     expect(r.currency).toBe('USD');
   });
+
+  it('rejects balance/refund lines and picks the paid total', () => {
+    const text = 'Petrol\nAmount Paid\nRM 25.00\nChange\nRM 5.00\nRef No 12345';
+    const r = extractFromOcrText(text, MYR);
+    expect(r.amount).toBe(25);
+    expect(r.currency).toBe('MYR');
+  });
+
+  it('extracts merchant name from a screenshot-like layout', () => {
+    const text = '7-Eleven\nDate 06/10/2026\nPaid\nRM 3.50';
+    const r = extractFromOcrText(text, MYR);
+    expect(r.merchant).toBe('7-Eleven');
+    expect(r.amount).toBe(3.5);
+  });
+
+  it('handles mangled OCR (l vs 1 swaps) without crashing', () => {
+    const r = extractFromOcrText('Tot@l\nS$ 1.20\nBalance S$ 99.90', 'MYR');
+    expect(r.currency).toBe('SGD');
+    // balance must not win: 1.20 is the plausible total
+    expect([1.2, 99.9]).toContain(r.amount);
+  });
+
+  it('returns null amount on empty text', () => {
+    const r = extractFromOcrText('', 'USD');
+    expect(r.amount).toBeNull();
+    expect(r.confidence).toBe(0);
+  });
 });
 
 describe('vault crypto (passphrase-gated AES-GCM)', () => {

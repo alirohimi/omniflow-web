@@ -78,11 +78,15 @@ export interface InvestmentHolding {
   currentPriceBase: number;  // last known price in base currency
 }
 
+/** BYOK LLM providers. 'none' = free on-device rule engine only.
+ *  Gemini is the free-tier-friendly option (AI Studio keys, $0 quota). */
+export type LLMProvider = 'none' | 'openai' | 'anthropic' | 'gemini';
+
 /** App-wide preferences. */
 export interface UserPreferences {
   baseCurrency: string; // default 'MYR'
   displayName: string;
-  llmProvider: 'none' | 'openai' | 'anthropic';
+  llmProvider: LLMProvider;
   llmKeyFinger: string; // SHA-256 fingerprint of the stored key (for display)
   autoCategorize: boolean;
   advisorRules: boolean;

@@ -2,16 +2,16 @@
 // OmniFlow — AI categorization engine (hybrid tier, port of the iOS AIManager).
 //
 //   Tier 1: Dictionary / regex — always available, $0, offline.
-//   Tier 2: BYOK LLM (OpenAI or Anthropic) — only called if the user stored
-//           a key in the vault. The request is a small, well-scoped prompt;
-//           the key never leaves the browser.
+//   Tier 2: BYOK LLM (OpenAI, Anthropic, or Gemini) — only called if the
+//           user stored a key in the vault. The request is a small,
+//           well-scoped prompt; the key never leaves the browser.
 //
 // The LLM returns { category, merchant?, confidence }; on any failure we
 // fall back to the dictionary result and tag the tier so the UI can show
 // which engine produced the category.
 // ============================================================================
 
-import type { AITier, Category } from '../domain/types';
+import type { AITier, Category, LLMProvider } from '../domain/types';
 
 export interface CategorizeInput {
   merchant: string;
@@ -83,7 +83,7 @@ export function categorizeByDictionary(
 // ---------------------------------------------------------------------------
 
 export interface LLMConfig {
-  provider: 'openai' | 'anthropic';
+  provider: LLMProvider;
   apiKey: string;
   model?: string;
 }
@@ -122,7 +122,11 @@ export async function categorizeByLLM(
   };
 }
 
-async function callLLM(cfg: LLMConfig, sys: string, user: string): Promise<string> {
+// ---------------------------------------------------------------------------
+// LLM transport — one branch per provider.
+// ---------------------------------------------------------------------------
+
+export async function callLLM(cfg: LLMConfig, sys: string, user: string): Promise<string> {
   if (cfg.provider === 'anthropic') {
     const model = cfg.model ?? 'claude-3-5-sonnet-latest';
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -143,28 +147,51 @@ async function callLLM(cfg: LLMConfig, sys: string, user: string): Promise<strin
     if (!res.ok) throw new Error(`anthropic ${res.status}`);
     const j = await res.json();
     return j?.content?.[0]?.text ?? '';
-  } else {
-    const model = cfg.model ?? 'gpt-4o-mini';
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+  }
+
+  if (cfg.provider === 'gemini') {
+    // Gemini (AI Studio) — $0 free tier; the browser call uses the key in the
+    // query string (that's the documented generativelanguage pattern).
+    const model = cfg.model ?? 'gemini-2.0-flash';
+    const url =
+      'https://generativelanguage.googleapis.com/v1beta/models/' +
+      encodeURIComponent(model) +
+      ':generateContent?key=' + encodeURIComponent(cfg.apiKey);
+    const res = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.apiKey}`,
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model,
-        temperature: 0,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: sys },
-          { role: 'user', content: user },
-        ],
+        contents: [{ role: 'user', parts: [{ text: `${sys}\n${user}` }] }],
+        systemInstruction: { parts: [{ text: sys }] },
+        generationConfig: { temperature: 0, responseMimeType: 'application/json' },
       }),
     });
-    if (!res.ok) throw new Error(`openai ${res.status}`);
+    if (!res.ok) throw new Error(`gemini ${res.status}`);
     const j = await res.json();
-    return j?.choices?.[0]?.message?.content ?? '';
+    return j?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
   }
+
+  // Default: OpenAI.
+  const model = cfg.model ?? 'gpt-4o-mini';
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${cfg.apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: sys },
+        { role: 'user', content: user },
+      ],
+    }),
+  });
+  if (!res.ok) throw new Error(`openai ${res.status}`);
+  const j = await res.json();
+  return j?.choices?.[0]?.message?.content ?? '';
 }
 
 // ---------------------------------------------------------------------------
