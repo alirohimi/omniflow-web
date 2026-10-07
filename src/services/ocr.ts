@@ -17,6 +17,19 @@
 
 import type { ExpenseSource } from '../domain/types';
 import { callLLM, type LLMConfig } from '../ai/categorize';
+// tesseract.js ships `export = Tesseract` (a namespace), so its member
+// types don't nest under a default import reliably. Define the worker
+// structurally — only `recognize` is used — and type the logger message
+// structurally too.
+type TesseractWorker = {
+  recognize(
+    image: Blob | string | HTMLImageElement | HTMLCanvasElement,
+    options?: unknown,
+    output?: unknown,
+    jobId?: string,
+  ): Promise<{ data: unknown }>;
+};
+type TessLoggerMsg = { status: string; progress: number };
 
 export interface ParsedReceipt {
   amount: number | null;
@@ -152,24 +165,25 @@ const MERCHANT_STOP =
   /^(?:total|paid|amount|amt|receipt|reciept|date|time|ref|refer(?:ence)?|invoice|inv|cash|card|balance|change|paid\s*by|store|merchant|transaction|order|subtotal|sub\s*total|tax|vat|s\.?t\.?\.?|grand|net|www|http|scan|qr|wallet|e-?wallet|payment|method|currency|rate|exchange|converted|credit|account|acct|mobile|phone|no\.?|num)\b/i;
 
 function detectMerchant(lines: string[], amountIdx: number): string | null {
-  let best: { line: string; score: number; idx: number } | null = null;
-  lines.forEach((line, idx) => {
-    const t = line.trim();
-    if (t.length < 3 || t.length > 60) return;
-    if (idx === amountIdx) return;
-    if (MERCHANT_STOP.test(t)) return;
-    if (/\d{3,}/.test(t)) return; // number-heavy: date, ref, phone
-    if (/http|www\./i.test(t)) return;
+  type Candi = { line: string; score: number; idx: number };
+  let best: Candi | null = null;
+  for (let idx = 0; idx < lines.length; idx++) {
+    const t = lines[idx].trim();
+    if (t.length < 3 || t.length > 60) continue;
+    if (idx === amountIdx) continue;
+    if (MERCHANT_STOP.test(t)) continue;
+    if (/\d{3,}/.test(t)) continue; // number-heavy: date, ref, phone
+    if (/http|www\./i.test(t)) continue;
     const letters = (t.match(/[a-z]/gi) || []).length;
-    if (letters / t.length < 0.5) return; // mostly symbols/digits
-    if (currencyNearNumber(t)) return; // it's a money line, not a name
+    if (letters / t.length < 0.5) continue; // mostly symbols/digits
+    if (currencyNearNumber(t)) continue; // it's a money line, not a name
     let score = 0;
     if (amountIdx >= 0 && idx < amountIdx) score += 2; // names print above totals
     else if (amountIdx < 0) score += 1;
     if (t.length >= 3 && t.length <= 40) score += 1;
     if (/^[A-Z](?:[A-Za-z0-9&.'() -]*[A-Za-z])?$/.test(t)) score += 1;
     if (!best || score > best.score) best = { line: t, score, idx };
-  });
+  }
   return best && best.score > 0 ? best.line : null;
 }
 
@@ -202,9 +216,6 @@ export function extractFromOcrText(text: string, fallbackCurrency = 'MYR'): Pars
 // Tesseract — persistent worker + browser image preprocessing
 // ---------------------------------------------------------------------------
 
-type TesseractModule = typeof import('tesseract.js');
-type TesseractWorker = TesseractModule.Worker;
-
 let workerPromise: Promise<TesseractWorker> | null = null;
 let activeProgress: ((pct: number) => void) | null = null;
 
@@ -212,7 +223,7 @@ function getWorker(): Promise<TesseractWorker> {
   if (!workerPromise) {
     workerPromise = import('tesseract.js').then((T) =>
       T.createWorker('eng', 1, {
-        logger: (m) => {
+        logger: (m: TessLoggerMsg) => {
           if (m.status === 'recognizing text' && activeProgress) activeProgress(m.progress);
         },
       }),
