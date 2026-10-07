@@ -105,6 +105,20 @@ export interface VaultBlob {
   // Optional BYOK LLM key, stored encrypted INSIDE the vault (re-decrypted
   // per session with the passphrase). Empty string when not set.
   llmKey: string;
+  // Coach conversation, persisted so a reload keeps the thread. Old
+  // encrypted blobs may lack it — readers normalize with ?? [].
+  coachLog?: CoachMessage[];
+}
+
+/** One coach chat turn, persisted (encrypted) with the vault. Compact by
+ *  design: bounded text, source tier recorded for the badge. No raw ledger
+ *  data — grounding happens at answer time, not storage time. */
+export interface CoachMessage {
+  id: string;
+  role: 'user' | 'coach';
+  text: string;
+  source?: 'llm' | 'rules' | 'system';
+  at: number;
 }
 
 /** Snapshot of live market data — not persisted with the vault by default

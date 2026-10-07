@@ -35,6 +35,7 @@ import type {
   UserPreferences,
   VaultBlob,
   Category,
+  CoachMessage,
 } from '../domain/types';
 import { emptyVault, demoVault } from '../domain/seed';
 import { encryptVault, decryptVault, fingerprintSecret, type VaultCipher } from '../security/vault';
@@ -125,6 +126,12 @@ export interface VaultStore {
   setLlmKey: (provider: 'none' | 'openai' | 'anthropic' | 'gemini', key: string) => void;
   /** Replace the current vault with the bundled demo dataset (keeps prefs). */
   loadDemo: () => void;
+
+  // Coach (conversational advisor) — persisted encrypted with the vault.
+  coachLog: CoachMessage[];
+  /** Append a chat turn (bounded: the last 200 messages are kept). */
+  pushCoachMessage: (msg: Omit<CoachMessage, 'id'>) => void;
+  clearCoachLog: () => void;
 
   categories: Category[];
 }
@@ -567,9 +574,44 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         ...demo,
         prefs: prev.prefs,
         llmKey: prev.llmKey,
+        coachLog: prev.coachLog,
         createdAt: prev.createdAt,
         updatedAt: Date.now(),
       };
+      void persist(next);
+      return next;
+    });
+  }, [persist]);
+
+  // ---- coach (conversational advisor) ----
+  // Persisted encrypted with the vault like everything else. Bounded: keep
+  // only the last 200 messages so the blob (and every full re-encrypt of it)
+  // stays small no matter how long the user chats.
+
+  const pushCoachMessage = useCallback(
+    (msg: Omit<CoachMessage, 'id'>) => {
+      setVault((prev) => {
+        if (!prev) return prev;
+        const entry: CoachMessage = {
+          ...msg,
+          id: `cm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        };
+        const next = {
+          ...prev,
+          coachLog: [...(prev.coachLog ?? []), entry].slice(-200),
+          updatedAt: Date.now(),
+        };
+        void persist(next);
+        return next;
+      });
+    },
+    [persist],
+  );
+
+  const clearCoachLog = useCallback(() => {
+    setVault((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, coachLog: [], updatedAt: Date.now() };
       void persist(next);
       return next;
     });
@@ -605,6 +647,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setPrefs,
     setLlmKey,
     loadDemo,
+    coachLog: vault?.coachLog ?? [],
+    pushCoachMessage,
+    clearCoachLog,
     categories: vault?.categories ?? [],
   };
 

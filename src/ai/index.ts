@@ -28,3 +28,13 @@ export {
   type AccountLine,
   type PortfolioSummary,
 } from './portfolio';
+
+export {
+  coachAsk,
+  buildBrief,
+  coachFallback,
+  coachSystemPrompt,
+  type CoachContext,
+  type CoachBrief,
+  type CoachAnswer,
+} from './coach';

@@ -12,15 +12,17 @@ import { DashboardView } from './views/DashboardView';
 import { ExpensesView } from './views/ExpensesView';
 import { InvestmentsView } from './views/InvestmentsView';
 import { SettingsView } from './views/SettingsView';
+import { CoachView } from './views/CoachView';
 import { currencyInfo } from './domain/enums';
-import { IHome, IWallet, ITrend, IGear, ILock } from './icons';
+import { IHome, IWallet, ITrend, IGear, ILock, ICoach } from './icons';
 
-type Tab = 'dashboard' | 'expenses' | 'investments' | 'settings';
+type Tab = 'dashboard' | 'expenses' | 'investments' | 'coach' | 'settings';
 
 const TABS: { id: Tab; label: string; ico: (p: { size?: number }) => JSX.Element }[] = [
   { id: 'dashboard', label: 'Home', ico: IHome },
   { id: 'expenses', label: 'Expenses', ico: IWallet },
   { id: 'investments', label: 'Portfolio', ico: ITrend },
+  { id: 'coach', label: 'Coach', ico: ICoach },
   { id: 'settings', label: 'Settings', ico: IGear },
 ];
 
@@ -103,6 +105,7 @@ function Shell() {
         {tab === 'dashboard' && <DashboardView onOpenTab={setTab} />}
         {tab === 'expenses' && <ExpensesView />}
         {tab === 'investments' && <InvestmentsView />}
+        {tab === 'coach' && <CoachView />}
         {tab === 'settings' && <SettingsView />}
       </main>
 
