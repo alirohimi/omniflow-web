@@ -76,6 +76,19 @@ export const IRefresh = (p: P) => (
   </S>
 );
 
+export const IPencil = (p: P) => (
+  <S {...p}>
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7.5 16.5 4 17.5 5 14z" />
+  </S>
+);
+
+export const IX = (p: P) => (
+  <S {...p}>
+    <path d="M18 6L6 18M6 6l12 12" />
+  </S>
+);
+
 export const IShield = (p: P) => (
   <S {...p} size={p.size ?? 40}>
     <path d="M12 3 5 6v6c0 4.2 2.9 7.5 7 9 4.1-1.5 7-4.8 7-9V6l-7-3Z" />

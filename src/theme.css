@@ -232,6 +232,9 @@ input, select, textarea {
   outline: none;
   transition: border-color .15s, box-shadow .15s, background .15s;
 }
+/* Keep native select boxes the exact height of inputs so paired form rows
+   (e.g. Platform input next to a Type dropdown) always align on mobile. */
+input, select { min-height: 48px; }
 input::placeholder, textarea::placeholder { color: var(--faint); }
 input:hover, select:hover, textarea:hover { border-color: #3d5482; }
 input:focus, select:focus, textarea:focus {
@@ -313,6 +316,14 @@ textarea { resize: vertical; min-height: 44px; }
   transition: color .15s, background .15s;
 }
 .item .del:hover { color: var(--bad); background: var(--bad-soft); }
+/* Edit affordance: same shape as .del but neutral (blue) hover — it's a
+   non-destructive action, so it must not read as a destroy button. */
+.item .edit {
+  background: none; border: 0; color: var(--faint); cursor: pointer;
+  padding: 6px; border-radius: 9px; display: grid; place-items: center;
+  transition: color .15s, background .15s;
+}
+.item .edit:hover { color: var(--accent); background: var(--accent-soft); }
 /* Two-tap armed state: first tap turns the button red, second confirms */
 .del.armed {
   color: #fff !important; background: var(--bad);
@@ -430,6 +441,7 @@ textarea { resize: vertical; min-height: 44px; }
   .btn { min-height: 46px; padding: 13px 18px; }
   .btn.sm { min-height: 42px; }
   .item .del { min-width: 44px; min-height: 44px; }
+  .item .edit { min-width: 44px; min-height: 44px; }
   .tabbar button { min-height: 52px; }
   button, .chip, .seg button { touch-action: manipulation; } /* kill 300ms tap delay */
 }
@@ -445,6 +457,10 @@ textarea { resize: vertical; min-height: 44px; }
   .kpi { grid-template-columns: 1fr 1fr 1fr; gap: 7px; }
   .kpi .num { font-size: 16px; }
   .kpi .lbl { font-size: 9.5px; }
+  /* Stack form rows full-width: a wrapping label (e.g. "Platform (Luno, IBKR,
+     Moomoo…)") can no longer push the next field's box off-alignment. */
+  .cols { grid-template-columns: 1fr; gap: 12px; }
+  .cols > .field { margin: 0; }
   .item { padding: 12px; gap: 10px; }
   .gate { padding: 16px; }
   .gate .panel { padding: 26px 18px; }

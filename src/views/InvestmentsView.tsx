@@ -3,14 +3,14 @@
 // Grouped by platformName, with live quotes and FX-converted base values.
 // ============================================================================
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
 import { useToast } from '../components/Toast';
 import { DelButton } from '../components/DelButton';
 import { fxService } from '../services';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
-import { IRefresh, IPlus } from '../icons';
+import { IRefresh, IPlus, IPencil, IX } from '../icons';
 import type { InvestmentAccount, InvestmentHolding } from '../domain/types';
 
 const ASSET_CLASSES = ['equity-us', 'equity-local', 'etf', 'crypto', 'cash', 'mmf'] as const;
@@ -33,6 +33,28 @@ export function InvestmentsView() {
   const [holdCur, setHoldCur] = useState(base);
   const [units, setUnits] = useState('');
   const [entry, setEntry] = useState('');
+  /** id of the holding being edited, or null when adding a new one. */
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const addHoldFormRef = useRef<HTMLHeadingElement>(null);
+
+  const startEdit = (h: InvestmentHolding) => {
+    setAccountId(h.accountId);
+    setSymbol(h.symbol);
+    setAssetClass(h.assetClass);
+    setHoldCur(h.holdingCurrency);
+    setUnits(String(h.units));
+    setEntry(String(h.averageEntryPrice || ''));
+    setEditingId(h.id);
+    window.setTimeout(() => {
+      addHoldFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 30);
+    toast(`Editing ${h.symbol} — update the form, then press "Save changes"`);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setSymbol(''); setUnits(''); setEntry(''); setAssetClass('equity-us');
+  };
 
   const grouped = useMemo(() => {
     const byPlat = new Map<string, InvestmentHolding[]>();
@@ -73,6 +95,25 @@ export function InvestmentsView() {
         priceBase = local * r;
       }
     } catch { /* offline: keep entry as a rough base price */ }
+    if (editingId) {
+      store.updateHolding(editingId, {
+        accountId,
+        symbol: symbol.trim().toUpperCase(),
+        assetClass,
+        holdingCurrency: holdCur,
+        units: u,
+        averageEntryPrice: e || 0,
+        currentPriceLocal: local || undefined,
+        currentPriceBase: priceBase || undefined,
+      });
+      // Clear back to add mode — otherwise the leftover values could
+      // accidentally duplicate the holding on the next "Add holding" tap.
+      setEditingId(null);
+      setSymbol(''); setUnits(''); setEntry('');
+      setAssetClass('equity-us'); setHoldCur(base);
+      toast(`Updated ${symbol.trim().toUpperCase()}`);
+      return;
+    }
     store.addHolding({
       accountId,
       symbol: symbol.trim().toUpperCase(),
@@ -174,11 +215,17 @@ export function InvestmentsView() {
         )}
       </div>
 
-      <h2 className="section-title">Add holding</h2>
+      <h2 className="section-title" ref={addHoldFormRef}>{editingId ? 'Edit holding' : 'Add holding'}</h2>
       <div className="card">
-        {!accountId && (
+        {!accountId && !editingId && (
           <div className="small muted" style={{ marginBottom: 8 }}>
             Set a target account above, then add holdings to it.
+          </div>
+        )}
+        {editingId && (
+          <div className="row" style={{ marginBottom: 10 }}>
+            <span className="chip sm">Editing existing holding</span>
+            <button className="btn ghost sm" onClick={cancelEdit}><IX size={14} /> Cancel</button>
           </div>
         )}
         <div className="cols">
@@ -203,7 +250,7 @@ export function InvestmentsView() {
           </label>
         </div>
         <button className={`btn sm${accountId ? '' : ' ghost'}`} style={{ width: '100%' }} disabled={!accountId} onClick={() => void addHolding()}>
-          {accountId ? 'Add holding' : 'Set a target account first'}
+          {accountId ? (editingId ? 'Save changes' : 'Add holding') : 'Set a target account first'}
         </button>
       </div>
 
@@ -230,10 +277,19 @@ export function InvestmentsView() {
                     {sym}{val.toFixed(0)}
                     <span className={ret >= 0 ? 'pos small' : 'neg small'}> {ret >= 0 ? '+' : ''}{ret.toFixed(1)}%</span>
                   </div>
+                  <button
+                    className="edit"
+                    title={`Edit ${h.symbol} holding`}
+                    aria-label={`Edit ${h.symbol} holding`}
+                    onClick={() => startEdit(h)}
+                  >
+                    <IPencil size={16} />
+                  </button>
                   <DelButton
                     label={`Delete ${h.symbol} holding`}
                     onConfirm={() => {
                       store.deleteHolding(h.id);
+                      if (editingId === h.id) cancelEdit();
                       toast(`Deleted ${h.symbol} holding`);
                     }}
                   />

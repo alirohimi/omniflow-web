@@ -101,6 +101,8 @@ export interface VaultStore {
   deleteAccount: (id: string) => void;
   addHolding: (input: NewHoldingInput) => string;
   deleteHolding: (id: string) => void;
+  /** Patch an existing holding (units, entry, symbol, class, currency, account). */
+  updateHolding: (id: string, patch: Partial<Omit<InvestmentHolding, 'id'>>) => void;
   updateHoldingPrice: (id: string, local: number, base: number) => void;
 
   setPrefs: (patch: Partial<UserPreferences>) => void;
@@ -383,6 +385,22 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     [persist],
   );
 
+  const updateHolding = useCallback(
+    (id: string, patch: Partial<Omit<InvestmentHolding, 'id'>>) => {
+      setVault((prev) => {
+        if (!prev) return prev;
+        const next = {
+          ...prev,
+          holdings: prev.holdings.map((h) => (h.id === id ? { ...h, ...patch } : h)),
+          updatedAt: Date.now(),
+        };
+        void persist(next);
+        return next;
+      });
+    },
+    [persist],
+  );
+
   const updateHoldingPrice = useCallback(
     (id: string, local: number, base: number) => {
       setVault((prev) => {
@@ -479,6 +497,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     deleteAccount,
     addHolding,
     deleteHolding,
+    updateHolding,
     updateHoldingPrice,
     setPrefs,
     setLlmKey,
