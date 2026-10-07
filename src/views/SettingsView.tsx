@@ -94,7 +94,7 @@ export function SettingsView() {
             <option value="none">None (on-device rules)</option>
             <option value="openai">OpenAI</option>
             <option value="anthropic">Anthropic</option>
-            <option value="gemini">Gemini (free tier)</option>
+            <option value="gemini">Gemini</option>
           </select>
         </label>
         {provider !== 'none' && (
