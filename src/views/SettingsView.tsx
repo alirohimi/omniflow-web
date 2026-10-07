@@ -67,11 +67,17 @@ export function SettingsView() {
         <div className="list" style={{ marginTop: 12 }}>
           <label className="row">
             <span>Auto-categorize new expenses (AI engine)</span>
-            <input type="checkbox" checked={prefs.autoCategorize} onChange={(e) => store.setPrefs({ autoCategorize: e.target.checked })} />
+            <span className="switch">
+              <input type="checkbox" checked={prefs.autoCategorize} onChange={(e) => store.setPrefs({ autoCategorize: e.target.checked })} />
+              <span className="track" aria-hidden="true" />
+            </span>
           </label>
           <label className="row">
             <span>Advisor rules (overspend, concentration, pace)</span>
-            <input type="checkbox" checked={prefs.advisorRules} onChange={(e) => store.setPrefs({ advisorRules: e.target.checked })} />
+            <span className="switch">
+              <input type="checkbox" checked={prefs.advisorRules} onChange={(e) => store.setPrefs({ advisorRules: e.target.checked })} />
+              <span className="track" aria-hidden="true" />
+            </span>
           </label>
         </div>
       </div>
