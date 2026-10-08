@@ -450,18 +450,15 @@ export function SettingsView() {
                         {pol?.provider === 'none' && ' · locked to on-device rules'}
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      {isThisAdmin ? (
-                        <button className="btn ghost sm" onClick={() => void unlockUser(m)}>Clear</button>
-                      ) : (
-                        <button
-                          className="btn sm"
-                          disabled={lockBusy || (lockProvider !== 'none' && !lockKey.trim())}
-                          onClick={() => void setLockFor(m, lockProvider)}
-                        >
-                          {lockBusy ? 'Saving…' : 'Apply'}
-                        </button>
-                      )}
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <button
+                        className="btn sm"
+                        disabled={lockBusy || (lockProvider !== 'none' && !lockKey.trim())}
+                        onClick={() => void setLockFor(m, lockProvider)}
+                      >
+                        {lockBusy ? 'Saving…' : 'Apply'}
+                      </button>
+                      <button className="btn ghost sm" onClick={() => void unlockUser(m)}>Clear</button>
                     </div>
                   </div>
                 );
