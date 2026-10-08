@@ -36,12 +36,31 @@ import type {
   VaultBlob,
   Category,
   CoachMessage,
+  LLMProvider,
 } from '../domain/types';
 import { emptyVault, demoVault } from '../domain/seed';
 import { encryptVault, decryptVault, fingerprintSecret, type VaultCipher } from '../security/vault';
 import { LLMConfig } from '../ai/categorize';
 import { useAuthStore } from '../auth/AuthProvider';
 import { fetchCloudVaultStrict, saveCloudVault, deleteCloudVault } from '../services/cloudVault';
+import {
+  type LlmPolicyRow,
+  type MemberRow,
+  type VaultSyncRow,
+  type PolicySummary,
+  isAdmin,
+  getMyLlmPolicy,
+  upsertSelfMember,
+  listMembers,
+  listVaultSync,
+  listAdminIds,
+  listPolicies,
+  grantAdmin,
+  revokeAdmin,
+  setLlmPolicy as adminSetLlmPolicy,
+  clearLlmPolicy as adminClearLlmPolicy,
+  wipeMemberVault,
+} from '../services/admin';
 
 export type VaultStatus = 'locked' | 'creating' | 'unlocked' | 'unavailable';
 export type SyncState = 'idle' | 'syncing' | 'synced' | 'error';
@@ -133,6 +152,37 @@ export interface VaultStore {
   /** Replace the current vault with the bundled demo dataset (keeps prefs). */
   loadDemo: () => void;
 
+  // Admin & LLM policy (RLS-gated; no-ops when cloud is off or the 0002
+  // migration has not been applied yet). See services/admin.ts.
+  /** True when the signed-in user is in the admin registry. */
+  isAdminUser: boolean;
+  /** This user's admin-assigned LLM policy, when one exists. */
+  llmPolicy: import('../services/admin').LlmPolicyRow | undefined;
+  /** Directory of registered members (admin UI). */
+  adminMembers: () => Promise<import('../services/admin').MemberRow[]>;
+  /** Per-user vault sync metadata (admin UI; ciphertext rows only). */
+  adminVaultSync: () => Promise<import('../services/admin').VaultSyncRow[]>;
+  /** Admin-only: promote a user to admin. */
+  adminGrant: (targetUserId: string) => Promise<boolean>;
+  /** Admin-only: demote a user. */
+  adminRevoke: (targetUserId: string) => Promise<boolean>;
+  /** Admin-only: lock a user's LLM provider/key/model ('none' + empty key = unlock). */
+  adminSetLlm: (
+    targetUserId: string,
+    provider: LLMProvider,
+    apiKey: string,
+    model: string,
+    keyFinger: string,
+  ) => Promise<boolean>;
+  /** Admin-only: clear a user's LLM policy (fully unlock their LLM section). */
+  adminClearLlm: (targetUserId: string) => Promise<boolean>;
+  /** Admin-only: delete a member's encrypted vault row (irreversible). */
+  adminWipeVault: (targetUserId: string) => Promise<boolean>;
+  /** Current admin registry (user_ids) — for UI badges. */
+  adminIds: () => Promise<string[]>;
+  /** Admin-only: per-member LLM policy summary (fingerprint, never the raw key). */
+  adminPolicies: () => Promise<import('../services/admin').PolicySummary[]>;
+
   // Coach (conversational advisor) — persisted encrypted with the vault.
   coachLog: CoachMessage[];
   /** Append a chat turn (bounded: the last 200 messages are kept). */
@@ -162,9 +212,47 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [vault, setVault] = useState<VaultBlob | null>(null);
   const [syncState, setSyncState] = useState<SyncState>('idle');
+  // ---- admin / LLM-policy state (populated only for a signed-in cloud user;
+  // ---- every read/write is RLS-gated server-side, see services/admin.ts) ----
+  const [isAdminUser, setIsAdminUser] = useState(false);
+  const [llmPolicy, setLlmPolicy] = useState<LlmPolicyRow | undefined>(undefined);
   const passRef = useRef<string>(''); // holds passphrase in-memory only
   const cipherRef = useRef<VaultCipher | null>(null); // last encrypted blob
   const chainRef = useRef<Promise<void>>(Promise.resolve());
+
+  // Probe admin status + pull this user's LLM policy when the cloud user is
+  // known. Both are no-ops (feature off) when the 0002 migration has not been
+  // applied yet — the app keeps working on local BYOK settings.
+  const adminUserKey = cloudOn ? scope : '';
+  useEffect(() => {
+    let alive = true;
+    if (!adminUserKey) {
+      setIsAdminUser(false);
+      setLlmPolicy(undefined);
+      return;
+    }
+    (async () => {
+      const [admin, policy] = await Promise.all([
+        isAdmin(adminUserKey),
+        getMyLlmPolicy(adminUserKey),
+      ]);
+      if (!alive) return;
+      setIsAdminUser(admin);
+      setLlmPolicy(policy);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [adminUserKey]);
+
+  // Self-register in the member directory whenever a cloud user signs in, so
+  // admins can see who is registered. Fire-and-forget; idempotent upsert.
+  const displayName = auth.user?.user_metadata?.display_name ?? '';
+  useEffect(() => {
+    const u = auth.user;
+    if (!cloudOn || !u) return;
+    void upsertSelfMember(u.id, u.email ?? '', displayName);
+  }, [cloudOn, scope, displayName]);
 
   // ---- blob resolution (the DB row is the single source of truth) ----
   // Strict: throws on a genuine DB/network failure so the caller can tell
@@ -604,6 +692,80 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     });
   }, [persist]);
 
+  // ---- admin actions (all gated by RLS server-side; see services/admin.ts) ----
+  // The store only orchestrates; the actual permission checks happen in
+  // Postgres. A non-admin call simply returns false and nothing is written.
+
+  const adminRefresh = useCallback(async () => {
+    if (!adminUserKey) return;
+    const [admin, policy] = await Promise.all([
+      isAdmin(adminUserKey),
+      getMyLlmPolicy(adminUserKey),
+    ]);
+    setIsAdminUser(admin);
+    setLlmPolicy(policy);
+  }, [adminUserKey]);
+
+  const adminGrant = useCallback(
+    async (targetUserId: string): Promise<boolean> => {
+      if (!adminUserKey) return false;
+      const ok = await grantAdmin(adminUserKey, targetUserId);
+      void adminRefresh();
+      return ok;
+    },
+    [adminUserKey, adminRefresh],
+  );
+
+  const adminRevoke = useCallback(
+    async (targetUserId: string): Promise<boolean> => {
+      if (!adminUserKey) return false;
+      const ok = await revokeAdmin(adminUserKey, targetUserId);
+      void adminRefresh();
+      return ok;
+    },
+    [adminUserKey, adminRefresh],
+  );
+
+  const adminSetLlm = useCallback(
+    async (
+      targetUserId: string,
+      provider: LLMProvider,
+      apiKey: string,
+      model: string,
+      keyFinger: string,
+    ): Promise<boolean> => {
+      if (!adminUserKey) return false;
+      const ok = await adminSetLlmPolicy(adminUserKey, targetUserId, provider, apiKey, model, keyFinger);
+      // If the admin is editing their own row, refresh local policy too.
+      if (targetUserId === adminUserKey) void adminRefresh();
+      return ok;
+    },
+    [adminUserKey, adminRefresh],
+  );
+
+  const adminClearLlm = useCallback(
+    async (targetUserId: string): Promise<boolean> => {
+      if (!adminUserKey) return false;
+      const ok = await adminClearLlmPolicy(adminUserKey, targetUserId);
+      if (targetUserId === adminUserKey) void adminRefresh();
+      return ok;
+    },
+    [adminUserKey, adminRefresh],
+  );
+
+  const adminWipeVault = useCallback(
+    async (targetUserId: string): Promise<boolean> => {
+      if (!adminUserKey) return false;
+      return wipeMemberVault(adminUserKey, targetUserId);
+    },
+    [adminUserKey],
+  );
+
+  const adminMembers = useCallback(async (): Promise<MemberRow[]> => listMembers(), []);
+  const adminVaultSync = useCallback(async (): Promise<VaultSyncRow[]> => listVaultSync(), []);
+  const adminIds = useCallback(async (): Promise<string[]> => listAdminIds(), []);
+  const adminPolicies = useCallback(async (): Promise<PolicySummary[]> => listPolicies(), []);
+
   // ---- coach (conversational advisor) ----
   // Persisted encrypted with the vault like everything else. Bounded: keep
   // only the last 200 messages so the blob (and every full re-encrypt of it)
@@ -639,14 +801,30 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   }, [persist]);
 
   const llmConfig = useMemo<LLMConfig | null>(() => {
-    if (!vault || vault.prefs.llmProvider === 'none' || !vault.llmKey) return null;
+    // Admin-issued LLM policy (RLS row) OVERRIDES the local BYOK choice:
+    // that is the "lock the model" feature. An admin can pin a user to a
+    // specific provider/key/model, or to 'none' (force on-device rules).
+    // When no policy row exists, the user's own vault settings apply.
+    if (llmPolicy && llmPolicy.provider !== 'none' && llmPolicy.api_key) {
+      return {
+        provider: llmPolicy.provider,
+        apiKey: llmPolicy.api_key,
+        model: llmPolicy.model?.trim() || undefined,
+      };
+    }
+    if (!vault) return null;
+    // Explicit 'none' policy (or any policy without a key) falls through to
+    // local settings only when no policy row exists at all; an explicit
+    // 'none' policy with no key means the admin forced on-device rules.
+    if (llmPolicy) return null;
+    if (vault.prefs.llmProvider === 'none' || !vault.llmKey) return null;
     const model = vault.prefs.llmModel?.trim();
     return {
       provider: vault.prefs.llmProvider,
       apiKey: vault.llmKey,
       model: model || undefined,
     };
-  }, [vault]);
+  }, [vault, llmPolicy]);
 
   const store: VaultStore = {
     status,
@@ -674,6 +852,19 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setLlmKey,
     retrySync,
     loadDemo,
+    // Admin & LLM policy (RLS-gated; no-ops when cloud is off or the 0002
+    // migration has not been applied yet).
+    isAdminUser,
+    llmPolicy,
+    adminMembers,
+    adminVaultSync,
+    adminGrant,
+    adminRevoke,
+    adminSetLlm,
+    adminClearLlm,
+    adminWipeVault,
+    adminIds,
+    adminPolicies,
     coachLog: vault?.coachLog ?? [],
     pushCoachMessage,
     clearCoachLog,

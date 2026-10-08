@@ -2,12 +2,15 @@
 // Settings — preferences, BYOK LLM keys, security, demo data, danger zone.
 // ============================================================================
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useVaultStore } from '../store/store';
 import { useAuthStore } from '../auth/AuthProvider';
 import { CURRENCIES } from '../domain/enums';
 import { testLLMKey } from '../ai';
 import type { LLMConfig } from '../ai/categorize';
+import type { LLMProvider } from '../domain/types';
+import type { MemberRow, VaultSyncRow, PolicySummary } from '../services/admin';
+import { fingerprintSecret } from '../security/vault';
 
 export function SettingsView() {
   const store = useVaultStore();
@@ -28,6 +31,83 @@ export function SettingsView() {
   const [pwNext2, setPwNext2] = useState('');
   const [pwBusy, setPwBusy] = useState(false);
   const [pwMsg, setPwMsg] = useState<string | null>(null);
+
+  // ---- admin: LLM policy + member directory (only when the 0002 migration
+  // has been applied AND this user is signed in to the shared DB). ----
+  const [members, setMembers] = useState<MemberRow[]>([]);
+  const [vaultSync, setVaultSync] = useState<VaultSyncRow[]>([]);
+  const [adminIds, setAdminIds] = useState<string[]>([]);
+  const [policies, setPolicies] = useState<Record<string, PolicySummary>>({});
+  const [lockBusy, setLockBusy] = useState(false);
+  const [lockKey, setLockKey] = useState('');
+  const [lockModel, setLockModel] = useState('');
+  const [lockProvider, setLockProvider] = useState<LLMProvider>('none');
+  const [adminMsg, setAdminMsg] = useState<string | null>(null);
+
+  // Effective admin-assigned policy for the signed-in user. When present, the
+  // BYOK section above is read-only and the key/model come from the admin,
+  // not from this user's vault. 'none' + no key = admin forced on-device.
+  const myUserId = auth.user?.id ?? '';
+  const myPolicy = myUserId ? store.llmPolicy : undefined;
+  const llmLocked = !!myPolicy;
+
+  const refreshAdmin = async () => {
+    if (!store.isAdminUser || !auth.cloudAvailable || !auth.user) return;
+    const [ms, vs, ids, ps] = await Promise.all([
+      store.adminMembers(),
+      store.adminVaultSync(),
+      store.adminIds(),
+      store.adminPolicies(),
+    ]);
+    setMembers(ms);
+    setVaultSync(vs);
+    setAdminIds(ids);
+    const map: Record<string, PolicySummary> = {};
+    for (const p of ps) map[p.user_id] = p;
+    setPolicies(map);
+  };
+
+  useEffect(() => {
+    void refreshAdmin();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store.isAdminUser, auth.cloudAvailable, auth.user?.id]);
+
+  const setLockFor = async (member: MemberRow, provider: LLMProvider) => {
+    setLockBusy(true);
+    setAdminMsg(null);
+    const k = lockKey.trim();
+    if (provider === 'none') {
+      // 'none' + no key = unlock (admin forces on-device rules / local BYOK).
+      const ok = await store.adminClearLlm(member.user_id);
+      setLockBusy(false);
+      if (ok) {
+        setAdminMsg(`${member.display_name || member.email}: LLM unlocked (use own key / on-device rules).`);
+        void refreshAdmin();
+      } else setAdminMsg('Could not update - you may not be an admin.');
+      return;
+    }
+    if (!k) {
+      setLockBusy(false);
+      setAdminMsg('An API key is required to lock a user to a cloud provider.');
+      return;
+    }
+    const finger = await fingerprintSecret(k);
+    const ok = await store.adminSetLlm(member.user_id, provider, k, lockModel.trim(), finger);
+    setLockBusy(false);
+    if (ok) {
+      setAdminMsg(`${member.display_name || member.email}: locked to ${provider}${lockModel.trim() ? ' (' + lockModel.trim() + ')' : ''}.`);
+      // Keep the key/model for the next Apply — one admin key usually locks many users.
+      void refreshAdmin();
+    } else setAdminMsg('Could not update - you may not be an admin.');
+  };
+
+  const unlockUser = async (member: MemberRow) => {
+    setLockBusy(true);
+    const ok = await store.adminClearLlm(member.user_id);
+    setLockBusy(false);
+    setAdminMsg(ok ? `${member.display_name || member.email}: LLM policy cleared.` : 'Could not update.');
+    if (ok) void refreshAdmin();
+  };
 
   const prefs = vault.prefs;
 
@@ -115,6 +195,27 @@ export function SettingsView() {
 
       <h2 className="section-title">AI — bring-your-own key (optional)</h2>
       <div className="card">
+        {llmLocked && myPolicy ? (
+          <div className="notice" style={{ borderColor: 'var(--warn, #b8860b)' }}>
+            <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>
+              Locked by your admin
+            </div>
+            <p className="muted small" style={{ margin: 0, marginBottom: 10 }}>
+              An administrator has set the AI model for this account. It overrides
+              the personal key below until they clear it.
+            </p>
+            <div className="list">
+              <div className="row"><span>Provider</span><span className="badge">{myPolicy.provider}</span></div>
+              {myPolicy.model && (
+                <div className="row"><span>Model</span><span className="muted small">{myPolicy.model}</span></div>
+              )}
+              {myPolicy.key_finger && (
+                <div className="row"><span>Key</span><span className="muted small">…{myPolicy.key_finger}</span></div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <>
         <p className="muted small">
           Without a key, OmniFlow categorizes with the free on-device rule engine.
           Add a key to use the cloud LLM tier. The key is encrypted inside your
@@ -181,6 +282,8 @@ export function SettingsView() {
               Retry cloud save
             </button>
           </div>
+        )}
+          </>
         )}
       </div>
 
@@ -279,6 +382,116 @@ export function SettingsView() {
               {pwBusy ? 'Re-encrypting…' : 'Change password'}
             </button>
             {pwMsg && <div className="small muted" style={{ marginTop: 8 }}>{pwMsg}</div>}
+          </div>
+        </>
+      )}
+
+      {store.isAdminUser && auth.cloudAvailable && auth.user && (
+        <>
+          <h2 className="section-title">Admin — AI model control</h2>
+          <div className="card">
+            <p className="muted small">
+              You are an administrator ({auth.user.email}). Choose which model each
+              registered user's AI engine uses. Setting a key here locks that user's
+              AI section to your choice — it overrides their personal BYOK key until
+              you clear it. Users without a policy keep using their own key or the
+              free on-device rules.
+            </p>
+
+            {/* ---- Lock controls (shared by the member list below) ---- */}
+            <div className="list" style={{ marginBottom: 12 }}>
+              <label className="field"><span>Provider</span>
+                <select value={lockProvider} onChange={(e) => setLockProvider(e.target.value as LLMProvider)}>
+                  <option value="none">None (force on-device rules)</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="gemini">Gemini</option>
+                  <option value="adacode">adaCode</option>
+                </select>
+              </label>
+              {lockProvider !== 'none' && (
+                <>
+                  <label className="field"><span>API key (never displayed back to the target user)</span>
+                    <input type="password" value={lockKey} onChange={(e) => setLockKey(e.target.value)} placeholder="sk-…" autoComplete="off" />
+                  </label>
+                  <label className="field"><span>Model override (optional)</span>
+                    <input value={lockModel} onChange={(e) => setLockModel(e.target.value)} placeholder="e.g. gpt-4o-mini, claude-haiku-4-5" />
+                  </label>
+                </>
+              )}
+            </div>
+
+            {/* ---- Member directory ---- */}
+            <div className="list">
+              <div className="row" style={{ fontWeight: 600 }}>
+                <span className="grow">Registered users</span>
+                <span className="muted small">{members.length}</span>
+              </div>
+              {members.map((m) => {
+                const pol = policies[m.user_id];
+                const isThisAdmin = adminIds.includes(m.user_id);
+                const isSelf = m.user_id === myUserId;
+                return (
+                  <div key={m.user_id} className="row" style={{ flexWrap: 'wrap', columnGap: 8 }}>
+                    <div className="grow">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span>{m.display_name || m.email}</span>
+                        {isThisAdmin && <span className="badge">admin</span>}
+                        {isSelf && <span className="badge">you</span>}
+                        {pol && pol.provider !== 'none' && (
+                          <span className="badge" style={{ background: 'var(--warn, #b8860b)', color: '#fff' }}>{pol.provider}</span>
+                        )}
+                      </div>
+                      <div className="muted small">
+                        {m.email}
+                        {pol && pol.provider !== 'none' && (
+                          <> · {pol.model ? pol.model + ' · ' : ''}key …{pol.key_finger}</>
+                        )}
+                        {pol?.provider === 'none' && ' · locked to on-device rules'}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      {isThisAdmin ? (
+                        <button className="btn ghost sm" onClick={() => void unlockUser(m)}>Clear</button>
+                      ) : (
+                        <button
+                          className="btn sm"
+                          disabled={lockBusy || (lockProvider !== 'none' && !lockKey.trim())}
+                          onClick={() => void setLockFor(m, lockProvider)}
+                        >
+                          {lockBusy ? 'Saving…' : 'Apply'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              {members.length === 0 && (
+                <p className="muted small">No members registered yet.</p>
+              )}
+            </div>
+
+            {/* ---- Vault sync state (visibility into what each user uploaded) ---- */}
+            {vaultSync.length > 0 && (
+              <>
+                <h3 className="section-title" style={{ marginTop: 14 }}>Vault sync</h3>
+                <div className="list">
+                  {vaultSync.map((v) => {
+                    const m = members.find((x) => x.user_id === v.user_id);
+                    return (
+                      <div key={v.user_id} className="row">
+                        <span className="grow">{m?.display_name || m?.email || v.user_id.slice(0, 8)}</span>
+                        <span className="muted small">
+                          synced {new Date(v.updated_at).toLocaleString()}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            {adminMsg && <div className="small muted" style={{ marginTop: 10 }}>{adminMsg}</div>}
           </div>
         </>
       )}
