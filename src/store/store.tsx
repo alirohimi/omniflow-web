@@ -42,7 +42,7 @@ import { emptyVault } from '../domain/seed';
 import { encryptVault, decryptVault, fingerprintSecret, type VaultCipher } from '../security/vault';
 import { LLMConfig } from '../ai/categorize';
 import { useAuthStore } from '../auth/AuthProvider';
-import { fetchCloudVaultStrict, saveCloudVault, deleteCloudVault } from '../services/cloudVault';
+import { fetchCloudVaultStrict, saveCloudVault, deleteCloudVault, flushVaultKeepalive } from '../services/cloudVault';
 import {
   type LlmPolicyRow,
   type MemberRow,
@@ -292,6 +292,53 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     },
     [scope, cloudOn],
   );
+
+  // ---- keepalive last-save flush (unload-time persistence) -----------------
+  // The normal persist() above is fire-and-forget: if the tab closes or
+  // reloads while the last upsert is still in flight, that fetch is aborted
+  // and the newest vault change (chat history, an expense, a holding) never
+  // reaches the DB. cipherRef.current always holds the last *encrypted* blob,
+  // so on visibility-hidden / pagehide we re-send it via a keepalive fetch
+  // (the only transport that survives document teardown). Idempotent and
+  // best-effort: re-sending an already-synced blob changes nothing.
+  const flushStateRef = useRef<{ user: string; token: string | null; cloudOn: boolean }>({
+    user: scope,
+    token: auth.accessToken,
+    cloudOn,
+  });
+  useEffect(() => {
+    flushStateRef.current = { user: scope, token: auth.accessToken, cloudOn };
+  }, [scope, auth.accessToken, cloudOn]);
+
+  useEffect(() => {
+    let hiddenArmed = false;
+    const flush = () => {
+      const s = flushStateRef.current;
+      const cipher = cipherRef.current;
+      // 'local' scope is the unsigned-in fallback; only a real cloud user has
+      // a row to flush and a JWT to authenticate it with.
+      if (!s.cloudOn || s.user === 'local' || !s.token || !cipher) return;
+      flushVaultKeepalive(s.user, cipher, s.token);
+    };
+    const onPageHide = () => flush();
+    const onVis = () => {
+      // Arm on the *first* hidden transition so we catch a backgrounded tab
+      // (iOS Safari aggressively suspends background tabs), not just close.
+      if (document.visibilityState === 'hidden' && !hiddenArmed) {
+        hiddenArmed = true;
+        flush();
+        window.setTimeout(() => {
+          hiddenArmed = false;
+        }, 0);
+      }
+    };
+    window.addEventListener('pagehide', onPageHide);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, []);
 
   // ---- re-probe on mount and whenever the active scope / cloud changes ----
   const probeKey = `${scope}|${cloudOn}`;

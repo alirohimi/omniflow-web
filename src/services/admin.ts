@@ -303,7 +303,7 @@ export async function getDefaultLlm(userId: string): Promise<DefaultLlmRow | und
 export async function setDefaultLlm(
   actorUserId: string,
   provider: LLMProvider,
-  apiKey: ***
+  apiKey: string,
   model: string,
   keyFinger: string,
 ): Promise<boolean> {

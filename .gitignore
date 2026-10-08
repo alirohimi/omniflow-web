@@ -11,6 +11,9 @@
 .env.local
 .env.*.local
 
+# local Supabase CLI link (never commit)
+.supabase/
+
 # editor / OS
 .vscode/*
 !.vscode/extensions.json

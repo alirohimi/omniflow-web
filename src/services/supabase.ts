@@ -51,3 +51,13 @@ export function getSupabase(): SupabaseClient | null {
   }
   return _client;
 }
+
+/**
+ * Normalized PostgREST base + anon key, or null when cloud is not
+ * configured. Exposed for the keepalive vault flush, which must talk to
+ * PostgREST via raw fetch (the SDK cannot attach `keepalive: true`).
+ */
+export function cloudEndpoints(): { url: string; anonKey: string } | null {
+  if (!isCloudEnabled()) return null;
+  return { url: normUrl, anonKey: anonKey! };
+}

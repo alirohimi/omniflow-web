@@ -43,6 +43,14 @@ export interface AuthStore {
   /** Store the account password for the current session (in memory only). */
   setAccountPassword: (p: string) => void;
 
+  /**
+   * The Supabase session access token (JWT), or null when signed out.
+   * Consumed by the unload-time keepalive vault flush (cloudVault): a raw
+   * PostgREST upsert carrying this token is the only way to persist the last
+   * encrypted blob when the tab closes mid-save.
+   */
+  accessToken: string | null;
+
   signUp: (email: string, password: string, displayName: string) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
@@ -67,6 +75,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // is the vault encryption key (PBKDF2 -> AES-GCM), held here so the vault
   // store can auto-create / auto-unlock after sign-in without a second gate.
   const [accountPassword, setAccountPasswordState] = useState<string | null>(null);
+  // The session access token (JWT), kept in sync for the unload-time
+  // keepalive vault flush. A stale token only matters at refresh boundaries;
+  // auto-refresh updates it via TOKEN_REFRESHED events, handled below.
+  const [accessToken, setAccessToken] = useState<string | null>(null);
 
   const setAccountPassword = useCallback((p: string) => setAccountPasswordState(p), []);
   const cloudAvailable = isCloudEnabled();
@@ -90,6 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then(({ data }) => {
         if (!mounted) return;
         setUser(data.session?.user ?? null);
+        setAccessToken(data.session?.access_token ?? null);
         setRestoring(false);
       })
       .catch(() => {
@@ -97,8 +110,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setRestoring(false);
       })
       .finally(() => window.clearTimeout(watchdog));
-    const { data: sub } = sb.auth.onAuthStateChange((_e, session) => {
+    const { data: sub } = sb.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
+      // Keep the token current: SIGNED_IN / TOKEN_REFRESHED both carry a
+      // session; SIGNED_OUT has none. This is what the keepalive flush reads.
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'SIGNED_OUT') {
+        setAccessToken(session?.access_token ?? null);
+      }
     });
     return () => {
       mounted = false;
@@ -167,6 +185,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Wipe the in-memory vault key on sign-out — zero-trust: nothing
     // survives the session.
     setAccountPasswordState(null);
+    // Drop the JWT too so no keepalive flush can fire after sign-out.
+    setAccessToken(null);
   }, []);
 
   const updateAccountPassword = useCallback(
@@ -197,13 +217,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       lastError,
       accountPassword,
       setAccountPassword,
+      accessToken,
       signUp,
       signIn,
       signOut,
       updateAccountPassword,
       clearError,
     }),
-    [cloudAvailable, user, restoring, lastError, accountPassword, setAccountPassword, signUp, signIn, signOut, updateAccountPassword, clearError],
+    [cloudAvailable, user, restoring, lastError, accountPassword, setAccountPassword, accessToken, signUp, signIn, signOut, updateAccountPassword, clearError],
   );
 
   return <Ctx.Provider value={store}>{children}</Ctx.Provider>;

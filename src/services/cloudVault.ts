@@ -11,7 +11,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { VaultCipher } from '../security/vault';
-import { getSupabase, isCloudEnabled } from './supabase';
+import { cloudEndpoints, getSupabase, isCloudEnabled } from './supabase';
 
 interface VaultRow {
   user_id: string;
@@ -98,4 +98,72 @@ export async function deleteCloudVault(userId: string): Promise<void> {
   const sb: SupabaseClient = getSupabase()!;
   const { error } = await sb.from('omniflow_vaults').delete().eq('user_id', userId);
   if (error) console.warn('[cloudVault] delete:', error.message);
+}
+
+// ---------------------------------------------------------------------------
+// Keepalive flush (unload-time last save)
+// ---------------------------------------------------------------------------
+
+/**
+ * Best-effort keepalive upsert of the last encrypted vault blob.
+ *
+ * The normal save path (saveCloudVault, via the Supabase SDK) is
+ * fire-and-forget: if the tab reloads or closes while the last upsert is in
+ * flight, that fetch is aborted and the newest vault change (chat history,
+ * expenses) never reaches the DB. A raw fetch with `keepalive: true` is the
+ * only transport that survives document teardown, so on visibility-hidden /
+ * pagehide the store re-sends the last encrypted blob here.
+ *
+ * It talks to PostgREST directly (POST {url}/rest/v1/omniflow_vaults with
+ * Prefer: resolution=merge-duplicates, i.e. an upsert) using the session JWT
+ * as Bearer, because the SDK cannot attach keepalive. The payload is
+ * ciphertext only — a leaked body reveals nothing. Idempotent: re-sending
+ * the same blob changes no data (the touch trigger may refresh updated_at,
+ * which is harmless).
+ *
+ * Known limit: some engines cap keepalive request bodies (~64KB in older
+ * Chromium). A very large vault may not flush reliably — still strictly
+ * better than never flushing, since the background save has usually
+ * completed by the time the user leaves.
+ *
+ * @param userId    the signed-in user's uuid (auth.uid() for RLS)
+ * @param cipher    the last encrypted blob (VaultCipher)
+ * @param accessToken the session access token (JWT) — required; without a
+ *                    valid JWT, RLS auth.uid() is null and the upsert is
+ *                    denied, so we skip instead of failing.
+ * @param endpoints optional PostgREST base + anon key (defaults to the
+ *                    configured cloud endpoints); injectable for tests.
+ */
+export function flushVaultKeepalive(
+  userId: string,
+  cipher: VaultCipher,
+  accessToken: string | null,
+  endpoints?: { url: string; anonKey: string } | null,
+): void {
+  const ep = endpoints === undefined ? cloudEndpoints() : endpoints;
+  if (!ep || !accessToken) return; // cloud off, or nothing we can authenticate with
+  try {
+    void fetch(`${ep.url}/rest/v1/omniflow_vaults`, {
+      method: 'POST',
+      keepalive: true,
+      headers: {
+        apikey: ep.anonKey,
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        Prefer: 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        v: cipher.v,
+        salt: cipher.salt,
+        iv: cipher.iv,
+        body: cipher.body,
+        updated_at: new Date().toISOString(),
+      }),
+    }).catch(() => {
+      /* Best-effort: nothing left to do once the document is gone. */
+    });
+  } catch {
+    /* fetch unavailable in the engine — skip silently. */
+  }
 }
