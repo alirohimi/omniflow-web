@@ -14,12 +14,13 @@ const CFG: Record<string, LLMConfig> = {
   openai: { provider: 'openai', apiKey: 'sk-test' },
   anthropic: { provider: 'anthropic', apiKey: 'sk-ant-test' },
   gemini: { provider: 'gemini', apiKey: 'AQ.gemini-test' },
+  adacode: { provider: 'adacode', apiKey: 'sk-ada-test' },
 };
 
 function stubFetch() {
-  const calls: Array<{ url: string; body: any }> = [];
+  const calls: Array<{ url: string; body: any; init?: any }> = [];
   const fn = vi.fn(async (url: any, init?: any) => {
-    calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : null });
+    calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : null, init });
     return new Response(JSON.stringify({ text: 'ok', candidates: [{ content: { parts: [{ text: 'ok' }] } }], choices: [{ message: { content: 'ok' } }] }), { status: 200 });
   });
   vi.stubGlobal('fetch', fn);
@@ -113,5 +114,37 @@ describe('categorize jsonMode wiring', () => {
     await callLLM(CFG.openai, 'sys', '{}', [], true); // same shape categorizeByLLM uses
     expect(calls[0].body!.response_format).toEqual({ type: 'json_object' });
     expect(typeof __test.categorizeByLLM).toBe('function');
+  });
+});
+
+describe('adacode provider (OpenAI-compatible gateway)', () => {
+  it('defaults to claude-haiku-4-5 and sends Bearer auth to api.adacode.ai', async () => {
+    const calls = stubFetch();
+    await callLLM(CFG.adacode, 'sys', 'user');
+    const url = String(calls[0].url);
+    const init = calls[0].init;
+    expect(url).toBe('https://api.adacode.ai/v1/chat/completions');
+    expect(init!.headers.Authorization).toBe('Bearer sk-ada-test');
+    expect(calls[0].body!.model).toBe('claude-haiku-4-5');
+    expect(calls[0].body!.messages).toEqual([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'user' },
+    ]);
+  });
+
+  it('honors model override and jsonMode response_format', async () => {
+    const calls = stubFetch();
+    await callLLM({ ...CFG.adacode, model: 'gpt-4o-mini' }, 'sys', 'user', [], true);
+    expect(calls[0].body!.model).toBe('gpt-4o-mini');
+    expect(calls[0].body!.response_format).toEqual({ type: 'json_object' });
+  });
+
+  it('reads OpenAI-shaped responses (choices[0].message.content)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: 'hi' } }] }), { status: 200 })),
+    );
+    const out = await callLLM(CFG.adacode, 's', 'u');
+    expect(out).toBe('hi');
   });
 });

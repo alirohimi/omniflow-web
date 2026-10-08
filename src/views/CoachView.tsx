@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
-import { coachAsk } from '../ai';
+import { coachAsk, applyCreatePortfolio, type CreatePortfolioAction } from '../ai';
 import type { CoachContext } from '../ai/coach';
 import { ICoach, IClose, IImage } from '../icons';
 import { useToast } from '../components/Toast';
@@ -38,6 +38,7 @@ export function CoachView() {
   const [draft, setDraft] = useState('');
   const [attach, setAttach] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [pendingAction, setPendingAction] = useState<CreatePortfolioAction | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -80,6 +81,7 @@ export function CoachView() {
     if ((!q && !img) || !ctx || pending) return;
     setDraft('');
     setAttach(null);
+    setPendingAction(null);
     store.pushCoachMessage({ role: 'user', text: q, image: img ?? undefined, at: Date.now() });
     setPending(true);
     try {
@@ -96,6 +98,9 @@ export function CoachView() {
         source: ans.source,
         at: Date.now(),
       });
+      // If the LLM proposed a create_portfolio action, hold it for explicit
+      // user confirmation (Apply). Nothing is written to the vault until then.
+      if (ans.proposedAction) setPendingAction(ans.proposedAction);
       if (ans.degraded) {
         const why = ans.llmError ? ` (${ans.llmError.slice(0, 140)})` : '';
         toast(`Advisor key call failed${why} — answered with the on-device rule engine. Fix it in Settings (Test key shows the provider's exact error).`, 'err');
@@ -110,6 +115,35 @@ export function CoachView() {
     } finally {
       setPending(false);
     }
+  };
+
+  const applyAction = () => {
+    if (!pendingAction) return;
+    const a = pendingAction;
+    setPendingAction(null);
+    try {
+      const summary = applyCreatePortfolio(store, a);
+      store.pushCoachMessage({
+        role: 'coach',
+        text: `Done — ${summary}. It is live in the Portfolio tab; quotes fill in automatically.`,
+        source: 'system',
+        at: Date.now(),
+      });
+      toast('Portfolio created.');
+    } catch (e) {
+      toast(`Could not apply the portfolio: ${e instanceof Error ? e.message : String(e)}`, 'err');
+    }
+  };
+
+  const dismissAction = () => {
+    if (!pendingAction) return;
+    store.pushCoachMessage({
+      role: 'coach',
+      text: 'Understood — nothing was created. Tell me what to change and I will re-propose it.',
+      source: 'system',
+      at: Date.now(),
+    });
+    setPendingAction(null);
   };
 
   if (!vault) return null;
@@ -186,6 +220,37 @@ export function CoachView() {
           </div>
         )}
       </div>
+
+      {pendingAction && (
+        <div className="card" style={{ marginTop: 10, border: '1px solid var(--accent, #3b82f6)' }}>
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <strong style={{ fontSize: 13 }}>Create portfolio</strong>
+            <span className="muted small">not applied yet</span>
+          </div>
+          <p className="muted small" style={{ margin: '0 0 8px' }}>
+            {pendingAction.platformName} ({pendingAction.accountType}) · {pendingAction.holdings.length} holding
+            {pendingAction.holdings.length === 1 ? '' : 's'}
+          </p>
+          <div className="coach-action-list">
+            {pendingAction.holdings.map((h) => (
+              <div key={h.symbol} className="row" style={{ justifyContent: 'space-between', gap: 8, padding: '3px 0' }}>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>{h.symbol}</span>
+                <span className="muted small">
+                  {h.units.toLocaleString()} @ {h.entryPrice > 0 ? h.entryPrice.toLocaleString() : 'n/a'} {h.currency}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="row" style={{ gap: 8, marginTop: 10 }}>
+            <button className="btn sm" onClick={applyAction}>
+              Apply to my portfolio
+            </button>
+            <button className="btn ghost sm" onClick={dismissAction}>
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       <form
         className="coach-composer"

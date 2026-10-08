@@ -31,6 +31,12 @@ import { spendOverLastDays } from './advisor';
 import type { LLMConfig } from './categorize';
 import { callLLM as callLLMDefault } from './categorize';
 import { currencyInfo } from '../domain/enums';
+import {
+  ACTION_CONTRACT,
+  parseAction,
+  stripActionMarker,
+  type CreatePortfolioAction,
+} from './actions';
 
 /** What the view hands to the engine. Built from the live store + market
  *  data hook, so the coach reasons about real, current numbers. */
@@ -143,6 +149,8 @@ export function coachSystemPrompt(brief: CoachBrief): string {
     '',
     'User data (derived snapshot — not the raw ledger):',
     JSON.stringify(brief),
+    '',
+    ACTION_CONTRACT,
   ].join('\n');
 }
 
@@ -268,6 +276,10 @@ export function coachFallback(
 export interface CoachAnswer {
   text: string;
   source: 'llm' | 'rules' | 'system';
+  /** A validated create_portfolio proposal the user must confirm (Apply).
+   *  Present only on the LLM tier, only when the LLM emitted a well-formed
+   *  [ACTION:] marker; the rule tier can never produce one. */
+  proposedAction?: CreatePortfolioAction;
 }
 
 /** Ask the coach. `llm` may be null (no key) -> pure rule engine. A
@@ -295,8 +307,20 @@ export async function coachAsk(
         .join('\n');
       const user = tail ? `${tail}\nUser: ${question}` : question;
       const raw = await transport(llm, sys, user, images);
-      const text = raw.trim();
-      if (text.length > 0) return { text, source: 'llm', degraded: false };
+      const clean = stripActionMarker(raw.trim());
+      if (clean.length > 0) {
+        const parsed = parseAction(raw);
+        // The visible text is marker-free; the action (if any) is surfaced
+        // separately for the confirm card. An unparseable marker is still
+        // returned as text (with the marker stripped) so the user is not
+        // silently told something is pending when nothing is.
+        return {
+          text: clean,
+          source: 'llm',
+          degraded: false,
+          proposedAction: parsed.ok ? parsed.action : undefined,
+        };
+      }
     } catch (e) {
       // Fall through to rules — a failed BYOK call must not kill the chat —
       // but keep the provider's reason so the UI can explain the fallback.

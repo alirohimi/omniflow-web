@@ -239,6 +239,41 @@ export async function callLLM(
     return parts2[0].text ?? '';
   }
 
+  if (cfg.provider === 'adacode') {
+    // adaCode — OpenAI-compatible gateway (Bearer key, /v1/chat/completions,
+    // OpenAI-shaped request/response incl. response_format json_mode and
+    // image_url blocks). CORS is open (access-control-allow-origin: *) so
+    // the PWA can call it directly, no proxy. Default model is the cheap
+    // tier; override via prefs.llmModel (57 models available: claude-*,
+    // gpt-*, gemini-*, deepseek-*, glm-*, qwen-*, adacode-*-flash…).
+    const model = cfg.model ?? 'claude-haiku-4-5';
+    const content: unknown = imgs.length === 0
+      ? user
+      : [
+          { type: 'text', text: user },
+          ...imgs.map((d) => ({ type: 'image_url', image_url: { url: d } })),
+        ];
+    const res = await fetch('https://api.adacode.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cfg.apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+        messages: [
+          { role: 'system', content: sys },
+          { role: 'user', content },
+        ],
+      }),
+    });
+    if (!res.ok) throw new Error(`adacode ${res.status}: ${await apiErrorBody(res)}`);
+    const j = await res.json();
+    return j?.choices?.[0]?.message?.content ?? '';
+  }
+
   // Default: OpenAI.
   const model = cfg.model ?? 'gpt-4o-mini';
   const content: unknown = imgs.length === 0

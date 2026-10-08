@@ -39,3 +39,11 @@ export {
   type CoachBrief,
   type CoachAnswer,
 } from './coach';
+
+export {
+  applyCreatePortfolio,
+  parseAction,
+  stripActionMarker,
+  type CreatePortfolioAction,
+  type ActionStore,
+} from './actions';

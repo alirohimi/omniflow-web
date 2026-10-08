@@ -80,7 +80,7 @@ export interface InvestmentHolding {
 
 /** BYOK LLM providers. 'none' = free on-device rule engine only.
  *  Gemini is the free-tier-friendly option (AI Studio keys, $0 quota). */
-export type LLMProvider = 'none' | 'openai' | 'anthropic' | 'gemini';
+export type LLMProvider = 'none' | 'openai' | 'anthropic' | 'gemini' | 'adacode';
 
 /** App-wide preferences. */
 export interface UserPreferences {

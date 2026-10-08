@@ -15,7 +15,7 @@ export function SettingsView() {
   const { vault } = store;
   if (!vault) return null;
 
-  const [provider, setProvider] = useState<'none' | 'openai' | 'anthropic' | 'gemini'>(vault.prefs.llmProvider);
+  const [provider, setProvider] = useState<'none' | 'openai' | 'anthropic' | 'gemini' | 'adacode'>(vault.prefs.llmProvider);
   const [key, setKey] = useState('');
   const [model, setModel] = useState(vault.prefs.llmModel ?? '');
   const [msg, setMsg] = useState<string | null>(null);
@@ -137,6 +137,7 @@ export function SettingsView() {
             <option value="openai">OpenAI</option>
             <option value="anthropic">Anthropic</option>
             <option value="gemini">Gemini</option>
+            <option value="adacode">adaCode</option>
           </select>
         </label>
         {provider !== 'none' && (
@@ -152,7 +153,7 @@ export function SettingsView() {
               <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-…" autoComplete="off" />
             </label>
             <label className="field"><span>Model override (optional - leave blank for the provider default)</span>
-              <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="e.g. gemini-3.8-flash, gpt-4o-mini" />
+              <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="e.g. claude-haiku-4-5, gpt-4o-mini, gemini-3.8-flash" />
             </label>
             <div className="list" style={{ marginTop: 8 }}>
               <button

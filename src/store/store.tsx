@@ -124,7 +124,7 @@ export interface VaultStore {
 
   setPrefs: (patch: Partial<UserPreferences>) => void;
   setLlmKey: (
-    provider: 'none' | 'openai' | 'anthropic' | 'gemini',
+    provider: 'none' | 'openai' | 'anthropic' | 'gemini' | 'adacode',
     key: string,
     model?: string,
   ) => Promise<boolean>;
@@ -548,7 +548,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
   const setLlmKey = useCallback(
     async (
-      _provider: 'none' | 'openai' | 'anthropic' | 'gemini',
+      _provider: 'none' | 'openai' | 'anthropic' | 'gemini' | 'adacode',
       _key: string,
       _model?: string,
     ): Promise<boolean> => {

@@ -210,6 +210,12 @@ h1, h2, h3 { font-family: var(--font-display); }
   border-radius: 10px; border: 1px solid var(--line);
   background: var(--card); object-fit: contain;
 }
+.coach-action-list {
+  max-height: 160px; overflow-y: auto;
+  background: var(--card-2, rgba(255,255,255,0.04));
+  border: 1px solid var(--line, rgba(255,255,255,0.08));
+  border-radius: 8px; padding: 4px 8px;
+}
 
 /* ---------- Cards ---------- */
 .card {
