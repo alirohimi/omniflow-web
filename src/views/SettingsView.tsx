@@ -12,6 +12,20 @@ import type { LLMProvider } from '../domain/types';
 import type { MemberRow, VaultSyncRow, PolicySummary } from '../services/admin';
 import { fingerprintSecret } from '../security/vault';
 
+/**
+ * Client-facing model label. When an administrator locks a user's AI engine
+ * to a specific LLM model, the target user's UI must NOT reveal the concrete
+ * model name (it identifies the backend provider/vendor). We surface a neutral
+ * generic label instead. Admins keep the raw model string.
+ *
+ * We intentionally do not map model -> name: any model the admin picks
+ * renders as the same generic label for non-admin viewers, so no model
+ * identity leaks to the locked account.
+ */
+function genericModelName(_model?: string): string {
+  return 'AI Assistant';
+}
+
 export function SettingsView() {
   const store = useVaultStore();
   const auth = useAuthStore();
@@ -210,7 +224,15 @@ export function SettingsView() {
             <div className="list">
               <div className="row"><span>Provider</span><span className="badge">{myPolicy.provider}</span></div>
               {myPolicy.model && (
-                <div className="row"><span>Model</span><span className="muted small">{myPolicy.model}</span></div>
+                // Client rule: regular users must not see the admin-assigned
+                // model name (it identifies the backend vendor). Only admins
+                // see the raw string; everyone else gets the generic label.
+                <div className="row">
+                  <span>Model</span>
+                  <span className="muted small">
+                    {store.isAdminUser ? myPolicy.model : genericModelName(myPolicy.model)}
+                  </span>
+                </div>
               )}
               {myPolicy.key_finger && (
                 <div className="row"><span>Key</span><span className="muted small">…{myPolicy.key_finger}</span></div>
