@@ -208,7 +208,7 @@ export function ExpensesView() {
             />
           </div>
         ))}
-        {sorted.length === 0 && <div className="empty">No expenses yet. Add one above or load the demo data in Settings.</div>}
+        {sorted.length === 0 && <div className="empty">No expenses yet. Add one above, or ask the Coach to log one for you.</div>}
       </div>
     </>
   );

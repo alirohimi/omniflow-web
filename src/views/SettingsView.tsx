@@ -1,5 +1,5 @@
 // ============================================================================
-// Settings — preferences, BYOK LLM keys, security, demo data, danger zone.
+// Settings — preferences, BYOK LLM keys, security, data, danger zone.
 // ============================================================================
 
 import { useEffect, useState } from 'react';
@@ -293,7 +293,6 @@ export function SettingsView() {
       <h2 className="section-title">Data</h2>
       <div className="card">
         <div className="list">
-          <button className="btn ghost sm" onClick={() => { store.loadDemo(); setMsg('Demo data loaded.'); }}>Load demo data</button>
           <button className="btn ghost sm" onClick={() => store.lock()}>Lock vault now</button>
         </div>
         <p className="muted small" style={{ marginTop: 8 }}>

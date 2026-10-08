@@ -265,6 +265,79 @@ export async function clearLlmPolicy(actorUserId: string, targetUserId: string):
   return true;
 }
 
+// ---- platform-default LLM policy (0003 migration) ----------------------------
+// A single row (row_id = 'default') the admin manages once; the app applies it
+// to NEW signups automatically (personal rows always win over it).
+
+/** The admin's platform-default LLM setting. */
+export interface DefaultLlmRow {
+  provider: LLMProvider;
+  api_key: string;
+  model: string;
+  key_finger: string;
+  updated_at: string;
+}
+
+/**
+ * Read the platform-default LLM policy. 'none' + empty key (or a missing
+ * row, e.g. pre-0003) means "no platform default — users keep their own
+ * BYOK settings". Only admins may read the key.
+ */
+export async function getDefaultLlm(userId: string): Promise<DefaultLlmRow | undefined> {
+  if (!isCloudEnabled()) return undefined;
+  const sb = getSupabase()!;
+  const { data, error } = await sb
+    .from('omniflow_llm_default')
+    .select('provider, api_key, model, key_finger, updated_at')
+    .eq('row_id', 'default')
+    .maybeSingle();
+  if (error) {
+    if (!schemaMissing(error)) console.warn('[admin] getDefaultLlm:', error.message);
+    return undefined;
+  }
+  if (!data) return undefined;
+  return data as unknown as DefaultLlmRow;
+}
+
+/** Admin only: set (or replace) the platform-default LLM policy. */
+export async function setDefaultLlm(
+  actorUserId: string,
+  provider: LLMProvider,
+  apiKey: ***
+  model: string,
+  keyFinger: string,
+): Promise<boolean> {
+  if (!isCloudEnabled()) return false;
+  const sb = getSupabase()!;
+  const { error } = await sb.from('omniflow_llm_default').upsert({
+    row_id: 'default',
+    provider,
+    api_key: apiKey,
+    model: model || '',
+    key_finger: keyFinger || '',
+    set_by: actorUserId,
+  });
+  if (error) {
+    console.warn('[admin] setDefaultLlm:', error.message);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Apply the platform default to one user as their personal policy row.
+ * Used right after sign-up so every new account gets a working AI advisor
+ * out of the box (admin can still override/clear the personal row later).
+ */
+export async function applyDefaultLlmToUser(
+  actorUserId: string,
+  targetUserId: string,
+  def: DefaultLlmRow,
+): Promise<boolean> {
+  if (!def || def.provider === 'none' || !def.api_key) return true; // nothing to apply
+  return setLlmPolicy(actorUserId, targetUserId, def.provider, def.api_key, def.model, def.key_finger);
+}
+
 // ---- admin data wipe --------------------------------------------------------------
 
 /** Admin only: delete a member's encrypted vault row (irreversible). */

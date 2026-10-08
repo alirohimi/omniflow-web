@@ -38,7 +38,7 @@ import type {
   CoachMessage,
   LLMProvider,
 } from '../domain/types';
-import { emptyVault, demoVault } from '../domain/seed';
+import { emptyVault } from '../domain/seed';
 import { encryptVault, decryptVault, fingerprintSecret, type VaultCipher } from '../security/vault';
 import { LLMConfig } from '../ai/categorize';
 import { useAuthStore } from '../auth/AuthProvider';
@@ -76,7 +76,7 @@ export interface NewExpenseInput {
   source: Expense['source'];
   note?: string;
   receiptText?: string;
-  /** Explicit timestamp (demo seed). Defaults to now. */
+  /** Explicit timestamp. Defaults to now. */
   timestamp?: number;
 }
 
@@ -149,8 +149,6 @@ export interface VaultStore {
   ) => Promise<boolean>;
   /** Re-push the in-memory vault after a failed cloud save. */
   retrySync: () => void;
-  /** Replace the current vault with the bundled demo dataset (keeps prefs). */
-  loadDemo: () => void;
 
   // Admin & LLM policy (RLS-gated; no-ops when cloud is off or the 0002
   // migration has not been applied yet). See services/admin.ts.
@@ -264,8 +262,8 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   }, [cloudOn, scope]);
 
   // Serialised persist: every mutation enqueues behind the previous one so a
-  // burst of rapid writes (e.g. loading demo data) is not dropped. Each entry
-  // re-encrypts the whole blob it was given, so the LAST write wins in the DB.
+  // burst of rapid writes is not dropped. Each entry re-encrypts the whole
+  // blob it was given, so the LAST write wins in the DB.
   // There is no local write path — the DB row is the only copy.
   const persist = useCallback(
     async (next: VaultBlob) => {
@@ -673,25 +671,6 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     void persist(vault);
   }, [vault, persist]);
 
-  const loadDemo = useCallback(() => {
-    setVault((prev) => {
-      if (!prev) return prev;
-      const demo = demoVault();
-      // Preserve the user's real prefs (base currency, keys) — only replace
-      // the financial data, so demo load never clobbers security settings.
-      const next: VaultBlob = {
-        ...demo,
-        prefs: prev.prefs,
-        llmKey: prev.llmKey,
-        coachLog: prev.coachLog,
-        createdAt: prev.createdAt,
-        updatedAt: Date.now(),
-      };
-      void persist(next);
-      return next;
-    });
-  }, [persist]);
-
   // ---- admin actions (all gated by RLS server-side; see services/admin.ts) ----
   // The store only orchestrates; the actual permission checks happen in
   // Postgres. A non-admin call simply returns false and nothing is written.
@@ -851,7 +830,6 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setPrefs,
     setLlmKey,
     retrySync,
-    loadDemo,
     // Admin & LLM policy (RLS-gated; no-ops when cloud is off or the 0002
     // migration has not been applied yet).
     isAdminUser,

@@ -211,7 +211,7 @@ export function InvestmentsView() {
           </div>
         )}
         {vault.accounts.length === 0 && (
-          <div className="empty">No accounts yet — create one above (or load demo data in Settings).</div>
+          <div className="empty">No accounts yet — create one above.</div>
         )}
       </div>
 
