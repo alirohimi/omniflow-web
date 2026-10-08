@@ -12,6 +12,11 @@
 --   omniflow_llm_policy  admin-assigned LLM provider/key/model per user
 --   omniflow_vaults      + admin read (existence/last-sync) and admin wipe
 --
+-- Ordering rule (learned the hard way): every table is created BEFORE the
+-- helper function that references it, and the function is created BEFORE any
+-- policy that calls it. The Supabase dashboard editor executes statements
+-- top-to-bottom in one session; there is no forward declaration.
+--
 -- Design notes:
 --   * The LLM API key is stored in plain text in omniflow_llm_policy (Postgres
 --     at rest). Only the admin and the target user's app (their own row) can
@@ -20,7 +25,36 @@
 --     cannot forge another user's row, which keeps the directory honest.
 -- ============================================================================
 
--- ---- 0. admin check helper -------------------------------------------------
+-- ---- 1. tables first (they are referenced by the helper function) ---------
+create table if not exists public.omniflow_admins (
+  user_id     uuid primary key references auth.users (id) on delete cascade,
+  created_by  uuid references auth.users (id) on delete set null, -- who granted
+  created_at  timestamptz not null default now()
+);
+alter table public.omniflow_admins enable row level security;
+
+create table if not exists public.omniflow_members (
+  user_id       uuid primary key references auth.users (id) on delete cascade,
+  display_name  text not null default '',
+  email         text not null,
+  last_seen_at  timestamptz not null default now(),
+  created_at    timestamptz not null default now()
+);
+alter table public.omniflow_members enable row level security;
+
+create table if not exists public.omniflow_llm_policy (
+  user_id    uuid primary key references auth.users (id) on delete cascade,
+  provider   text not null default 'none'
+             check (provider in ('none','openai','anthropic','gemini','adacode')),
+  api_key    text not null default '',
+  model      text not null default '',
+  key_finger text not null default '',
+  set_by     uuid references auth.users (id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+alter table public.omniflow_llm_policy enable row level security;
+
+-- ---- 2. admin check helper (references omniflow_admins, now exists) -------
 -- SECURITY INVOKER: checks run with the CALLER's privileges and hit RLS on
 -- omniflow_admins (which any authenticated user can read). No bypass.
 create or replace function public.omniflow_is_admin(uid uuid default null)
@@ -32,18 +66,9 @@ as $$
     select 1 from public.omniflow_admins a where a.user_id = coalesce(uid, (select auth.uid()))
   );
 $$;
-
 grant execute on function public.omniflow_is_admin(uuid) to anon, authenticated;
 
--- ---- 1. omniflow_admins ------------------------------------------------------
-create table if not exists public.omniflow_admins (
-  user_id     uuid primary key references auth.users (id) on delete cascade,
-  created_by  uuid references auth.users (id) on delete set null, -- who granted
-  created_at  timestamptz not null default now()
-);
-
-alter table public.omniflow_admins enable row level security;
-
+-- ---- 3. policies -----------------------------------------------------------
 -- Anyone signed in may READ the admin registry (needed for UI gating + the
 -- is-admin check). Writing requires admin, which transitively prevents any
 -- self-escalation: a non-admin cannot INSERT their own row because the
@@ -60,17 +85,6 @@ create policy "admins_admin_write"
   to authenticated
   using (public.omniflow_is_admin())
   with check (public.omniflow_is_admin());
-
--- ---- 2. omniflow_members (directory) ----------------------------------------
-create table if not exists public.omniflow_members (
-  user_id       uuid primary key references auth.users (id) on delete cascade,
-  display_name  text not null default '',
-  email         text not null,
-  last_seen_at  timestamptz not null default now(),
-  created_at    timestamptz not null default now()
-);
-
-alter table public.omniflow_members enable row level security;
 
 -- Self row: the user registers themselves and keeps it fresh (display name,
 -- last-seen). No one else may write it.
@@ -102,20 +116,6 @@ create policy "members_admin_delete"
   to authenticated
   using (public.omniflow_is_admin());
 
--- ---- 3. omniflow_llm_policy ---------------------------------------------------
-create table if not exists public.omniflow_llm_policy (
-  user_id    uuid primary key references auth.users (id) on delete cascade,
-  provider   text not null default 'none'
-             check (provider in ('none','openai','anthropic','gemini','adacode')),
-  api_key    text not null default '',
-  model      text not null default '',
-  key_finger text not null default '',
-  set_by     uuid references auth.users (id) on delete set null,
-  updated_at timestamptz not null default now()
-);
-
-alter table public.omniflow_llm_policy enable row level security;
-
 -- The target user may read their OWN row (the app uses it to build the
 -- effective LLM config). No one may read another user's row — that is what
 -- makes the lock unforgeable from the client.
@@ -146,7 +146,6 @@ create trigger omniflow_llm_policy_touch_trg
   before update on public.omniflow_llm_policy
   for each row execute function public.omniflow_llm_policy_touch();
 
--- ---- 4. omniflow_vaults: admin read + admin wipe -----------------------------
 -- Admins may see existence / last-sync of every vault row (no plaintext — the
 -- columns are ciphertext + metadata).
 drop policy if exists "vaults_admin_read" on public.omniflow_vaults;
@@ -162,9 +161,7 @@ create policy "vaults_admin_delete"
   to authenticated
   using (public.omniflow_is_admin());
 
--- ---- 5. grants ----------------------------------------------------------------
--- Data API exposure: the new tables must be reachable by the API roles even
--- though RLS is what actually gates every row.
+-- ---- 4. grants ---------------------------------------------------------------
 grant usage on schema public to anon, authenticated;
 grant select on public.omniflow_admins, public.omniflow_members to anon, authenticated;
 grant insert, update on public.omniflow_members to anon, authenticated;
@@ -172,10 +169,9 @@ grant select on public.omniflow_llm_policy to anon, authenticated;
 grant select, insert, update, delete on public.omniflow_admins, public.omniflow_llm_policy to anon, authenticated;
 grant delete on public.omniflow_members to authenticated;
 
--- Bootstrap: promote the account owner to admin. Runs only when the account
--- already exists; if not yet, run this INSERT (or use the admin panel later):
---   insert into public.omniflow_admins (user_id) values
---   (select id from auth.users where lower(email) = 'ichsanalir@gmail.com');
+-- ---- 5. bootstrap: promote the account owner ---------------------------------
+-- Runs only when the account already exists; if not yet, sign up first, then
+-- run the admin panel's grant or re-run this INSERT.
 insert into public.omniflow_admins (user_id, created_by)
 select u.id, u.id
 from auth.users u
