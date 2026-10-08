@@ -117,13 +117,17 @@ describe('categorize jsonMode wiring', () => {
   });
 });
 
-describe('adacode provider (OpenAI-compatible gateway)', () => {
-  it('defaults to adacode-3.0-flash and sends Bearer auth to api.adacode.ai', async () => {
+describe('adacode provider (OpenAI-compatible gateway via CORS relay)', () => {
+  it('defaults to adacode-3.0-flash and sends Bearer auth through the CORS relay', async () => {
     const calls = stubFetch();
     await callLLM(CFG.adacode, 'sys', 'user');
     const url = String(calls[0].url);
     const init = calls[0].init;
-    expect(url).toBe('https://api.adacode.ai/v1/chat/completions');
+    // The gateway omits CORS headers on actual responses, so the adacode
+    // path must go through the stateless CORS-open relay (see categorize.ts
+    // ADACODE_RELAY_URL comment). The relay is the single fetch target.
+    expect(url).toBe('https://ijwpyikcbqdskuynwsuz.functions.supabase.co/adacode-relay');
+    expect(url).not.toContain('api.adacode.ai');
     expect(init!.headers.Authorization).toBe('Bearer sk-ada-test');
     expect(calls[0].body!.model).toBe('adacode-3.0-flash');
     expect(calls[0].body!.messages).toEqual([

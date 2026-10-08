@@ -129,6 +129,21 @@ export async function categorizeByLLM(
 // Pull a human-readable reason out of a provider's error body so the UI can
 // show *why* a call failed (invalid key, quota, blocked content, ...). The
 // key itself is never echoed; only the provider's message field.
+
+// CORS-open relay in front of the adaCode gateway. The gateway sends CORS
+// headers on the OPTIONS preflight but NOT on actual responses (verified: a
+// 200 success carries zero access-control-allow-origin headers), so
+// browsers cannot read ANY response from it — Safari surfaces the failure
+// as an opaque "Load failed" and the provider's real error message never
+// reaches the UI. The relay is a stateless Supabase Edge Function that
+// forwards the request server-side and echoes CORS headers on every
+// response, success and error. It stores no secrets: the user's key only
+// transits it per-request. Override with VITE_ADACODE_RELAY_URL if you
+// deploy your own relay (e.g. on your own Supabase project).
+const ADACODE_RELAY_URL: string =
+  (import.meta.env.VITE_ADACODE_RELAY_URL as string | undefined) ??
+  'https://ijwpyikcbqdskuynwsuz.functions.supabase.co/adacode-relay';
+
 async function apiErrorBody(res: Response): Promise<string> {
   try {
     const t = await res.text();
@@ -242,10 +257,14 @@ export async function callLLM(
   if (cfg.provider === 'adacode') {
     // adaCode — OpenAI-compatible gateway (Bearer key, /v1/chat/completions,
     // OpenAI-shaped request/response incl. response_format json_mode and
-    // image_url blocks). Preflight is CORS-open (OPTIONS → ACAO:*) so the PWA
-    // can call it directly, no proxy. NOTE: the gateway drops CORS headers on
-    // the *actual* (error) response, so Safari surfaces provider rejections
-    // as an opaque "Load failed" — see the catch below for a curl fallback.
+    // image_url blocks). The gateway sends CORS headers on the OPTIONS
+    // preflight only — actual responses (200 success AND 401/403 errors)
+    // carry NO access-control-allow-origin header, so browsers cannot read
+    // any response from it (Safari: opaque "Load failed"). All browser
+    // traffic therefore goes through the CORS-open relay (ADACODE_RELAY_URL),
+    // a stateless Supabase Edge Function that forwards server-side and
+    // echoes CORS on every response. The user's key still transits the relay
+    // per-request (HTTPS only); it is stored nowhere.
     // Default model is adacode-3.0-flash; override via prefs.llmModel
     // (claude-*, gpt-*, gemini-*, deepseek-*, glm-*, qwen-*, adacode-*-flash…).
     const model = cfg.model ?? 'adacode-3.0-flash';
@@ -257,7 +276,7 @@ export async function callLLM(
         ];
     let res: Response;
     try {
-      res = await fetch('https://api.adacode.ai/v1/chat/completions', {
+      res = await fetch(ADACODE_RELAY_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -274,25 +293,19 @@ export async function callLLM(
         }),
       });
     } catch (e) {
-      // adaCode's gateway sends CORS headers on the preflight (OPTIONS) but
-      // NOT on the actual response. In Safari, a non-CORS-readable response
-      // makes fetch reject with the opaque "Load failed" — which is almost
-      // always a 401/403 from the provider (invalid key, model, quota) that
-      // the browser refuses to surface. Tell the user exactly how to get the
-      // real answer (curl, which is not CORS-bound) instead of a dead-end.
+      // With the relay, provider errors are readable (ACAO: * on every
+      // response), so a fetch rejection here means the relay itself was
+      // unreachable (network down, DNS, relay project disabled) — not a
+      // hidden provider 401/403. Surface the relay URL so the user can
+      // diagnose it.
       const raw = e instanceof Error ? e.message : String(e);
-      const isCorsOpaque = /load failed|failed to fetch|networkerror|typeerror/i.test(raw);
-      if (isCorsOpaque) {
-        throw new Error(
-          `adacode: browser blocked the response (Safari hides provider errors as "${raw}"). ` +
-            `The request reached the gateway but the HTTP error could not be read cross-origin — ` +
-            `usually an invalid/over-quota key or an unavailable model. Verify the key from your ` +
-            `terminal (curl has no CORS limits): curl -sS https://api.adacode.ai/v1/chat/completions ` +
-            `-H "Authorization: Bearer YOUR_KEY" -H "Content-Type: application/json" ` +
-            `-d '{"model":"' + model + '","messages":[{"role":"user","content":"hi"}]}'`,
-        );
-      }
-      throw e;
+      throw new Error(
+        `adacode: relay unreachable ("${raw}") — the CORS-open relay at ` +
+          `${ADACODE_RELAY_URL} could not be reached. If you deploy your own ` +
+          `relay, set VITE_ADACODE_RELAY_URL and rebuild. Provider errors ` +
+          `(invalid key, unavailable model) now surface as normal adacode ` +
+          `responses, so any remaining failure is transport-side.`,
+      );
     }
     if (!res.ok) throw new Error(`adacode ${res.status}: ${await apiErrorBody(res)}`);
     const j = await res.json();
