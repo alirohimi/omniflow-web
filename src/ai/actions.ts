@@ -50,7 +50,12 @@ export interface ActionValidation {
   reason?: string;
 }
 
-/** Minimal store surface the applier needs (structural, test-friendly). */
+/**
+ * Minimal store surface the applier needs (structural, test-friendly).
+ * Reads go through getters so it can be satisfied by the real VaultStore
+ * (where accounts/holdings live inside `vault`) without coupling to that
+ * shape. Writes go through addAccount/addHolding, which return the id.
+ */
 export interface ActionStore {
   addAccount: (i: { platformName: string; accountType: InvestmentAccount['accountType'] }) => string;
   addHolding: (i: {
@@ -63,8 +68,8 @@ export interface ActionStore {
     currentPriceLocal?: number;
     currentPriceBase?: number;
   }) => string;
-  accounts: InvestmentAccount[];
-  holdings: InvestmentHolding[];
+  getAccounts: () => InvestmentAccount[];
+  getHoldings: () => InvestmentHolding[];
 }
 
 // ---------------------------------------------------------------------------
@@ -154,13 +159,15 @@ export function stripActionMarker(text: string): string {
 // ---------------------------------------------------------------------------
 
 export function applyCreatePortfolio(store: ActionStore, a: CreatePortfolioAction): string {
-  const existing = store.accounts.find((x) => x.platformName.toLowerCase() === a.platformName.toLowerCase());
+  const accounts = store.getAccounts();
+  const holdings = store.getHoldings();
+  const existing = accounts.find((x) => x.platformName.toLowerCase() === a.platformName.toLowerCase());
   const accountId = existing ? existing.id : store.addAccount({ platformName: a.platformName, accountType: a.accountType });
 
   let added = 0;
   let skipped = 0;
   for (const h of a.holdings) {
-    const dup = store.holdings.some(
+    const dup = holdings.some(
       (x) => x.accountId === accountId && x.symbol === h.symbol && x.units === h.units && x.averageEntryPrice === h.entryPrice,
     );
     if (dup) { skipped++; continue; }

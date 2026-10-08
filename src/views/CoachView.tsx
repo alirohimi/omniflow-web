@@ -122,7 +122,15 @@ export function CoachView() {
     const a = pendingAction;
     setPendingAction(null);
     try {
-      const summary = applyCreatePortfolio(store, a);
+      // Bridge the real VaultStore (accounts/holdings nested inside `vault`)
+      // to the minimal ActionStore surface the applier reads.
+      const actionStore: import('../ai').ActionStore = {
+        addAccount: store.addAccount,
+        addHolding: store.addHolding,
+        getAccounts: () => store.vault?.accounts ?? [],
+        getHoldings: () => store.vault?.holdings ?? [],
+      };
+      const summary = applyCreatePortfolio(actionStore, a);
       store.pushCoachMessage({
         role: 'coach',
         text: `Done — ${summary}. It is live in the Portfolio tab; quotes fill in automatically.`,

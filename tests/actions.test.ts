@@ -15,6 +15,7 @@ import {
   type CreatePortfolioAction,
   type ActionStore,
 } from '../src/ai/actions';
+import type { InvestmentAccount, InvestmentHolding } from '../src/domain/types';
 
 const marker = (json: string) => `Here is what I will create:\n[ACTION:${json}]`;
 
@@ -143,14 +144,14 @@ describe('stripActionMarker', () => {
 // applyCreatePortfolio — idempotent writes against a fake store.
 // ---------------------------------------------------------------------------
 
-function fakeStore(initial: { accounts?: ActionStore['accounts']; holdings?: ActionStore['holdings'] } = {}) {
+function fakeStore(initial: { accounts?: InvestmentAccount[]; holdings?: InvestmentHolding[] } = {}) {
   const accounts = [...(initial.accounts ?? [])];
   const holdings = [...(initial.holdings ?? [])];
   const addedAccounts: string[] = [];
   const addedHoldings: string[] = [];
   const store: ActionStore & { addedAccounts: string[]; addedHoldings: string[] } = {
-    accounts,
-    holdings,
+    getAccounts: () => accounts,
+    getHoldings: () => holdings,
     addAccount: (i) => {
       const id = `acc-${i.platformName.toLowerCase()}`;
       accounts.push({ id, platformName: i.platformName, accountType: i.accountType, baseCurrencyValue: 0, lastUpdated: 0 } as never);
@@ -192,10 +193,10 @@ describe('applyCreatePortfolio', () => {
       ],
     };
     const summary = applyCreatePortfolio(s, a);
-    expect(s.accounts).toHaveLength(1);
-    expect(s.accounts[0].platformName).toBe('Luno');
-    expect(s.holdings).toHaveLength(2);
-    expect(s.holdings[0].accountId).toBe(s.accounts[0].id);
+    expect(s.getAccounts()).toHaveLength(1);
+    expect(s.getAccounts()[0].platformName).toBe('Luno');
+    expect(s.getHoldings()).toHaveLength(2);
+    expect(s.getHoldings()[0].accountId).toBe(s.getAccounts()[0].id);
     expect(summary).toContain('created "Luno"');
     expect(summary).toContain('added 2 holdings');
   });
@@ -217,8 +218,8 @@ describe('applyCreatePortfolio', () => {
       ],
     };
     const summary = applyCreatePortfolio(s, a);
-    expect(s.accounts).toHaveLength(1); // no second account
-    expect(s.holdings).toHaveLength(2);  // only ETH added
+    expect(s.getAccounts()).toHaveLength(1); // no second account
+    expect(s.getHoldings()).toHaveLength(2);  // only ETH added
     expect(summary).toContain('used existing');
     expect(summary).toContain('added 1 holding');
     expect(summary).toContain('skipped 1 duplicate');
@@ -238,6 +239,6 @@ describe('applyCreatePortfolio', () => {
       holdings: [{ symbol: 'BTC', assetClass: 'crypto', currency: 'USD', units: 0.2, entryPrice: 100000 }], // new lot
     };
     applyCreatePortfolio(s, a);
-    expect(s.holdings).toHaveLength(2);
+    expect(s.getHoldings()).toHaveLength(2);
   });
 });
