@@ -96,7 +96,10 @@ export function SettingsView() {
     setLockBusy(false);
     if (ok) {
       setAdminMsg(`${member.display_name || member.email}: locked to ${provider}${lockModel.trim() ? ' (' + lockModel.trim() + ')' : ''}.`);
-      // Keep the key/model for the next Apply — one admin key usually locks many users.
+      // Mask the key immediately: the fingerprint + provider badge on the row
+      // confirm the policy; there is no reason for the raw key to stay
+      // visible in the field (re-enter it if you lock the next user).
+      setLockKey('');
       void refreshAdmin();
     } else setAdminMsg('Could not update - you may not be an admin.');
   };
@@ -254,7 +257,7 @@ export function SettingsView() {
               <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-…" autoComplete="off" />
             </label>
             <label className="field"><span>Model override (optional - leave blank for the provider default)</span>
-              <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="e.g. claude-haiku-4-5, gpt-4o-mini, gemini-3.8-flash" />
+              <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="e.g. adacode-3.0-flash, claude-haiku-4-5, gpt-4o-mini, gemini-3.8-flash" />
             </label>
             <div className="list" style={{ marginTop: 8 }}>
               <button
@@ -415,7 +418,7 @@ export function SettingsView() {
                     <input type="password" value={lockKey} onChange={(e) => setLockKey(e.target.value)} placeholder="sk-…" autoComplete="off" />
                   </label>
                   <label className="field"><span>Model override (optional)</span>
-                    <input value={lockModel} onChange={(e) => setLockModel(e.target.value)} placeholder="e.g. gpt-4o-mini, claude-haiku-4-5" />
+                    <input value={lockModel} onChange={(e) => setLockModel(e.target.value)} placeholder="leave blank for the provider default (adacode-3.0-flash)" />
                   </label>
                 </>
               )}
