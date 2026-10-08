@@ -118,14 +118,14 @@ describe('categorize jsonMode wiring', () => {
 });
 
 describe('adacode provider (OpenAI-compatible gateway)', () => {
-  it('defaults to claude-haiku-4-5 and sends Bearer auth to api.adacode.ai', async () => {
+  it('defaults to adacode-3.0-flash and sends Bearer auth to api.adacode.ai', async () => {
     const calls = stubFetch();
     await callLLM(CFG.adacode, 'sys', 'user');
     const url = String(calls[0].url);
     const init = calls[0].init;
     expect(url).toBe('https://api.adacode.ai/v1/chat/completions');
     expect(init!.headers.Authorization).toBe('Bearer sk-ada-test');
-    expect(calls[0].body!.model).toBe('claude-haiku-4-5');
+    expect(calls[0].body!.model).toBe('adacode-3.0-flash');
     expect(calls[0].body!.messages).toEqual([
       { role: 'system', content: 'sys' },
       { role: 'user', content: 'user' },

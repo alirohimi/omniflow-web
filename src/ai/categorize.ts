@@ -242,33 +242,58 @@ export async function callLLM(
   if (cfg.provider === 'adacode') {
     // adaCode — OpenAI-compatible gateway (Bearer key, /v1/chat/completions,
     // OpenAI-shaped request/response incl. response_format json_mode and
-    // image_url blocks). CORS is open (access-control-allow-origin: *) so
-    // the PWA can call it directly, no proxy. Default model is the cheap
-    // tier; override via prefs.llmModel (57 models available: claude-*,
-    // gpt-*, gemini-*, deepseek-*, glm-*, qwen-*, adacode-*-flash…).
-    const model = cfg.model ?? 'claude-haiku-4-5';
+    // image_url blocks). Preflight is CORS-open (OPTIONS → ACAO:*) so the PWA
+    // can call it directly, no proxy. NOTE: the gateway drops CORS headers on
+    // the *actual* (error) response, so Safari surfaces provider rejections
+    // as an opaque "Load failed" — see the catch below for a curl fallback.
+    // Default model is adacode-3.0-flash; override via prefs.llmModel
+    // (claude-*, gpt-*, gemini-*, deepseek-*, glm-*, qwen-*, adacode-*-flash…).
+    const model = cfg.model ?? 'adacode-3.0-flash';
     const content: unknown = imgs.length === 0
       ? user
       : [
           { type: 'text', text: user },
           ...imgs.map((d) => ({ type: 'image_url', image_url: { url: d } })),
         ];
-    const res = await fetch('https://api.adacode.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0,
-        ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
-        messages: [
-          { role: 'system', content: sys },
-          { role: 'user', content },
-        ],
-      }),
-    });
+    let res: Response;
+    try {
+      res = await fetch('https://api.adacode.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${cfg.apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          temperature: 0,
+          ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+          messages: [
+            { role: 'system', content: sys },
+            { role: 'user', content },
+          ],
+        }),
+      });
+    } catch (e) {
+      // adaCode's gateway sends CORS headers on the preflight (OPTIONS) but
+      // NOT on the actual response. In Safari, a non-CORS-readable response
+      // makes fetch reject with the opaque "Load failed" — which is almost
+      // always a 401/403 from the provider (invalid key, model, quota) that
+      // the browser refuses to surface. Tell the user exactly how to get the
+      // real answer (curl, which is not CORS-bound) instead of a dead-end.
+      const raw = e instanceof Error ? e.message : String(e);
+      const isCorsOpaque = /load failed|failed to fetch|networkerror|typeerror/i.test(raw);
+      if (isCorsOpaque) {
+        throw new Error(
+          `adacode: browser blocked the response (Safari hides provider errors as "${raw}"). ` +
+            `The request reached the gateway but the HTTP error could not be read cross-origin — ` +
+            `usually an invalid/over-quota key or an unavailable model. Verify the key from your ` +
+            `terminal (curl has no CORS limits): curl -sS https://api.adacode.ai/v1/chat/completions ` +
+            `-H "Authorization: Bearer YOUR_KEY" -H "Content-Type: application/json" ` +
+            `-d '{"model":"' + model + '","messages":[{"role":"user","content":"hi"}]}'`,
+        );
+      }
+      throw e;
+    }
     if (!res.ok) throw new Error(`adacode ${res.status}: ${await apiErrorBody(res)}`);
     const j = await res.json();
     return j?.choices?.[0]?.message?.content ?? '';
