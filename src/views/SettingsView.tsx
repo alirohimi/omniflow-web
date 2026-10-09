@@ -222,20 +222,24 @@ export function SettingsView() {
               the personal key below until they clear it.
             </p>
             <div className="list">
-              <div className="row"><span>Provider</span><span className="badge">{myPolicy.provider}</span></div>
-              {myPolicy.model && (
-                // Client rule: regular users must not see the admin-assigned
-                // model name (it identifies the backend vendor). Only admins
-                // see the raw string; everyone else gets the generic label.
-                <div className="row">
-                  <span>Model</span>
-                  <span className="muted small">
-                    {store.isAdminUser ? myPolicy.model : genericModelName(myPolicy.model)}
-                  </span>
-                </div>
-              )}
-              {myPolicy.key_finger && (
-                <div className="row"><span>Key</span><span className="muted small">…{myPolicy.key_finger}</span></div>
+              {store.isAdminUser ? (
+                <>
+                  <div className="row"><span>Provider</span><span className="badge">{myPolicy.provider}</span></div>
+                  {myPolicy.model && (
+                    <div className="row"><span>Model</span><span className="muted small">{myPolicy.model}</span></div>
+                  )}
+                  {myPolicy.key_finger && (
+                    <div className="row"><span>Key</span><span className="muted small">…{myPolicy.key_finger}</span></div>
+                  )}
+                </>
+              ) : (
+                <>
+                  {/* Non-admin: never reveal the admin's provider, model, or
+                      key fingerprint (they identify the backend vendor). Only
+                      a neutral "Managed" badge + the generic assistant name. */}
+                  <div className="row"><span>Provider</span><span className="badge">Managed</span></div>
+                  <div className="row"><span>Model</span><span className="muted small">{genericModelName(myPolicy.model)}</span></div>
+                </>
               )}
             </div>
           </div>

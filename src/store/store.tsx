@@ -210,6 +210,15 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [vault, setVault] = useState<VaultBlob | null>(null);
   const [syncState, setSyncState] = useState<SyncState>('idle');
+  // True once the current scope's DB probe has settled (row found/absent or
+  // unreachable). Ref version is the authoritative same-commit gate: effects
+  // run in declaration order, so the probe effect's synchronous write is
+  // visible to the auto-flow effect that runs a moment later in the SAME
+  // commit (a React state flag lags one render and would let a stale sign-in
+  // auto-create fire — the "history lost after logout" bug). The state
+  // mirrors it only to re-trigger the auto-flow effect when a probe settles.
+  const probeSettledRef = useRef(false);
+  const [probeSettled, setProbeSettled] = useState(false);
   // ---- admin / LLM-policy state (populated only for a signed-in cloud user;
   // ---- every read/write is RLS-gated server-side, see services/admin.ts) ----
   const [isAdminUser, setIsAdminUser] = useState(false);
@@ -350,6 +359,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setVault(null);
     setError(null);
     setSyncState('idle');
+    // This probe's result has not settled yet: auto create/unlock must wait.
+    // The ref is written synchronously so it gates the same-commit effect
+    // runs; the state re-triggers the auto-flow once the probe has settled.
+    probeSettledRef.current = false;
+    setProbeSettled(false);
     (async () => {
       // DB-only: a vault exists iff the signed-in user has a row.
       try {
@@ -363,6 +377,14 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         if (!alive) return;
         setError(e instanceof Error ? e.message : 'Could not reach your data store.');
         setStatus('unavailable');
+      } finally {
+        // Settled either way (row found, none, or DB down). Only the probe
+        // for the CURRENT scope may flip this — a stale probe finishing late
+        // must not ungate the new scope's auto flow.
+        if (alive) {
+          probeSettledRef.current = true;
+          setProbeSettled(true);
+        }
       }
     })();
     return () => {
@@ -384,6 +406,38 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         setError('Password must be at least 4 characters.');
         return;
       }
+      // Wipe guard (defense in depth): an empty-vault upsert here would
+      // DESTROY any existing row under this scope. So re-verify the DB
+      // right before writing: a row that appeared since the probe (or a
+      // probe that was stale) means "unlock it, don't overwrite"; a DB
+      // failure means "stay put, show retry" — never create.
+      if (cloudOn && scope !== 'local') {
+        let existing: VaultCipher | undefined;
+        try {
+          existing = await resolveCipher();
+        } catch (e) {
+          setError(e instanceof Error ? e.message : 'Could not reach your data store.');
+          setStatus('unavailable');
+          return;
+        }
+        if (existing) {
+          // A vault row exists: this is a returning user, not first run.
+          // Attempt to open it with the same key instead of overwriting.
+          try {
+            const v = await decryptVault<VaultBlob>(existing, password);
+            cipherRef.current = existing;
+            passRef.current = password;
+            setVault(v);
+            setStatus('unlocked');
+            setError(null);
+            return;
+          } catch {
+            setError('Wrong password. Your data stays encrypted until you type it right.');
+            setStatus('locked');
+            return;
+          }
+        }
+      }
       const v = emptyVault(prefs);
       const fp = await fingerprintSecret(password);
       v.prefs.llmKeyFinger = fp.slice(0, 8);
@@ -392,7 +446,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       setStatus('unlocked');
       setError(null);
     },
-    [applyVault],
+    [applyVault, cloudOn, scope, resolveCipher],
   );
 
   const unlock = useCallback(
@@ -448,12 +502,18 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   // WITHOUT the password (pp null) -> the one-field gate asks for it, so a
   // reload never auto-opens the vault. lock() wipes pp, so a manual lock
   // always lands on the gate too.
+  //
+  // Gated on probeSettledRef (authoritative, same-commit) AND probeSettled
+  // state (re-trigger): a fresh sign-in's auto flow may only act on a
+  // status that the CURRENT scope's settled probe produced. This closes the
+  // logout -> login race where sign-in arrives while a stale 'creating'
+  // status would make the auto-create overwrite the user's real vault row.
   const pp = auth.accountPassword;
   useEffect(() => {
-    if (!pp || !auth.user) return;
+    if (!probeSettledRef.current || !pp || !auth.user) return;
     if (status === 'locked') void unlock(pp);
     else if (status === 'creating') void createVault(pp);
-  }, [pp, auth.user, status, unlock, createVault]);
+  }, [probeSettled, pp, auth.user, status, unlock, createVault]);
 
   /**
    * Change the account password. It doubles as the vault key, so the vault

@@ -44,6 +44,13 @@ export function CoachView() {
 
   const hasLLM = store.llmConfig != null;
 
+  // When an admin pinned this (non-admin) user to a cloud provider, the vendor
+  // name must not leak to the target user — show a neutral chip instead of the
+  // raw provider. Admins keep seeing the real provider; a user's OWN BYOK key
+  // still shows its own provider (it is their setting, not a leak).
+  const adminLocked =
+    !store.isAdminUser && !!store.llmPolicy && store.llmPolicy.provider !== 'none';
+
   // The grounded context the engine reasons over. Rebuilt when the data
   // moves; the LLM prompt only ever receives the compact brief derived
   // from this (never the raw ledger).
@@ -166,7 +173,11 @@ export function CoachView() {
             <ICoach size={13} /> Coach
           </span>
           <span className={`chip sm ${hasLLM ? 'ok' : ''}`}>
-            {hasLLM ? `LIVE · ${store.llmConfig!.provider}` : 'ON-DEVICE RULES (free)'}
+            {hasLLM
+              ? adminLocked
+                ? 'LIVE · Managed'
+                : `LIVE · ${store.llmConfig!.provider}`
+              : 'ON-DEVICE RULES (free)'}
           </span>
         </div>
         {hasMessages && (
