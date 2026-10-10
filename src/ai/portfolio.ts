@@ -68,7 +68,13 @@ export function valueInBase(
   const isPar = h.assetClass === 'cash' || h.assetClass === 'mmf';
   const rawPrice = quote?.price ?? h.currentPriceLocal;
   const priceLocal = Number.isFinite(rawPrice) ? rawPrice : isPar ? 1 : 0;
-  const cur = quote?.currency ?? h.holdingCurrency;
+  // Par rows are ALWAYS denominated in the holding's own currency — the "price"
+  // is the par unit (1.0), not a market quote. batch() dedupes quotes by
+  // symbol, so a USD-account "CASH" line can clobber the shared CASH quote
+  // and carry currency:'USD'; using the quote's currency would then convert
+  // a MYR cash row at the USD rate (the 4000 MYR -> RM16350 bug). Non-par
+  // rows still take the quote's currency (the live quote knows it).
+  const cur = isPar ? h.holdingCurrency : (quote?.currency ?? h.holdingCurrency);
   const toBaseRaw = cur === base ? 1 : rates(cur);
   const toBase = Number.isFinite(toBaseRaw) ? toBaseRaw : 0;
   const units = Number.isFinite(h.units) ? h.units : 0;

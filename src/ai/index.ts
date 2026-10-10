@@ -59,3 +59,9 @@ export {
   type ExpensePatchField,
   type HoldingPatchField,
 } from './actions';
+
+export {
+  summarizeDashboard,
+  rulesSummary,
+  type DashboardSummary,
+} from './dashboard';

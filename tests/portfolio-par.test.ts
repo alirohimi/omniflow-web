@@ -95,6 +95,35 @@ describe('valueInBase — par + corrupt handling', () => {
     expect(valueBase).toBe(4000); // 200 x 5 x 4.0
     expect(costBase).toBe(3600); // 180 x 5 x 4.0
   });
+
+  it('a clobbered USD CASH quote does NOT affect a MYR par cash row', () => {
+    // Reproduces the exact bug from the 2026-10-10 screenshot: batch() dedupes
+    // by symbol, so a USD-account CASH line clobbers the shared "CASH" quote
+    // with currency:'USD'. The par fix in valueInBase ensures a MYR cash row
+    // still values at the MYR rate (1.0), not the USD rate (~4.087x).
+    const h = holding({
+      id: 'h-myr-cash',
+      symbol: 'CASH',
+      assetClass: 'cash',
+      holdingCurrency: 'MYR',
+      units: 4000,
+      averageEntryPrice: 1,
+      currentPriceLocal: undefined,
+    });
+    const clobberedQuote: QuoteSnapshot = {
+      symbol: 'CASH',
+      assetClass: 'cash',
+      price: 1,
+      currency: 'USD', // clobbered — NOT this row's currency
+      asOf: Date.now(),
+      source: 'manual',
+    };
+    const fx = myrFx(4.087);
+    const { valueBase, ok } = valueInBase(h, clobberedQuote, 'MYR', ratesOf(fx));
+    expect(ok).toBe(true);
+    // 4000 MYR x 1 par x 1.0 (MYR->MYR) = 4000, NOT 4000 x 4.087 = 16348
+    expect(valueBase).toBe(4000);
+  });
 });
 
 describe('buildPortfolio — offline with corrupt holdings', () => {

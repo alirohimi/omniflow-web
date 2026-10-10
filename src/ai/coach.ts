@@ -95,7 +95,12 @@ export function buildBrief(ctx: CoachContext): CoachBrief {
     const priceBase = q?.price ?? h.currentPriceBase;
     const val = priceBase * h.units;
     totalVal += val;
-    perHolding.push({ symbol: h.symbol, val, assetClass: h.assetClass, cur: q?.currency ?? h.holdingCurrency });
+    // Par rows (cash/MMF) are always in the holding's own currency — a
+    // clobbered quote from batch() can carry the wrong currency (the same
+    // bug that inflated MYR cash rows in valueInBase).
+    const isPar = h.assetClass === 'cash' || h.assetClass === 'mmf';
+    const cur = isPar ? h.holdingCurrency : (q?.currency ?? h.holdingCurrency);
+    perHolding.push({ symbol: h.symbol, val, assetClass: h.assetClass, cur });
   }
 
   const alloc = new Map<string, number>();

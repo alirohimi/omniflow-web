@@ -4,11 +4,11 @@
 // three-cards, no decoration.
 // ============================================================================
 
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
 import { currencyInfo, formatMoney } from '../domain/enums';
-import { runRules, spendOverLastDays } from '../ai';
+import { runRules, spendOverLastDays, summarizeDashboard, type DashboardSummary } from '../ai';
 import { IPlus, IRefresh, IChevron } from '../icons';
 
 type Tab = 'dashboard' | 'expenses' | 'investments' | 'settings';
@@ -57,6 +57,29 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
   const ret = live.portfolio?.totalReturnPct ?? null;
   const pacePct = projected > 0 ? Math.min(100, (spentThisMonth / projected) * 100) : 0;
 
+  const [aiSummary, setAiSummary] = useState<DashboardSummary | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAiLoading(true);
+    summarizeDashboard(
+      {
+        expenses: vault.expenses,
+        accounts: vault.accounts,
+        holdings: vault.holdings,
+        quotes: live.quotes,
+        prefs: vault.prefs,
+      },
+      live.portfolio,
+      store.llmConfig,
+    )
+      .then((s) => { if (!cancelled) setAiSummary(s); })
+      .catch(() => { if (!cancelled) setAiSummary(null); })
+      .finally(() => { if (!cancelled) setAiLoading(false); });
+    return () => { cancelled = true; };
+  }, [vault, live.portfolio, live.quotes, store.llmConfig]);
+
   return (
     <>
       <h2 className="section-title">Portfolio</h2>
@@ -87,6 +110,23 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
           </span>
         </div>
       </div>
+
+      {aiLoading ? (
+        <div className="card ai-summary-card" style={{ marginBottom: 16 }}>
+          <span className="spinner sm" />
+          <span className="muted" style={{ marginLeft: 8, fontSize: 13 }}>Generating AI summary…</span>
+        </div>
+      ) : aiSummary ? (
+        <div className="card ai-summary-card" style={{ marginBottom: 16 }}>
+          <div className="ai-summary-header">
+            <span className={`chip sm ${aiSummary.source === 'llm' ? 'ok' : ''}`}>
+              {aiSummary.source === 'llm' ? `AI · ${store.llmConfig?.provider ?? 'LLM'}` : 'On-device'}
+            </span>
+            {aiSummary.degraded && <span className="muted small">degraded - key call failed</span>}
+          </div>
+          <p className="ai-summary-text">{aiSummary.text}</p>
+        </div>
+      ) : null}
 
       <h2 className="section-title">Spending this month</h2>
       <div className="card">
