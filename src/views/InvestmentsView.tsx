@@ -9,11 +9,19 @@ import { useLiveData } from '../hooks/useLiveData';
 import { useToast } from '../components/Toast';
 import { DelButton } from '../components/DelButton';
 import { fxService } from '../services';
+import { valueInBase } from '../ai/portfolio';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
 import { IRefresh, IPlus, IPencil, IX } from '../icons';
 import type { InvestmentAccount, InvestmentHolding } from '../domain/types';
 
 const ASSET_CLASSES = ['equity-us', 'equity-local', 'etf', 'crypto', 'cash', 'mmf'] as const;
+/** Cash / MMF rows: single "amount" input, symbol + price pinned to the par
+ *  convention (symbol = class name, price = 1) so value = amount · FX. */
+const PAR_CLASSES: InvestmentHolding['assetClass'][] = ['cash', 'mmf'];
+const isParClass = (c: InvestmentHolding['assetClass']) => PAR_CLASSES.includes(c);
+/** Pinned symbol for par rows — matches the marketData par-price path. */
+const parSymbolFor = (c: InvestmentHolding['assetClass']) =>
+  c === 'cash' ? 'CASH' : c === 'mmf' ? 'MMF' : c.toUpperCase();
 
 export function InvestmentsView() {
   const store = useVaultStore();
@@ -33,17 +41,30 @@ export function InvestmentsView() {
   const [holdCur, setHoldCur] = useState(base);
   const [units, setUnits] = useState('');
   const [entry, setEntry] = useState('');
+  /** Cash/MMF rows: a single "amount in holding currency" input (price pinned
+   *  to par=1, symbol pinned to the class). Non-par rows ignore this. */
+  const [amount, setAmount] = useState('');
   /** id of the holding being edited, or null when adding a new one. */
   const [editingId, setEditingId] = useState<string | null>(null);
   const addHoldFormRef = useRef<HTMLHeadingElement>(null);
+  const parMode = isParClass(assetClass);
 
   const startEdit = (h: InvestmentHolding) => {
     setAccountId(h.accountId);
     setSymbol(h.symbol);
     setAssetClass(h.assetClass);
     setHoldCur(h.holdingCurrency);
-    setUnits(String(h.units));
-    setEntry(String(h.averageEntryPrice || ''));
+    if (isParClass(h.assetClass)) {
+      // Units ARE the amount at par=1.
+      setAmount(String(h.units || ''));
+      setUnits('');
+      setEntry('');
+      setSymbol(parSymbolFor(h.assetClass));
+    } else {
+      setUnits(String(h.units));
+      setEntry(String(h.averageEntryPrice || ''));
+      setAmount('');
+    }
     setEditingId(h.id);
     window.setTimeout(() => {
       addHoldFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -53,7 +74,14 @@ export function InvestmentsView() {
 
   const cancelEdit = () => {
     setEditingId(null);
-    setSymbol(''); setUnits(''); setEntry(''); setAssetClass('equity-us');
+    setSymbol(''); setUnits(''); setEntry(''); setAmount('');
+    setAssetClass('equity-us');
+  };
+
+  /** Keep symbol pinned for par classes; clear it back to free entry otherwise. */
+  const pickAssetClass = (c: InvestmentHolding['assetClass']) => {
+    setAssetClass(c);
+    if (isParClass(c)) setSymbol(parSymbolFor(c));
   };
 
   const grouped = useMemo(() => {
@@ -66,11 +94,10 @@ export function InvestmentsView() {
     return byPlat;
   }, [vault.holdings, vault.accounts]);
 
-  const valueBase = (h: InvestmentHolding): number => {
-    const q = live.quotes[h.symbol];
-    const priceBase = q ? q.price : h.currentPriceBase;
-    return priceBase * h.units;
-  };
+  /** NaN-safe per-row valuation shared by the KPI panel and the holdings
+   *  list: corrupt rows / missing FX rates contribute 0 and flag ok=false. */
+  const rateToBase = (code: string): number =>
+    live.fx ? fxService.toBase(1, code, live.fx) : code === base ? 1 : 0;
 
   const addAccount = () => {
     const name = platform.trim();
@@ -82,50 +109,52 @@ export function InvestmentsView() {
   };
 
   const addHolding = async () => {
+    // Par rows (cash/MMF): a single amount input, price pinned to 1, symbol
+    // pinned to the class. value = amount · FX(1 holding cur -> base).
+    const par = isParClass(assetClass);
+    const am = parseFloat(amount);
+    if (par && (!accountId || !isFinite(am) || am <= 0)) return;
+    // Non-par rows: symbol + units + entry.
     const u = parseFloat(units);
     const e = parseFloat(entry);
-    if (!accountId || !symbol.trim() || !isFinite(u) || u <= 0) return;
+    if (!par && (!accountId || !symbol.trim() || !isFinite(u) || u <= 0)) return;
+    // For par rows, units ARE the amount and entry/price are pinned to 1.
+    const finalUnits = par ? am : u;
+    const finalEntry = par ? 1 : e;
+    const finalSymbol = (par ? parSymbolFor(assetClass) : symbol.trim()).toUpperCase();
     // Pull an initial live quote so currentPriceBase is seeded (best-effort).
-    let local = e || 0;
-    let priceBase = e || 0;
+    let local = par ? 1 : e || 0;
+    let priceBase = local;
     try {
       const rates = await fxService.latest(base);
       if (holdCur !== base) {
         const r = fxService.toBase(1, holdCur, rates);
-        priceBase = local * r;
+        priceBase = Number.isFinite(r) ? local * r : 0;
       }
     } catch { /* offline: keep entry as a rough base price */ }
+    const payload = {
+      accountId,
+      symbol: finalSymbol,
+      assetClass,
+      holdingCurrency: holdCur,
+      units: finalUnits,
+      averageEntryPrice: finalEntry,
+      currentPriceLocal: local || undefined,
+      currentPriceBase: priceBase || undefined,
+    };
     if (editingId) {
-      store.updateHolding(editingId, {
-        accountId,
-        symbol: symbol.trim().toUpperCase(),
-        assetClass,
-        holdingCurrency: holdCur,
-        units: u,
-        averageEntryPrice: e || 0,
-        currentPriceLocal: local || undefined,
-        currentPriceBase: priceBase || undefined,
-      });
+      store.updateHolding(editingId, payload);
       // Clear back to add mode — otherwise the leftover values could
       // accidentally duplicate the holding on the next "Add holding" tap.
       setEditingId(null);
-      setSymbol(''); setUnits(''); setEntry('');
+      setSymbol(''); setUnits(''); setEntry(''); setAmount('');
       setAssetClass('equity-us'); setHoldCur(base);
-      toast(`Updated ${symbol.trim().toUpperCase()}`);
+      toast(`Updated ${finalSymbol}`);
       return;
     }
-    store.addHolding({
-      accountId,
-      symbol: symbol.trim().toUpperCase(),
-      assetClass,
-      holdingCurrency: holdCur,
-      units: u,
-      averageEntryPrice: e || 0,
-      currentPriceLocal: local || undefined,
-      currentPriceBase: priceBase || undefined,
-    });
-    setSymbol(''); setUnits(''); setEntry('');
-    toast(`Added ${symbol.trim().toUpperCase()} to target account`);
+    store.addHolding(payload);
+    setSymbol(''); setUnits(''); setEntry(''); setAmount('');
+    toast(`Added ${finalSymbol} to target account`);
   };
 
   const removeAccount = (id: string) => {
@@ -160,7 +189,12 @@ export function InvestmentsView() {
         </div>
         {live.error && <div className="small neg" style={{ marginTop: 10 }}>{live.error}</div>}
         <div className="row small muted" style={{ marginTop: 10 }}>
-          <span>FX: {live.fxSource ?? '…'} · live {live.portfolio?.liveQuoteCount ?? 0} · cached {live.portfolio?.staleQuoteCount ?? 0}</span>
+          <span>
+            FX: {live.fxSource === 'offline' ? 'offline (cached/approx)' : (live.fxSource ?? '…')} · live {live.portfolio?.liveQuoteCount ?? 0} · cached {live.portfolio?.staleQuoteCount ?? 0}
+          </span>
+          {live.portfolio && live.portfolio.uncounted > 0 && (
+            <span style={{ color: 'var(--text-2, #9aa4b8)' }}> · {live.portfolio.uncounted} uncounted</span>
+          )}
           <button className="btn ghost sm" onClick={live.refresh} disabled={live.loading}><IRefresh size={16} /> Refresh</button>
         </div>
       </div>
@@ -230,19 +264,32 @@ export function InvestmentsView() {
         )}
         <div className="cols">
           <label className="field"><span>Symbol</span>
-            <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="AAPL / CSPX.L / BTC / 1155.KL" />
+            <input
+              value={symbol}
+              onChange={(e) => setSymbol(e.target.value)}
+              disabled={parMode}
+              placeholder={parMode ? 'auto (par)' : 'AAPL / CSPX.L / BTC / 1155.KL'}
+            />
           </label>
           <label className="field"><span>Asset class</span>
-            <select value={assetClass} onChange={(e) => setAssetClass(e.target.value as typeof assetClass)}>
+            <select value={assetClass} onChange={(e) => pickAssetClass(e.target.value as typeof assetClass)}>
               {ASSET_CLASSES.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </label>
-          <label className="field"><span>Units</span>
-            <input type="number" inputMode="decimal" value={units} onChange={(e) => setUnits(e.target.value)} placeholder="10" />
-          </label>
-          <label className="field"><span>Avg entry</span>
-            <input type="number" inputMode="decimal" value={entry} onChange={(e) => setEntry(e.target.value)} placeholder="12.40" />
-          </label>
+          {parMode ? (
+            <label className="field"><span>Amount ({holdCur})</span>
+              <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="1500" />
+            </label>
+          ) : (
+            <>
+              <label className="field"><span>Units</span>
+                <input type="number" inputMode="decimal" value={units} onChange={(e) => setUnits(e.target.value)} placeholder="10" />
+              </label>
+              <label className="field"><span>Avg entry</span>
+                <input type="number" inputMode="decimal" value={entry} onChange={(e) => setEntry(e.target.value)} placeholder="12.40" />
+              </label>
+            </>
+          )}
           <label className="field"><span>Holding cur</span>
             <select value={holdCur} onChange={(e) => setHoldCur(e.target.value)}>
               {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
@@ -260,22 +307,34 @@ export function InvestmentsView() {
           <div className="list">
             {holds.map((h) => {
               const q = live.quotes[h.symbol];
-              const val = valueBase(h);
-              const isLive = q && q.source === 'coingecko' || q?.source === 'yahoo';
-              const cost = h.averageEntryPrice * h.units * fxService.toBase(1, h.holdingCurrency, live.fx ?? { base, rates: {}, asOf: 0, source: 'cache' });
-              const ret = cost > 0 ? ((val - cost) / cost) * 100 : 0;
+              const { valueBase: val, costBase: cost, ok } = valueInBase(
+                h,
+                q,
+                base,
+                rateToBase,
+              );
+              const isLive = q?.source === 'coingecko' || q?.source === 'yahoo';
+              const ret = ok && cost > 0 ? ((val - cost) / cost) * 100 : 0;
+              const par = isParClass(h.assetClass);
+              const price = q?.price ?? h.currentPriceBase;
+              const showPrice = par
+                ? 'par'
+                : Number.isFinite(price) ? sym + price!.toFixed(3) : '—';
+              const showVal = ok ? sym + val.toFixed(0) : '—';
+              const showRet = ok && cost > 0 ? ` ${ret >= 0 ? '+' : ''}${ret.toFixed(1)}%` : '';
+              const note = !ok ? ' · uncounted (corrupt/no FX rate)' : '';
               return (
                 <div className="item" key={h.id}>
                   <div className="grow">
-                    <div className="title">{h.symbol} <span className="muted small">× {h.units} {h.holdingCurrency}</span></div>
+                    <div className="title">{h.symbol} <span className="muted small">× {Number.isFinite(h.units) ? h.units : '—'} {h.holdingCurrency}</span></div>
                     <div className="meta">
                       {h.assetClass} · {q ? (isLive ? `live ${new Date(q.asOf).toLocaleString()}` : `cached ${new Date(q.asOf).toLocaleDateString()}`) : 'no quote'}
-                      {' '}· {sym}{(q?.price ?? h.currentPriceBase).toFixed(3)}
+                      {' '}· {showPrice}{note}
                     </div>
                   </div>
                   <div className="amt">
-                    {sym}{val.toFixed(0)}
-                    <span className={ret >= 0 ? 'pos small' : 'neg small'}> {ret >= 0 ? '+' : ''}{ret.toFixed(1)}%</span>
+                    {showVal}
+                    <span className={ret >= 0 ? 'pos small' : 'neg small'}>{showRet}</span>
                   </div>
                   <button
                     className="edit"

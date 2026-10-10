@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
-import { coachAsk, applyCreatePortfolio, type CreatePortfolioAction } from '../ai';
+import { coachAsk, applyAction as applyAiAction, type Action, type ActionStore } from '../ai';
 import type { CoachContext } from '../ai/coach';
 import { ICoach, IClose, IImage } from '../icons';
 import { useToast } from '../components/Toast';
@@ -30,6 +30,32 @@ const BADGE: Record<string, string> = {
   system: 'Rule engine',
 };
 
+/** Verb-aware confirm-card copy for any of the 5 action types. */
+function actionTitle(a: Action): string {
+  switch (a.action) {
+    case 'create_portfolio': return 'Create portfolio';
+    case 'add_expense': return 'Log expense';
+    case 'edit_expense': return 'Edit expense';
+    case 'delete_expense': return 'Delete expense';
+    case 'holding_patch': return 'Adjust holding';
+  }
+}
+
+function actionDetail(a: Action): string {
+  switch (a.action) {
+    case 'create_portfolio':
+      return `${a.platformName} (${a.accountType}) · ${a.holdings.length} holding${a.holdings.length === 1 ? '' : 's'}`;
+    case 'add_expense':
+      return `${a.merchant} · ${a.category} · ${a.amount.toLocaleString()} ${a.currency} · via ${a.paymentMethod}`;
+    case 'edit_expense':
+      return `expense ${a.targetId} · changing ${Object.keys(a.patches).join(', ')}`;
+    case 'delete_expense':
+      return `expense ${a.targetId}`;
+    case 'holding_patch':
+      return `holding ${a.targetId} · changing ${Object.keys(a.patches).join(', ')}`;
+  }
+}
+
 export function CoachView() {
   const store = useVaultStore();
   const live = useLiveData();
@@ -38,7 +64,7 @@ export function CoachView() {
   const [draft, setDraft] = useState('');
   const [attach, setAttach] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [pendingAction, setPendingAction] = useState<CreatePortfolioAction | null>(null);
+  const [pendingAction, setPendingAction] = useState<Action | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -136,17 +162,23 @@ export function CoachView() {
         addHolding: store.addHolding,
         getAccounts: () => store.vault?.accounts ?? [],
         getHoldings: () => store.vault?.holdings ?? [],
+        addExpense: store.addExpense,
+        editExpense: store.editExpense,
+        deleteExpense: store.deleteExpense,
+        getExpenses: () => store.vault?.expenses ?? [],
+        getCategories: () => store.vault?.categories ?? [],
+        updateHolding: store.updateHolding,
       };
-      const summary = applyCreatePortfolio(actionStore, a);
+      const summary = applyAiAction(actionStore, a, live.fx ?? undefined);
       store.pushCoachMessage({
         role: 'coach',
-        text: `Done — ${summary}. It is live in the Portfolio tab; quotes fill in automatically.`,
+        text: `Done — ${summary}. It is live in your data; quotes fill in automatically.`,
         source: 'system',
         at: Date.now(),
       });
-      toast('Portfolio created.');
+      toast('Action applied.');
     } catch (e) {
-      toast(`Could not apply the portfolio: ${e instanceof Error ? e.message : String(e)}`, 'err');
+      toast(`Could not apply the action: ${e instanceof Error ? e.message : String(e)}`, 'err');
     }
   };
 
@@ -243,23 +275,24 @@ export function CoachView() {
       {pendingAction && (
         <div className="card" style={{ marginTop: 10, border: '1px solid var(--accent, #3b82f6)' }}>
           <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <strong style={{ fontSize: 13 }}>Create portfolio</strong>
+            <strong style={{ fontSize: 13 }}>{actionTitle(pendingAction)}</strong>
             <span className="muted small">not applied yet</span>
           </div>
           <p className="muted small" style={{ margin: '0 0 8px' }}>
-            {pendingAction.platformName} ({pendingAction.accountType}) · {pendingAction.holdings.length} holding
-            {pendingAction.holdings.length === 1 ? '' : 's'}
+            {actionDetail(pendingAction)}
           </p>
-          <div className="coach-action-list">
-            {pendingAction.holdings.map((h) => (
-              <div key={h.symbol} className="row" style={{ justifyContent: 'space-between', gap: 8, padding: '3px 0' }}>
-                <span style={{ fontSize: 13, fontWeight: 600 }}>{h.symbol}</span>
-                <span className="muted small">
-                  {h.units.toLocaleString()} @ {h.entryPrice > 0 ? h.entryPrice.toLocaleString() : 'n/a'} {h.currency}
-                </span>
-              </div>
-            ))}
-          </div>
+          {pendingAction.action === 'create_portfolio' ? (
+            <div className="coach-action-list">
+              {pendingAction.holdings.map((h) => (
+                <div key={h.symbol} className="row" style={{ justifyContent: 'space-between', gap: 8, padding: '3px 0' }}>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{h.symbol}</span>
+                  <span className="muted small">
+                    {h.units.toLocaleString()} @ {h.entryPrice > 0 ? h.entryPrice.toLocaleString() : 'n/a'} {h.currency}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <div className="row" style={{ gap: 8, marginTop: 10 }}>
             <button className="btn sm" onClick={applyAction}>
               Apply to my portfolio

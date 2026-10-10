@@ -80,7 +80,11 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
           </button>
         </div>
         <div className="row small muted meta-row">
-          <span>{live.loading ? 'Fetching live quotes…' : `${live.portfolio?.liveQuoteCount ?? 0} live · ${live.portfolio?.staleQuoteCount ?? 0} cached`}</span>
+          <span>
+            {live.loading ? 'Fetching live quotes…' : `${live.portfolio?.liveQuoteCount ?? 0} live · ${live.portfolio?.staleQuoteCount ?? 0} cached`}
+            {live.portfolio && live.portfolio.uncounted > 0 ? ` · ${live.portfolio.uncounted} uncounted` : ''}
+            {live.fxSource === 'offline' ? ' · offline FX (cached/approx)' : ''}
+          </span>
         </div>
       </div>
 

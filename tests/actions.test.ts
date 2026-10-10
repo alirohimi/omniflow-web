@@ -15,7 +15,7 @@ import {
   type CreatePortfolioAction,
   type ActionStore,
 } from '../src/ai/actions';
-import type { InvestmentAccount, InvestmentHolding } from '../src/domain/types';
+import type { InvestmentAccount, InvestmentHolding, Expense, Category } from '../src/domain/types';
 
 const marker = (json: string) => `Here is what I will create:\n[ACTION:${json}]`;
 
@@ -33,8 +33,9 @@ describe('parseAction', () => {
   it('accepts a well-formed create_portfolio', () => {
     const r = parseAction(marker(JSON.stringify(GOOD)));
     expect(r.ok).toBe(true);
-    expect(r.action!.platformName).toBe('Luno');
-    expect(r.action!.holdings).toHaveLength(2);
+    const act = r.action! as CreatePortfolioAction;
+    expect(act.platformName).toBe('Luno');
+    expect(act.holdings).toHaveLength(2);
   });
 
   it('rejects when no marker is present (analysis-only answer)', () => {
@@ -123,8 +124,9 @@ describe('parseAction', () => {
       marker(JSON.stringify({ ...GOOD, holdings: [{ ...GOOD.holdings[0], symbol: 'btc', currency: 'usd' }] })),
     );
     expect(r.ok).toBe(true);
-    expect(r.action!.holdings[0].symbol).toBe('BTC');
-    expect(r.action!.holdings[0].currency).toBe('USD');
+    const act = r.action! as CreatePortfolioAction;
+    expect(act.holdings[0].symbol).toBe('BTC');
+    expect(act.holdings[0].currency).toBe('USD');
   });
 });
 
@@ -147,6 +149,8 @@ describe('stripActionMarker', () => {
 function fakeStore(initial: { accounts?: InvestmentAccount[]; holdings?: InvestmentHolding[] } = {}) {
   const accounts = [...(initial.accounts ?? [])];
   const holdings = [...(initial.holdings ?? [])];
+  const expenses: Expense[] = [];
+  const categories: Category[] = [];
   const addedAccounts: string[] = [];
   const addedHoldings: string[] = [];
   const store: ActionStore & { addedAccounts: string[]; addedHoldings: string[] } = {
@@ -174,6 +178,18 @@ function fakeStore(initial: { accounts?: InvestmentAccount[]; holdings?: Investm
       addedHoldings.push(id);
       return id;
     },
+    // Expense / holding-patch surface (these create_portfolio tests don't
+    // exercise it, but the full ActionStore interface requires it present).
+    addExpense: () => {
+      const id = `exp-stub`;
+      expenses.push({ id, originalAmount: 0, originalCurrency: 'USD', baseAmount: 0, baseCurrency: 'USD', fxRate: 1, category: 'Other', aiTier: 'llm-byok', merchant: '', paymentMethod: 'card', source: 'manual', timestamp: Date.now() } as never);
+      return id;
+    },
+    editExpense: () => {},
+    deleteExpense: () => {},
+    getExpenses: () => expenses,
+    getCategories: () => categories,
+    updateHolding: () => {},
     addedAccounts,
     addedHoldings,
   };

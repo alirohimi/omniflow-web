@@ -28,7 +28,27 @@ const COINGECKO_COIN_MAP: Record<string, string> = {
   DOGE: 'dogecoin',
 };
 
-export type QuoteSource = 'coingecko' | 'yahoo' | 'manual' | 'cache';
+/** Per-fetch wall clock. A junk symbol (or a flaky network) must never be
+ *  allowed to hang the whole batch: after this many ms the request aborts
+ *  and we fall back to the stored price. */
+const FETCH_TIMEOUT_MS = 12_000;
+
+async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error(`timed out after ${FETCH_TIMEOUT_MS / 1000}s`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export type QuoteSource = 'coingecko' | 'yahoo' | 'manual' | 'cache' | 'failed';
 
 export interface QuoteResult {
   ok: boolean;
@@ -93,7 +113,7 @@ export class MarketDataService {
 
   private async cryptoQuote(symbol: string): Promise<QuoteResult> {
     const coin = COINGECKO_COIN_MAP[symbol.toUpperCase()] ?? symbol.toLowerCase();
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(coin)}&vs_currencies=usd&include_24hr_change=true`,
     );
     if (!res.ok) throw new Error(`coingecko ${res.status}`);
@@ -116,7 +136,7 @@ export class MarketDataService {
   }
 
   private async yahooQuote(symbol: string, holdingCurrency: string): Promise<QuoteResult> {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`,
       { headers: { Accept: 'application/json' } },
     );
@@ -138,20 +158,49 @@ export class MarketDataService {
   }
 
   /** Batch quote (used by the portfolio aggregator). Returns a snapshot map
-   *  keyed by symbol. */
+   *  keyed by symbol.
+   *
+   *  Quotes are fetched in PARALLEL (Promise.allSettled) so a single junk
+   *  symbol — unknown ticker, dead endpoint, rate limit — can never stall
+   *  every other quote or hang the KPI panel: each request has its own
+   *  12s abort timeout, and a rejected/failing fetch degrades to the
+   *  stored price with a `note` explaining why, instead of throwing. */
   async batch(holdings: InvestmentHolding[]): Promise<Record<string, QuoteSnapshot>> {
+    // Dedupe: two holdings of the same symbol only need one fetch.
+    const bySymbol = new Map<string, InvestmentHolding>();
+    for (const h of holdings) bySymbol.set(h.symbol, h);
+    const unique = [...bySymbol.values()];
+
+    const settled = await Promise.allSettled(unique.map((h) => this.quote(h)));
     const out: Record<string, QuoteSnapshot> = {};
-    for (const h of holdings) {
-      const q = await this.quote(h);
-      out[h.symbol] = {
-        symbol: q.symbol,
-        assetClass: h.assetClass,
-        price: q.price,
-        currency: q.currency,
-        asOf: q.asOf,
-        source: q.source,
-      };
-    }
+    unique.forEach((h, i) => {
+      const s = settled[i];
+      if (s.status === 'fulfilled') {
+        const q = s.value;
+        out[h.symbol] = {
+          symbol: q.symbol,
+          assetClass: h.assetClass,
+          price: q.price,
+          currency: q.currency,
+          asOf: q.asOf,
+          source: q.source,
+          note: q.note,
+        };
+      } else {
+        // `quote()` should never reject (it catches internally), but be
+        // safe: fall back to the stored price and say so.
+        const reason = s.reason instanceof Error ? s.reason.message : String(s.reason);
+        out[h.symbol] = {
+          symbol: h.symbol,
+          assetClass: h.assetClass,
+          price: h.currentPriceLocal || 0,
+          currency: h.holdingCurrency,
+          asOf: Date.now(),
+          source: 'failed',
+          note: `live fetch failed (${reason}); using stored price`,
+        };
+      }
+    });
     return out;
   }
 }

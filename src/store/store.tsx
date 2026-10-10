@@ -38,7 +38,7 @@ import type {
   CoachMessage,
   LLMProvider,
 } from '../domain/types';
-import { emptyVault } from '../domain/seed';
+import { emptyVault, healVault, withoutUndefined } from '../domain/seed';
 import { encryptVault, decryptVault, fingerprintSecret, type VaultCipher } from '../security/vault';
 import { LLMConfig } from '../ai/categorize';
 import { useAuthStore } from '../auth/AuthProvider';
@@ -131,6 +131,13 @@ export interface VaultStore {
 
   addExpense: (input: NewExpenseInput) => string;
   deleteExpense: (id: string) => void;
+  /** Patch fields on an existing expense (the coach's edit_expense action). */
+  editExpense: (
+    id: string,
+    patch: Partial<
+      Pick<Expense, 'originalAmount' | 'originalCurrency' | 'category' | 'merchant' | 'paymentMethod' | 'note'> & { timestamp?: number }
+    >,
+  ) => void;
   addCategory: (name: string, icon: string) => void;
 
   addAccount: (input: NewAccountInput) => string;
@@ -400,6 +407,47 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     [persist],
   );
 
+  /**
+   * Decrypt + heal. A decrypted blob may carry historically corrupt rows
+   * (white-screen bug: addHolding spread `...input` after its price
+   * defaults, updateHolding merged explicit `undefined` keys, so the cloud
+   * vault can hold holdings whose prices are undefined). healVault repairs
+   * them in memory; when a repair happened we re-encrypt + upsert the CLEANED
+   * blob so the next load already comes back healthy (best-effort — if the
+   * re-save fails, keep the healed in-memory copy; it is safe to render).
+   * Also refresh cipherRef so keepalive + changePassword carry the cleaned
+   * ciphertext, not the corrupt one.
+   */
+  const decryptAndHeal = useCallback(
+    async (cipher: VaultCipher, password: string): Promise<VaultBlob> => {
+      const raw = await decryptVault<VaultBlob>(cipher, password);
+      const { blob, changed } = healVault(raw);
+      if (changed && cloudOn) {
+        const cleaned = { ...blob, updatedAt: Date.now() };
+        try {
+          const c2 = await encryptVault(cleaned, password);
+          cipherRef.current = c2;
+          const ok = await saveCloudVault(scope, c2);
+          if (ok) {
+            setSyncState('synced');
+            setError(null);
+          } else {
+            setSyncState('error');
+            setError('Healed some stored data, but syncing the repair failed — retry from the banner.');
+          }
+        } catch {
+          // Keep the healed in-memory copy; the cipher stays corrupt until
+          // the next normal write (which re-encrypts the healed blob).
+          cipherRef.current = cipher;
+        }
+      } else {
+        cipherRef.current = cipher;
+      }
+      return blob;
+    },
+    [cloudOn, scope],
+  );
+
   const createVault = useCallback(
     async (password: string, prefs?: Partial<UserPreferences>) => {
       if (!password || password.length < 4) {
@@ -424,8 +472,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
           // A vault row exists: this is a returning user, not first run.
           // Attempt to open it with the same key instead of overwriting.
           try {
-            const v = await decryptVault<VaultBlob>(existing, password);
-            cipherRef.current = existing;
+            const v = await decryptAndHeal(existing, password);
             passRef.current = password;
             setVault(v);
             setStatus('unlocked');
@@ -446,7 +493,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       setStatus('unlocked');
       setError(null);
     },
-    [applyVault, cloudOn, scope, resolveCipher],
+    [applyVault, cloudOn, scope, resolveCipher, decryptAndHeal],
   );
 
   const unlock = useCallback(
@@ -469,8 +516,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         return 'creating';
       }
       try {
-        const v = await decryptVault<VaultBlob>(cipher, password);
-        cipherRef.current = cipher;
+        const v = await decryptAndHeal(cipher, password);
         passRef.current = password;
         setVault(v);
         setStatus('unlocked');
@@ -481,7 +527,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         return 'locked';
       }
     },
-    [resolveCipher],
+    [resolveCipher, decryptAndHeal],
   );
 
   const lock = useCallback(() => {
@@ -582,10 +628,10 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         if (!prev) return prev;
         const exp: Expense = {
           id,
+          ...withoutUndefined(input),
           baseCurrency: prev.prefs.baseCurrency,
           baseAmount: input.originalAmount * input.fxRate,
           timestamp: input.timestamp ?? Date.now(),
-          ...input,
         };
         const next = { ...prev, expenses: [exp, ...prev.expenses], updatedAt: Date.now() };
         void persist(next);
@@ -601,6 +647,42 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       setVault((prev) => {
         if (!prev) return prev;
         const next = { ...prev, expenses: prev.expenses.filter((e) => e.id !== id), updatedAt: Date.now() };
+        void persist(next);
+        return next;
+      });
+    },
+    [persist],
+  );
+
+  const editExpense = useCallback(
+    (
+      id: string,
+      patch: Partial<
+        Pick<Expense, 'originalAmount' | 'originalCurrency' | 'category' | 'merchant' | 'paymentMethod' | 'note'> & { timestamp?: number }
+      >,
+    ) => {
+      setVault((prev) => {
+        if (!prev) return prev;
+        const next = {
+          ...prev,
+          expenses: prev.expenses.map((e) => {
+            if (e.id !== id) return e;
+            const merged: Expense = { ...e, ...withoutUndefined(patch) };
+            // If the amount or currency changed, recompute the base value from
+            // the stored fxRate so base currency stays consistent. Note the
+            // coach's edit_expense carries no live FX rate; when currency
+            // changed we keep the original fxRate (best-effort, offline-safe).
+            if (patch.originalAmount !== undefined) {
+              merged.originalAmount = patch.originalAmount;
+              merged.baseAmount = patch.originalAmount * e.fxRate;
+            }
+            if (patch.originalCurrency !== undefined) {
+              merged.originalCurrency = patch.originalCurrency;
+            }
+            return merged;
+          }),
+          updatedAt: Date.now(),
+        };
         void persist(next);
         return next;
       });
@@ -668,9 +750,13 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         if (!prev) return prev;
         const h: InvestmentHolding = {
           id,
+          ...withoutUndefined(input),
+          // Price defaults computed LAST so an explicit `undefined` in input
+          // can never clobber them (the original white-screen crash: an
+          // undefined currentPriceBase persisted into the cloud vault, then
+          // `.toFixed(3)` on undefined killed the whole render).
           currentPriceLocal: input.currentPriceLocal ?? input.averageEntryPrice,
           currentPriceBase: input.currentPriceBase ?? input.averageEntryPrice,
-          ...input,
         };
         const next = { ...prev, holdings: [...prev.holdings, h], updatedAt: Date.now() };
         void persist(next);
@@ -697,9 +783,14 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     (id: string, patch: Partial<Omit<InvestmentHolding, 'id'>>) => {
       setVault((prev) => {
         if (!prev) return prev;
+        // Strip undefined keys: a spread merge with explicit `undefined`
+        // clobbers stored values (e.g. the "Save changes" form passing
+        // currentPriceLocal: undefined was writing undefined prices into
+        // the cloud vault — one half of the white-screen bug).
+        const clean = withoutUndefined(patch);
         const next = {
           ...prev,
-          holdings: prev.holdings.map((h) => (h.id === id ? { ...h, ...patch } : h)),
+          holdings: prev.holdings.map((h) => (h.id === id ? { ...h, ...clean } : h)),
           updatedAt: Date.now(),
         };
         void persist(next);
@@ -927,6 +1018,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     llmConfig,
     addExpense,
     deleteExpense,
+    editExpense,
     addCategory,
     addAccount,
     deleteAccount,

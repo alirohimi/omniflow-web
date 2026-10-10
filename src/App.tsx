@@ -14,6 +14,7 @@ import { InvestmentsView } from './views/InvestmentsView';
 import { SettingsView } from './views/SettingsView';
 import { CoachView } from './views/CoachView';
 import { currencyInfo } from './domain/enums';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { IHome, IWallet, ITrend, IGear, ILock, ICoach } from './icons';
 
 type Tab = 'dashboard' | 'expenses' | 'investments' | 'coach' | 'settings';
@@ -128,11 +129,21 @@ function Shell() {
             </button>
           </div>
         )}
-        {tab === 'dashboard' && <DashboardView onOpenTab={setTab} />}
-        {tab === 'expenses' && <ExpensesView />}
-        {tab === 'investments' && <InvestmentsView />}
-        {tab === 'coach' && <CoachView />}
-        {tab === 'settings' && <SettingsView />}
+        {tab === 'dashboard' && (
+          <ErrorBoundary context="Home"><DashboardView onOpenTab={setTab} /></ErrorBoundary>
+        )}
+        {tab === 'expenses' && (
+          <ErrorBoundary context="Expenses"><ExpensesView /></ErrorBoundary>
+        )}
+        {tab === 'investments' && (
+          <ErrorBoundary context="Portfolio"><InvestmentsView /></ErrorBoundary>
+        )}
+        {tab === 'coach' && (
+          <ErrorBoundary context="Coach"><CoachView /></ErrorBoundary>
+        )}
+        {tab === 'settings' && (
+          <ErrorBoundary context="Settings"><SettingsView /></ErrorBoundary>
+        )}
       </main>
 
       <nav className="tabbar" role="tablist">

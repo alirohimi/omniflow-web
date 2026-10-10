@@ -22,6 +22,7 @@ export interface HoldingLine {
   valueLocal: number;     // value in holding currency
   costBase: number;       // cost basis in base currency
   currency: string;       // currency the price is in
+  ok: boolean;            // false when this row contributed 0 (corrupt/missing rate)
 }
 
 export interface AccountLine {
@@ -42,23 +43,43 @@ export interface PortfolioSummary {
   byAccount: AccountLine[];
   liveQuoteCount: number;
   staleQuoteCount: number;
+  /** Rows that contributed 0 (corrupt data or missing FX rate) — excluded
+   *  from totals so the KPI panel never shows NaN/Infinity. */
+  uncounted: number;
 }
 
 /** Best-effort price in base currency for a holding, given a live quote (or
- *  not) and a base-rate table (units of base per 1 of currency). */
+ *  not) and a base-rate table (units of base per 1 of currency).
+ *
+ *  NaN-proof by construction: a corrupt row (undefined price/units from a
+ *  legacy vault) or a missing FX rate (e.g. offline approximations not
+ *  covering the pair) must contribute 0 to the total and be flagged with
+ *  `ok: false` — never poison the whole aggregate. */
 export function valueInBase(
   h: InvestmentHolding,
   quote: QuoteSnapshot | undefined,
   base: string,
   rates: (code: string) => number,
-): { valueBase: number; valueLocal: number; costBase: number } {
-  const priceLocal = quote?.price ?? h.currentPriceLocal;
+): { valueBase: number; valueLocal: number; costBase: number; ok: boolean } {
+  // Cash / money-market funds trade at par: the unit IS the value, so a
+  // missing live quote or stored price must default to 1 (par) — NOT 0 —
+  // or a "MYR 1,500 cash" row would silently read as RM0 (the "cash input
+  // off" bug). Every other asset class with a missing price contributes 0.
+  const isPar = h.assetClass === 'cash' || h.assetClass === 'mmf';
+  const rawPrice = quote?.price ?? h.currentPriceLocal;
+  const priceLocal = Number.isFinite(rawPrice) ? rawPrice : isPar ? 1 : 0;
   const cur = quote?.currency ?? h.holdingCurrency;
-  const toBase = cur === base ? 1 : rates(cur);
-  const valueLocal = priceLocal * h.units;
+  const toBaseRaw = cur === base ? 1 : rates(cur);
+  const toBase = Number.isFinite(toBaseRaw) ? toBaseRaw : 0;
+  const units = Number.isFinite(h.units) ? h.units : 0;
+  const entry = Number.isFinite(h.averageEntryPrice) ? h.averageEntryPrice : 0;
+  // Valid when the row has real units, a usable FX rate, and (unless par) a
+  // positive price. Par rows are always valid so long as units + rate exist.
+  const ok = units > 0 && toBase > 0 && priceLocal > 0;
+  const valueLocal = priceLocal * units;
   const valueBase = valueLocal * toBase;
-  const costBase = h.averageEntryPrice * h.units * toBase;
-  return { valueBase, valueLocal, costBase };
+  const costBase = entry * units * toBase;
+  return { valueBase, valueLocal, costBase, ok };
 }
 
 export function buildPortfolio(
@@ -70,8 +91,8 @@ export function buildPortfolio(
 ): PortfolioSummary {
   const lines: HoldingLine[] = holdings.map((h) => {
     const q = quotes[h.symbol];
-    const { valueBase, valueLocal, costBase } = valueInBase(h, q, base, rates);
-    return { holding: h, quote: q, valueBase, valueLocal, costBase, currency: q?.currency ?? h.holdingCurrency };
+    const { valueBase, valueLocal, costBase, ok } = valueInBase(h, q, base, rates);
+    return { holding: h, quote: q, valueBase, valueLocal, costBase, currency: q?.currency ?? h.holdingCurrency, ok };
   });
 
   const byAssetMap = new Map<AssetClass, number>();
@@ -98,8 +119,11 @@ export function buildPortfolio(
     }))
     .sort((a, b) => b.valueBase - a.valueBase);
 
-  const liveQuoteCount = lines.filter((l) => l.quote && l.quote.source === 'coingecko' || l.quote?.source === 'yahoo').length;
+  const liveQuoteCount = lines.filter(
+    (l) => (l.quote?.source === 'coingecko' || l.quote?.source === 'yahoo'),
+  ).length;
   const staleQuoteCount = lines.length - liveQuoteCount;
+  const uncounted = lines.filter((l) => !l.ok).length;
 
   return {
     baseCurrency: base,
@@ -110,6 +134,7 @@ export function buildPortfolio(
     byAccount,
     liveQuoteCount,
     staleQuoteCount,
+    uncounted,
   };
 }
 

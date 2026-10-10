@@ -42,8 +42,20 @@ export {
 
 export {
   applyCreatePortfolio,
+  applyAction,
   parseAction,
   stripActionMarker,
+  ACTION_CONTRACT,
+  ACCOUNT_TYPES,
+  ASSET_CLASSES,
+  PAYMENT_METHODS,
+  EXPENSE_PATCH_FIELDS,
+  HOLDING_PATCH_FIELDS,
   type CreatePortfolioAction,
+  type Action,
   type ActionStore,
+  type ActionValidation,
+  type AccountType,
+  type ExpensePatchField,
+  type HoldingPatchField,
 } from './actions';

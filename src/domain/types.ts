@@ -136,5 +136,8 @@ export interface QuoteSnapshot {
   price: number;
   currency: string;
   asOf: number;
-  source: 'coingecko' | 'yahoo' | 'manual' | 'cache';
+  source: 'coingecko' | 'yahoo' | 'manual' | 'cache' | 'failed';
+  /** Human-readable reason when the quote is a fallback or a failure
+ *  (e.g. "live fetch timed out — using stored price", "unknown symbol"). */
+  note?: string;
 }

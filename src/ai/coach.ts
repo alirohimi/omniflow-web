@@ -35,6 +35,7 @@ import {
   ACTION_CONTRACT,
   parseAction,
   stripActionMarker,
+  type Action,
   type CreatePortfolioAction,
 } from './actions';
 
@@ -66,6 +67,14 @@ export interface CoachBrief {
   projectedMonthBase: number;
   topCategory: { name: string; pct: number } | null;
   openAccounts: string[];
+  /**
+   * Ids the LLM may reference in edit/delete/patch actions. Grounded in the
+   * real ledger (most recent first) so a proposed [ACTION:] target always
+   * exists — the rule tier never emits actions, only the LLM tier does, and
+   * it is told to use these exact ids and never invent one.
+   */
+  recentExpenses: { id: string; merchant: string; category: string; amountBase: number; when: string }[];
+  openHoldings: { id: string; symbol: string; units: number; assetClass: string; currency: string }[];
 }
 
 const round = (n: number, d = 0): number => {
@@ -129,6 +138,24 @@ export function buildBrief(ctx: CoachContext): CoachBrief {
       ? { name: topCat[0], pct: round((topCat[1] / catTotal) * 100, 1) }
       : null,
     openAccounts: accounts.map((a) => a.platformName),
+    // Id lists for grounded edit/delete/patch actions (most recent first).
+    recentExpenses: [...expenses]
+      .sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0))
+      .slice(0, 10)
+      .map((e) => ({
+        id: e.id,
+        merchant: e.merchant ?? '',
+        category: e.category,
+        amountBase: round(e.baseAmount, 2),
+        when: e.timestamp ? new Date(e.timestamp).toISOString().slice(0, 10) : '',
+      })),
+    openHoldings: holdings.map((h) => ({
+      id: h.id,
+      symbol: h.symbol,
+      units: h.units,
+      assetClass: h.assetClass,
+      currency: h.holdingCurrency,
+    })),
   };
 }
 
@@ -276,10 +303,12 @@ export function coachFallback(
 export interface CoachAnswer {
   text: string;
   source: 'llm' | 'rules' | 'system';
-  /** A validated create_portfolio proposal the user must confirm (Apply).
+  /** A validated action proposal the user must confirm (Apply). Any of the
+   *  5 verbs (add/edit/delete expense, holding patch, new portfolio).
    *  Present only on the LLM tier, only when the LLM emitted a well-formed
-   *  [ACTION:] marker; the rule tier can never produce one. */
-  proposedAction?: CreatePortfolioAction;
+   *  [ACTION:] marker that parsed + validated; the rule tier can never
+   *  produce one. */
+  proposedAction?: Action;
 }
 
 /** Ask the coach. `llm` may be null (no key) -> pure rule engine. A
