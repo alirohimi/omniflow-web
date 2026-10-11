@@ -57,6 +57,11 @@ export function SettingsView() {
   const [lockModel, setLockModel] = useState('');
   const [lockProvider, setLockProvider] = useState<LLMProvider>('none');
   const [adminMsg, setAdminMsg] = useState<string | null>(null);
+  // Platform-default LLM (0003 migration) — single row, admin-managed.
+  const [defProvider, setDefProvider] = useState<LLMProvider>(store.defaultLlm?.provider ?? 'none');
+  const [defKey, setDefKey] = useState('');
+  const [defModel, setDefModel] = useState('');
+  const [defBusy, setDefBusy] = useState(false);
 
   // Effective admin-assigned policy for the signed-in user. When present, the
   // BYOK section above is read-only and the key/model come from the admin,
@@ -123,6 +128,44 @@ export function SettingsView() {
     const ok = await store.adminClearLlm(member.user_id);
     setLockBusy(false);
     setAdminMsg(ok ? `${member.display_name || member.email}: LLM policy cleared.` : 'Could not update.');
+    if (ok) void refreshAdmin();
+  };
+
+  const saveDefaultLlm = async () => {
+    setDefBusy(true);
+    setAdminMsg(null);
+    const k = defKey.trim();
+    if (defProvider === 'none') {
+      const ok = await store.adminSetLlmDefault('none', '', '', '');
+      setDefBusy(false);
+      if (ok) {
+        setAdminMsg('Platform default cleared - users fall back to their own BYOK key or on-device rules.');
+        void refreshAdmin();
+      } else setAdminMsg('Could not update - you may not be an admin, or the 0003 migration has not been applied yet.');
+      return;
+    }
+    if (!k) {
+      setDefBusy(false);
+      setAdminMsg('An API key is required to set the platform default.');
+      return;
+    }
+    const finger = await fingerprintSecret(k);
+    const ok = await store.adminSetLlmDefault(defProvider, k, defModel.trim(), finger);
+    setDefBusy(false);
+    if (ok) {
+      setAdminMsg(`Platform default set to ${defProvider}${defModel.trim() ? ' (' + defModel.trim() + ')' : ''}. Users without their own key will use this.`);
+      setDefKey('');
+      void refreshAdmin();
+    } else setAdminMsg('Could not update - you may not be an admin, or the 0003 migration has not been applied yet.');
+  };
+
+  const applyDefaultToMember = async (member: MemberRow) => {
+    setDefBusy(true);
+    const ok = await store.adminApplyDefault(member.user_id);
+    setDefBusy(false);
+    setAdminMsg(ok
+      ? `${member.display_name || member.email}: platform default applied as their personal policy.`
+      : 'No platform default is set yet, or the 0003 migration has not been applied.');
     if (ok) void refreshAdmin();
   };
 
@@ -449,6 +492,52 @@ export function SettingsView() {
               )}
             </div>
 
+            {/* ---- Platform-default LLM (0003) ---- */}
+            <h3 className="section-title" style={{ marginTop: 14 }}>
+              Platform default LLM
+            </h3>
+            <p className="muted small">
+              A single fallback LLM for any user who has no personal BYOK key and
+              no admin lock. It is the last tier before the free on-device rule
+              engine. Users with their own key are not affected - their BYOK key
+              always takes priority over the platform default.
+            </p>
+            <div className="list" style={{ marginBottom: 10 }}>
+              <label className="field"><span>Provider</span>
+                <select value={defProvider} onChange={(e) => setDefProvider(e.target.value as LLMProvider)}>
+                  <option value="none">None (clear default / on-device rules)</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="gemini">Gemini</option>
+                  <option value="adacode">adaCode</option>
+                </select>
+              </label>
+              {defProvider !== 'none' && (
+                <>
+                  <label className="field"><span>API key</span>
+                    <input type="password" value={defKey} onChange={(e) => setDefKey(e.target.value)} placeholder="sk-…" autoComplete="off" />
+                  </label>
+                  <label className="field"><span>Model (optional)</span>
+                    <input value={defModel} onChange={(e) => setDefModel(e.target.value)} placeholder="e.g. adacode-3.0-flash" />
+                  </label>
+                </>
+              )}
+              <div className="row">
+                <button
+                  className="btn sm"
+                  disabled={defBusy || (defProvider !== 'none' && !defKey.trim())}
+                  onClick={() => void saveDefaultLlm()}
+                >
+                  {defBusy ? 'Saving…' : defProvider === 'none' ? 'Clear platform default' : 'Save platform default'}
+                </button>
+              </div>
+            </div>
+            <p className="muted small">
+              Currently: {store.defaultLlm && store.defaultLlm.provider !== 'none'
+                ? store.defaultLlm.provider + (store.defaultLlm.model ? ' (' + store.defaultLlm.model + ')' : '') + ' · key …' + store.defaultLlm.key_finger
+                : 'no platform default - users use their own key or on-device rules'}
+            </p>
+
             {/* ---- Member directory ---- */}
             <div className="list">
               <div className="row" style={{ fontWeight: 600 }}>
@@ -487,6 +576,7 @@ export function SettingsView() {
                         {lockBusy ? 'Saving…' : 'Apply'}
                       </button>
                       <button className="btn ghost sm" onClick={() => void unlockUser(m)}>Clear</button>
+                      <button className="btn ghost sm" disabled={defBusy} onClick={() => void applyDefaultToMember(m)}>Use default</button>
                     </div>
                   </div>
                 );

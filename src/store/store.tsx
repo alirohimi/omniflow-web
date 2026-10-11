@@ -41,6 +41,7 @@ import type {
 import { emptyVault, healVault, withoutUndefined } from '../domain/seed';
 import { encryptVault, decryptVault, fingerprintSecret, type VaultCipher } from '../security/vault';
 import { LLMConfig } from '../ai/categorize';
+import { resolveLlmConfig } from '../ai/resolveLlm';
 import { useAuthStore } from '../auth/AuthProvider';
 import { fetchCloudVaultStrict, saveCloudVault, deleteCloudVault, flushVaultKeepalive } from '../services/cloudVault';
 import {
@@ -59,6 +60,10 @@ import {
   revokeAdmin,
   setLlmPolicy as adminSetLlmPolicy,
   clearLlmPolicy as adminClearLlmPolicy,
+  getDefaultLlm,
+  setDefaultLlm as adminSetDefaultLlm,
+  applyDefaultLlmToUser as adminApplyDefaultLlm,
+  type DefaultLlmRow,
   wipeMemberVault,
 } from '../services/admin';
 
@@ -187,6 +192,17 @@ export interface VaultStore {
   adminIds: () => Promise<string[]>;
   /** Admin-only: per-member LLM policy summary (fingerprint, never the raw key). */
   adminPolicies: () => Promise<import('../services/admin').PolicySummary[]>;
+  /** The platform-default LLM row (0003), when an admin has set one. */
+  defaultLlm: import('../services/admin').DefaultLlmRow | undefined;
+  /** Admin-only: set/replace the platform-default LLM (single row). */
+  adminSetLlmDefault: (
+    provider: LLMProvider,
+    apiKey: string,
+    model: string,
+    keyFinger: string,
+  ) => Promise<boolean>;
+  /** Admin-only: apply the platform default to one member's personal policy row. */
+  adminApplyDefault: (targetUserId: string) => Promise<boolean>;
 
   // Coach (conversational advisor) — persisted encrypted with the vault.
   coachLog: CoachMessage[];
@@ -230,6 +246,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   // ---- every read/write is RLS-gated server-side, see services/admin.ts) ----
   const [isAdminUser, setIsAdminUser] = useState(false);
   const [llmPolicy, setLlmPolicy] = useState<LlmPolicyRow | undefined>(undefined);
+  const [defaultLlm, setDefaultLlm] = useState<DefaultLlmRow | undefined>(undefined);
   const passRef = useRef<string>(''); // holds passphrase in-memory only
   const cipherRef = useRef<VaultCipher | null>(null); // last encrypted blob
   const chainRef = useRef<Promise<void>>(Promise.resolve());
@@ -243,16 +260,19 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     if (!adminUserKey) {
       setIsAdminUser(false);
       setLlmPolicy(undefined);
+      setDefaultLlm(undefined);
       return;
     }
     (async () => {
-      const [admin, policy] = await Promise.all([
+      const [admin, policy, def] = await Promise.all([
         isAdmin(adminUserKey),
         getMyLlmPolicy(adminUserKey),
+        getDefaultLlm(adminUserKey),
       ]);
       if (!alive) return;
       setIsAdminUser(admin);
       setLlmPolicy(policy);
+      setDefaultLlm(def);
     })();
     return () => {
       alive = false;
@@ -875,12 +895,14 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
   const adminRefresh = useCallback(async () => {
     if (!adminUserKey) return;
-    const [admin, policy] = await Promise.all([
+    const [admin, policy, def] = await Promise.all([
       isAdmin(adminUserKey),
       getMyLlmPolicy(adminUserKey),
+      getDefaultLlm(adminUserKey),
     ]);
     setIsAdminUser(admin);
     setLlmPolicy(policy);
+    setDefaultLlm(def);
   }, [adminUserKey]);
 
   const adminGrant = useCallback(
@@ -915,6 +937,33 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       const ok = await adminSetLlmPolicy(adminUserKey, targetUserId, provider, apiKey, model, keyFinger);
       // If the admin is editing their own row, refresh local policy too.
       if (targetUserId === adminUserKey) void adminRefresh();
+      return ok;
+    },
+    [adminUserKey, adminRefresh],
+  );
+
+  const adminSetLlmDefault = useCallback(
+    async (
+      provider: LLMProvider,
+      apiKey: string,
+      model: string,
+      keyFinger: string,
+    ): Promise<boolean> => {
+      if (!adminUserKey) return false;
+      const ok = await adminSetDefaultLlm(adminUserKey, provider, apiKey, model, keyFinger);
+      if (ok) void adminRefresh();
+      return ok;
+    },
+    [adminUserKey, adminRefresh],
+  );
+
+  const adminApplyDefault = useCallback(
+    async (targetUserId: string): Promise<boolean> => {
+      if (!adminUserKey) return false;
+      const def = await getDefaultLlm(adminUserKey);
+      if (!def || def.provider === 'none' || !def.api_key) return false;
+      const ok = await adminApplyDefaultLlm(adminUserKey, targetUserId, def);
+      if (ok) void adminRefresh();
       return ok;
     },
     [adminUserKey, adminRefresh],
@@ -978,30 +1027,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   }, [persist]);
 
   const llmConfig = useMemo<LLMConfig | null>(() => {
-    // Admin-issued LLM policy (RLS row) OVERRIDES the local BYOK choice:
-    // that is the "lock the model" feature. An admin can pin a user to a
-    // specific provider/key/model, or to 'none' (force on-device rules).
-    // When no policy row exists, the user's own vault settings apply.
-    if (llmPolicy && llmPolicy.provider !== 'none' && llmPolicy.api_key) {
-      return {
-        provider: llmPolicy.provider,
-        apiKey: llmPolicy.api_key,
-        model: llmPolicy.model?.trim() || undefined,
-      };
-    }
-    if (!vault) return null;
-    // Explicit 'none' policy (or any policy without a key) falls through to
-    // local settings only when no policy row exists at all; an explicit
-    // 'none' policy with no key means the admin forced on-device rules.
-    if (llmPolicy) return null;
-    if (vault.prefs.llmProvider === 'none' || !vault.llmKey) return null;
-    const model = vault.prefs.llmModel?.trim();
-    return {
-      provider: vault.prefs.llmProvider,
-      apiKey: vault.llmKey,
-      model: model || undefined,
-    };
-  }, [vault, llmPolicy]);
+    // Four-tier resolution: admin lock > user BYOK > platform default >
+    // free on-device rules. See src/ai/resolveLlm.ts. No per-call fetch;
+    // all three sources are already state (loaded on mount / admin change).
+    return resolveLlmConfig({ vault, llmPolicy, defaultLlm });
+  }, [vault, llmPolicy, defaultLlm]);
 
   const store: VaultStore = {
     status,
@@ -1042,6 +1072,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     adminWipeVault,
     adminIds,
     adminPolicies,
+    defaultLlm,
+    adminSetLlmDefault,
+    adminApplyDefault,
     coachLog: vault?.coachLog ?? [],
     pushCoachMessage,
     clearCoachLog,

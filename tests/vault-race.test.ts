@@ -147,6 +147,9 @@ vi.mock('../src/services/admin', () => ({
   revokeAdmin: async () => false,
   setLlmPolicy: async () => false,
   clearLlmPolicy: async () => false,
+  getDefaultLlm: async () => undefined,
+  setDefaultLlm: async () => false,
+  applyDefaultLlmToUser: async () => true,
   wipeMemberVault: async () => false,
 }));
 
