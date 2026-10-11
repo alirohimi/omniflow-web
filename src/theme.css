@@ -182,6 +182,45 @@ h1, h2, h3 { font-family: var(--font-display); }
 .msg.coach .bubble { background: var(--card); border: 1px solid var(--line); border-bottom-left-radius: 5px; }
 .bubble.thinking { color: var(--muted); font-style: italic; }
 .msg-meta { display: flex; gap: 8px; font-size: 10.5px; color: var(--faint); padding: 0 4px; }
+/* ---------- Rendered markdown inside bubbles ---------- */
+/* Bubbles render compact markdown (coach LLM tier). Tight, chat-native:
+   lists hug their paragraph, headings are heavy-but-same-size, code stays
+   monospace chips, and a lone <p> adds zero vertical padding. */
+.msg-body .md * + * { margin-top: 6px; }
+.msg-body .md p { margin: 0; }
+.msg-body .md p:only-child { margin: 0; }
+.msg-body .md-h {
+  margin: 0; font-size: 13.5px; font-weight: 700; color: var(--text);
+  text-transform: uppercase; letter-spacing: .4px; font-family: var(--font-display);
+}
+.msg-body .md-list, .msg-body .md-list ul, .msg-body .md-list ol {
+  margin: 2px 0 0; padding-left: 18px;
+}
+.msg-body .md-list ul ul, .msg-body .md-list ol ul { margin: 4px 0; }
+.msg-body .md-list li { margin: 3px 0; padding: 0; }
+.msg-body .md-list li::marker { color: var(--faint); }
+.msg-body .md blockquote {
+  margin: 4px 0; padding: 4px 10px;
+  border-left: 2px solid var(--accent); background: var(--accent-soft);
+  border-radius: 6px; color: var(--muted);
+}
+.msg-body .md code {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12.5px; background: var(--card-2);
+  border: 1px solid var(--line); border-radius: 5px;
+  padding: 1px 5px;
+}
+.msg.user .md code { background: rgba(255, 255, 255, 0.16); border-color: rgba(255, 255, 255, 0.18); }
+.msg-body .md pre {
+  margin: 6px 0; padding: 10px 12px;
+  background: var(--bg-2); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); overflow-x: auto;
+}
+.msg-body .md pre code { background: none; border: none; padding: 0; font-size: 12.5px; }
+.msg-body .md strong { color: var(--text); }
+.msg.user .md strong { color: #fff; }
+/* User bubbles: compact so quoted/pasted text stays readable */
+.msg.user .bubble { white-space: pre-wrap; }
 
 .coach-composer {
   display: flex; flex-direction: column; gap: 8px;
@@ -586,3 +625,15 @@ body { overflow-x: hidden; }
 .ai-summary-card { border-left: 3px solid var(--accent); }
 .ai-summary-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
 .ai-summary-text { margin: 0; font-size: 13.5px; line-height: 1.65; color: var(--text); }
+/* Rendered markdown inside the dashboard summary card — same compact rules
+   as chat bubbles, scoped to this card. */
+.ai-summary-text .md * + * { margin-top: 5px; }
+.ai-summary-text .md p { margin: 0; }
+.ai-summary-text .md-h { font-family: var(--font-display); font-size: 12.5px; font-weight: 700; letter-spacing: .4px; }
+.ai-summary-text .md-list ul, .ai-summary-text .md-list ol { margin: 3px 0; padding-left: 18px; }
+.ai-summary-text .md-list li { margin: 2px 0; }
+.ai-summary-text .md-list li::marker { color: var(--faint); }
+.ai-summary-text .md blockquote { margin: 4px 0; padding: 3px 10px; border-left: 2px solid var(--accent); background: var(--accent-soft); border-radius: 6px; }
+.ai-summary-text .md code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12.5px; background: var(--card-2); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
+.ai-summary-text .md pre { margin: 6px 0; padding: 10px 12px; background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius-sm); overflow-x: auto; }
+.ai-summary-text .md pre code { background: none; border: none; padding: 0; }

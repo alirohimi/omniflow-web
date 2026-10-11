@@ -20,6 +20,7 @@
 
 import type {
   Expense,
+  Category,
   InvestmentAccount,
   InvestmentHolding,
   QuoteSnapshot,
@@ -48,6 +49,11 @@ export interface CoachContext {
   quotes: Record<string, QuoteSnapshot>;
   prefs: UserPreferences;
   portfolio: PortfolioSummary | null;
+  /** The user's category list — the only names `add_expense` / `edit_expense`
+   *  may use in a proposed action. Threaded into `buildBrief` (so the LLM is
+   *  told the exact valid set) and into `parseAction` (so proposals are
+   *  validated against the real list, not an empty one). */
+  categories: Category[];
 }
 
 /** Derived, LLM-safe brief. This — and ONLY this — is what a BYOK call may
@@ -75,6 +81,9 @@ export interface CoachBrief {
    */
   recentExpenses: { id: string; merchant: string; category: string; amountBase: number; when: string }[];
   openHoldings: { id: string; symbol: string; units: number; assetClass: string; currency: string }[];
+  /** Exact category names available to the user — the only valid values for
+   *  `category` in add_expense / edit_expense actions. */
+  categories: string[];
 }
 
 const round = (n: number, d = 0): number => {
@@ -84,7 +93,7 @@ const round = (n: number, d = 0): number => {
 
 /** Build the compact, LLM-safe brief from the full context. */
 export function buildBrief(ctx: CoachContext): CoachBrief {
-  const { prefs, portfolio, holdings, quotes, expenses, accounts } = ctx;
+  const { prefs, portfolio, holdings, quotes, expenses, accounts, categories } = ctx;
   const sym = currencyInfo(prefs.baseCurrency);
   void sym;
 
@@ -161,6 +170,10 @@ export function buildBrief(ctx: CoachContext): CoachBrief {
       assetClass: h.assetClass,
       currency: h.holdingCurrency,
     })),
+    // The exact valid category names — the LLM picks from this set for any
+    // add_expense / edit_expense it proposes, and parseAction validates
+    // against the same list (threaded in by coachAsk).
+    categories: categories.map((c) => c.name),
   };
 }
 
@@ -174,6 +187,7 @@ export function coachSystemPrompt(brief: CoachBrief): string {
     'Rules:',
     '- Ground every answer ONLY in the user data below. Never invent prices, returns, or holdings that are not in it.',
     '- Short. 1-4 tight paragraphs or a short list. Concrete numbers from the data, not platitudes.',
+    '- Formatting: compact markdown only — bold (**...**) the key numbers, use "-" dash bullets for comparisons or allocations. Never use # headers, tables, code blocks, [links], or emoji. Max 140 words.',
     `- Money always in ${brief.baseCurrency}, the user's base currency.`,
     '- When they ask what to buy, give process (criteria, position sizing, when to act), not a single-stock call.',
     '- Flag concentrated positions, heavy crypto, and FX exposure when the data shows them.',
@@ -342,19 +356,35 @@ export async function coachAsk(
       const user = tail ? `${tail}\nUser: ${question}` : question;
       const raw = await transport(llm, sys, user, images);
       const clean = stripActionMarker(raw.trim());
-      if (clean.length > 0) {
-        const parsed = parseAction(raw);
+      // Validate against the user's REAL category list (ctx.categories).
+      // Threading it here — not defaulting to [] — is what lets
+      // add_expense / edit_expense proposals pass category validation;
+      // without it every expense action was silently rejected and the
+      // confirm card never appeared.
+      const parsed = parseAction(raw, ctx.categories);
+      if (parsed.ok && parsed.action) {
         // The visible text is marker-free; the action (if any) is surfaced
-        // separately for the confirm card. An unparseable marker is still
-        // returned as text (with the marker stripped) so the user is not
-        // silently told something is pending when nothing is.
+        // separately for the confirm card.
+        return { text: clean, source: 'llm', degraded: false, proposedAction: parsed.action };
+      }
+      if (clean.length === 0) {
+        // The reply was ONLY an action marker and it failed validation.
+        // Say so in plain words (with the reason, which names the valid
+        // values) instead of silently falling through to a rule-engine
+        // answer that would pretend the request was analysis.
         return {
-          text: clean,
+          text: `I could not apply that — ${parsed.reason ?? 'the proposed change was invalid'}. Tell me what to adjust and I will re-propose it.`,
           source: 'llm',
           degraded: false,
-          proposedAction: parsed.ok ? parsed.action : undefined,
         };
       }
+      // The reply contained a marker we could not accept, alongside real
+      // text. Keep the text (marker stripped) but say the proposal was not
+      // accepted, so the user is not told something is pending when it is not.
+      const why = parsed.reason && parsed.reason !== 'No [ACTION:] marker found.'
+        ? ` The change I proposed was not accepted (${parsed.reason}).`
+        : '';
+      return { text: clean + why, source: 'llm', degraded: false };
     } catch (e) {
       // Fall through to rules — a failed BYOK call must not kill the chat —
       // but keep the provider's reason so the UI can explain the fallback.

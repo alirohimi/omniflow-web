@@ -13,6 +13,7 @@ import { useLiveData } from '../hooks/useLiveData';
 import { coachAsk, applyAction as applyAiAction, type Action, type ActionStore } from '../ai';
 import type { CoachContext } from '../ai/coach';
 import { ICoach, IClose, IImage } from '../icons';
+import Markdown from '../components/Markdown';
 import { useToast } from '../components/Toast';
 import { compressImageToDataUrl } from '../lib/image';
 
@@ -89,8 +90,11 @@ export function CoachView() {
       quotes: live.quotes,
       prefs: vault.prefs,
       portfolio: live.portfolio,
+      // The user's category list — threaded to parseAction so proposed
+      // add_expense / edit_expense actions validate against real names.
+      categories: store.categories,
     };
-  }, [vault, live.quotes, live.portfolio]);
+  }, [vault, live.quotes, live.portfolio, store.categories]);
 
   // Keep the newest message in view as the thread grows.
   useEffect(() => {
@@ -250,7 +254,11 @@ export function CoachView() {
           <div key={m.id} className={`msg ${m.role}`}>
             <div className="msg-body">
               {m.image ? <img className="coach-msg-img" src={m.image} alt="Attached" /> : null}
-              {m.text ? <div className="bubble">{m.text}</div> : null}
+              {m.text ? (
+                <div className="bubble">
+                  {m.role === 'coach' ? <Markdown text={m.text} className="md" /> : m.text}
+                </div>
+              ) : null}
               <div className="msg-meta">
                 {m.role === 'coach' && m.source ? (
                   <span>{BADGE[m.source] ?? m.source}</span>

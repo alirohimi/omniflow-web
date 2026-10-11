@@ -40,6 +40,10 @@ export async function summarizeDashboard(
     quotes: input.quotes,
     prefs: input.prefs,
     portfolio,
+    // The dashboard narrator never proposes actions (no [ACTION:] markers,
+    // no parseAction), so it validates no category names — an empty list is
+    // correct here. The Coach tab threads the user's real list instead.
+    categories: [],
   };
   const brief = buildBrief(ctx);
   const rules = runRules(input);

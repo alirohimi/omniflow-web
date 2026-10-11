@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest';
 import { buildBrief, coachSystemPrompt, coachFallback, coachAsk } from '../src/ai/coach';
 import type { CoachContext } from '../src/ai/coach';
 import type { LLMConfig } from '../src/ai/categorize';
-import type { CoachMessage } from '../src/domain/types';
+import type { CoachMessage, Category } from '../src/domain/types';
 
 const MYR = 'MYR';
 
@@ -20,6 +20,11 @@ function ctx(over: Partial<CoachContext> = {}): CoachContext {
     quotes: {},
     prefs: { baseCurrency: MYR, displayName: '', llmProvider: 'none', llmKeyFinger: '', autoCategorize: true, advisorRules: false },
     portfolio: null,
+    categories: [
+      { id: 'c-food', name: 'Food', icon: '🍜' },
+      { id: 'c-transport', name: 'Transport', icon: '🚌' },
+      { id: 'c-other', name: 'Other', icon: '💠' },
+    ] as Category[],
     ...over,
   };
 }
@@ -170,5 +175,45 @@ describe('coach orchestration', () => {
   it('rules tier without images has no image note', () => {
     const fb = coachFallback('hello', buildBrief(ctx()));
     expect(fb.text).not.toMatch(/read images/i);
+  });
+
+  it('add_expense marker validates against the real category list (regression)', async () => {
+    // Regression: parseAction used to run with an EMPTY category list, so
+    // every add_expense proposal was rejected and the confirm card never
+    // appeared. The transport emits a well-formed marker using a REAL
+    // category from ctx.categories — it must surface as proposedAction.
+    const marker = `[ACTION:{"action":"add_expense","amount":12.5,"currency":"USD","category":"Food","merchant":"Lau Pa Sat","paymentMethod":"card","date":"now"}]`;
+    const fake = async (): Promise<string> => `Logged it. ${marker}`;
+    const a = await coachAsk('log 12.5 USD at Lau Pa Sat, food', ctx(), llm, [], [], fake);
+    expect(a.source).toBe('llm');
+    expect(a.degraded).toBe(false);
+    expect(a.proposedAction).toBeTruthy();
+    expect(a.proposedAction!.action).toBe('add_expense');
+    expect((a.proposedAction as { category?: string }).category).toBe('Food');
+    // The visible text is marker-free.
+    expect(a.text).not.toContain('[ACTION:');
+  });
+
+  it('add_expense with an unknown category is rejected with a reason, not silently dropped', async () => {
+    const marker = `[ACTION:{"action":"add_expense","amount":10,"currency":"USD","category":"SpaceTravel","merchant":"X","paymentMethod":"card","date":"now"}]`;
+    const fake = async (): Promise<string> => `Sure. ${marker}`;
+    const a = await coachAsk('log something', ctx(), llm, [], [], fake);
+    expect(a.proposedAction).toBeUndefined();
+    // The rejection reason (with the valid category list) stays visible
+    // in the answer text — the user learns what to fix. The transport
+    // itself succeeded, so this is not a "degraded" (rule-fallback) answer.
+    expect(a.text).toMatch(/not accepted/i);
+    expect(a.text).toMatch(/Unknown category: SpaceTravel/i);
+    expect(a.text).toMatch(/Use one of: Food, Transport, Other/i);
+    expect(a.degraded).toBe(false);
+    expect(a.source).toBe('llm');
+  });
+
+  it('the LLM system prompt carries the exact category names to pick from', () => {
+    const c = ctx();
+    const p = coachSystemPrompt(buildBrief(c));
+    expect(p).toContain('"categories"');
+    expect(p).toContain('Food');
+    expect(p).toContain('Transport');
   });
 });

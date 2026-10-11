@@ -10,6 +10,7 @@ import { useLiveData } from '../hooks/useLiveData';
 import { currencyInfo, formatMoney } from '../domain/enums';
 import { runRules, spendOverLastDays, summarizeDashboard, type DashboardSummary } from '../ai';
 import { IPlus, IRefresh, IChevron } from '../icons';
+import Markdown from '../components/Markdown';
 
 type Tab = 'dashboard' | 'expenses' | 'investments' | 'settings';
 
@@ -124,7 +125,9 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
             </span>
             {aiSummary.degraded && <span className="muted small">degraded - key call failed</span>}
           </div>
-          <p className="ai-summary-text">{aiSummary.text}</p>
+          <p className="ai-summary-text">
+            <Markdown text={aiSummary.text} className="md" />
+          </p>
         </div>
       ) : null}
 
