@@ -82,6 +82,81 @@ export interface InvestmentHolding {
  *  Gemini is the free-tier-friendly option (AI Studio keys, $0 quota). */
 export type LLMProvider = 'none' | 'openai' | 'anthropic' | 'gemini' | 'adacode';
 
+/** Periodic cadence for budgets, recurring charges, and liability payments. */
+export type BudgetPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
+
+/** A category budget cap. `cap` is a monthly-equivalent amount in the base
+ *  currency at the time it was set; the engine converts other periods to
+ *  monthly. `rollover` carries unused cap into the next month (Copilot-style
+ *  "save for bigger purchases"). OmniFlow's first budgeting primitive. */
+export interface Budget {
+  id: string;
+  category: string;      // Category.name the cap applies to
+  cap: number;           // monthly-equivalent cap, base currency
+  period: BudgetPeriod;  // billing cadence the cap expresses
+  rollover: boolean;     // roll unused cap forward
+  createdAt: number;
+}
+
+/** A structured recurring charge (subscription / bill / rent / loan payment).
+ *  Today the advisor only DETECTS repeat merchants; this makes recurring
+ *  first-class data so a bill calendar and "upcoming bills" fall out of it. */
+export interface Recurring {
+  id: string;
+  name: string;
+  merchant: string;
+  amount: number;        // original (transaction) currency
+  currency: string;      // ISO-4217
+  baseAmount: number;    // snapshot in base currency at create/refresh time
+  fxRate: number;
+  period: BudgetPeriod;
+  nextDue: number;       // epoch ms
+  category: string;
+  active: boolean;
+}
+
+/** A liability: credit card, loan, house, car. Drives the debt-payoff plan. */
+export interface Liability {
+  id: string;
+  name: string;
+  balance: number;       // outstanding principal, base currency
+  apr: number;           // annual percentage rate, e.g. 24 = 24%
+  minPayment: number;    // minimum monthly payment, base currency
+  extraPayment?: number; // optional accelerated monthly payment
+}
+
+/** A non-investment asset: a bank account, cash, property value. Feeds net
+ *  worth alongside the investment accounts. */
+export interface ManualAsset {
+  id: string;
+  name: string;
+  value: number;         // base currency
+  kind: 'bank' | 'cash' | 'property' | 'other';
+}
+
+/** A dividend event on a holding. `reinvested` records "reinvested vs paid". */
+export interface Dividend {
+  id: string;
+  holdingId: string;     // -> InvestmentHolding.id
+  symbol: string;
+  amount: number;        // base currency
+  currency: string;
+  date: number;          // epoch ms (ex-date)
+  reinvested: boolean;
+}
+
+/** A disposal event on a holding — the tax-lot / realized-gains helper. */
+export interface Disposal {
+  id: string;
+  holdingId: string;     // -> InvestmentHolding.id
+  symbol: string;
+  units: number;
+  salePrice: number;     // per unit, in the holding's currency
+  currency: string;
+  costBasisPerUnit: number; // average entry price at disposal
+  date: number;
+}
+
 /** App-wide preferences. */
 export interface UserPreferences {
   baseCurrency: string; // default 'MYR'
@@ -92,6 +167,16 @@ export interface UserPreferences {
   llmModel?: string;
   autoCategorize: boolean;
   advisorRules: boolean;
+  /** PWA/localhost notification permission the user granted for bill
+   *  reminders + subscription nudges. 'granted' | 'denied' | 'default'. */
+  notifyPermission?: NotificationPermission | 'unsupported';
+  /** Target portfolio allocation (assetClass -> weight, weights may sum to
+   *  anything; the rebalance engine works with relative proportions). */
+  targetAllocation?: Record<string, number>;
+  /** When true, the app arms a PWA notification for recurring bills that
+   *  fall due within `billNoticeWindowDays`. */
+  billReminders: boolean;
+  billNoticeWindowDays?: number;
 }
 
 /** The encrypted-at-rest shape stored in the database. */
@@ -110,6 +195,20 @@ export interface VaultBlob {
   // Coach conversation, persisted so a reload keeps the thread. Old
   // encrypted blobs may lack it — readers normalize with ?? [].
   coachLog?: CoachMessage[];
+  // ---- Extended entities (gap-report P0/P1). All optional so old encrypted
+  // blobs keep decrypting; readers normalize with ?? []. ----
+  /** Category budget caps (P0 #4). */
+  budgets?: Budget[];
+  /** Structured recurring charges / bills (P0 #5). */
+  recurring?: Recurring[];
+  /** Liabilities for the debt-payoff plan (P0 #7). */
+  liabilities?: Liability[];
+  /** Non-investment assets that feed net worth (P0 #6). */
+  assets?: ManualAsset[];
+  /** Dividend events (P0 #9). */
+  dividends?: Dividend[];
+  /** Disposal events for realized gains / cost basis (P0 #10). */
+  disposals?: Disposal[];
 }
 
 /** One coach chat turn, persisted (encrypted) with the vault. Compact by

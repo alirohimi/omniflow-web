@@ -18,7 +18,7 @@ function ctx(over: Partial<CoachContext> = {}): CoachContext {
     accounts: [],
     holdings: [],
     quotes: {},
-    prefs: { baseCurrency: MYR, displayName: '', llmProvider: 'none', llmKeyFinger: '', autoCategorize: true, advisorRules: false },
+    prefs: { baseCurrency: MYR, displayName: '', llmProvider: 'none', llmKeyFinger: '', autoCategorize: true, advisorRules: false, billReminders: false },
     portfolio: null,
     categories: [
       { id: 'c-food', name: 'Food', icon: '🍜' },

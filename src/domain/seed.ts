@@ -1,9 +1,11 @@
 import type {
+  BudgetPeriod,
   Category,
+  ManualAsset,
   UserPreferences,
   VaultBlob,
 } from './types';
-import { DEFAULT_PREFS, CATEGORIES } from './enums';
+import { DEFAULT_PREFS, CATEGORIES, BUDGET_PERIODS, ASSET_KINDS } from './enums';
 
 /** Fresh, empty vault (used on first launch before any data is entered). */
 export function emptyVault(prefs?: Partial<UserPreferences>): VaultBlob {
@@ -18,6 +20,12 @@ export function emptyVault(prefs?: Partial<UserPreferences>): VaultBlob {
     holdings: [],
     prefs: { ...DEFAULT_PREFS, ...prefs },
     llmKey: '',
+    budgets: [],
+    recurring: [],
+    liabilities: [],
+    assets: [],
+    dividends: [],
+    disposals: [],
   };
 }
 
@@ -106,6 +114,98 @@ export function healVault(blob: VaultBlob): { blob: VaultBlob; changed: boolean 
   if (!Array.isArray(blob.categories)) blob.categories = [];
   if (typeof blob.llmKey !== 'string') blob.llmKey = '';
   if (!blob.prefs) blob.prefs = { ...DEFAULT_PREFS };
+  // New prefs fields: prefill required ones (billReminders) + safe optionals
+  // (billNoticeWindowDays) on old blobs so the Insights + notifications code
+  // never sees undefined where it expects a boolean/number.
+  if (typeof blob.prefs.billReminders !== 'boolean') blob.prefs.billReminders = false;
+  if (typeof blob.prefs.billNoticeWindowDays !== 'number') blob.prefs.billNoticeWindowDays = DEFAULT_PREFS.billNoticeWindowDays ?? 3;
+  // New entity collections: safe empty arrays so old encrypted blobs keep
+  // working and no reader has to ?? [] everywhere.
+  if (!Array.isArray(blob.budgets)) blob.budgets = [];
+  if (!Array.isArray(blob.recurring)) blob.recurring = [];
+  if (!Array.isArray(blob.liabilities)) blob.liabilities = [];
+  if (!Array.isArray(blob.assets)) blob.assets = [];
+  if (!Array.isArray(blob.dividends)) blob.dividends = [];
+  if (!Array.isArray(blob.disposals)) blob.disposals = [];
+  // Per-row shape guards (best-effort; never drop user data).
+  blob.recurring = blob.recurring.map((r) =>
+    r && typeof r === 'object'
+      ? {
+          ...r,
+          name: typeof r.name === 'string' ? r.name : '',
+          merchant: typeof r.merchant === 'string' ? r.merchant : '',
+          amount: num(r.amount, 0),
+          currency: typeof r.currency === 'string' ? r.currency : '',
+          baseAmount: num(r.baseAmount, num(r.amount, 0)),
+          fxRate: r.fxRate === undefined ? 1 : num(r.fxRate, 1),
+          period: BUDGET_PERIODS.includes((r as { period: BudgetPeriod }).period) ? (r as { period: BudgetPeriod }).period : 'monthly',
+          nextDue: num(r.nextDue, Date.now()),
+          category: typeof r.category === 'string' ? r.category : '',
+          active: typeof r.active === 'boolean' ? r.active : true,
+        }
+      : r,
+  );
+  blob.liabilities = blob.liabilities.map((l) =>
+    l && typeof l === 'object'
+      ? {
+          ...l,
+          name: typeof l.name === 'string' ? l.name : '',
+          balance: num(l.balance, 0),
+          apr: num(l.apr, 0),
+          minPayment: num(l.minPayment, 0),
+          extraPayment: l.extraPayment === undefined ? undefined : num(l.extraPayment, 0),
+        }
+      : l,
+  );
+  blob.assets = blob.assets.map((a) =>
+    a && typeof a === 'object'
+      ? {
+          ...a,
+          name: typeof a.name === 'string' ? a.name : '',
+          value: num(a.value, 0),
+          kind: ASSET_KINDS.includes((a as { kind: ManualAsset['kind'] }).kind) ? (a as { kind: ManualAsset['kind'] }).kind : 'other',
+        }
+      : a,
+  );
+  blob.dividends = blob.dividends.map((d) =>
+    d && typeof d === 'object'
+      ? {
+          ...d,
+          holdingId: typeof d.holdingId === 'string' ? d.holdingId : '',
+          symbol: typeof d.symbol === 'string' ? d.symbol : '',
+          amount: num(d.amount, 0),
+          currency: typeof d.currency === 'string' ? d.currency : '',
+          date: num(d.date, Date.now()),
+          reinvested: typeof d.reinvested === 'boolean' ? d.reinvested : false,
+        }
+      : d,
+  );
+  blob.disposals = blob.disposals.map((d) =>
+    d && typeof d === 'object'
+      ? {
+          ...d,
+          holdingId: typeof d.holdingId === 'string' ? d.holdingId : '',
+          symbol: typeof d.symbol === 'string' ? d.symbol : '',
+          units: num(d.units, 0),
+          salePrice: num(d.salePrice, 0),
+          currency: typeof d.currency === 'string' ? d.currency : '',
+          costBasisPerUnit: num(d.costBasisPerUnit, 0),
+          date: num(d.date, Date.now()),
+        }
+      : d,
+  );
+  blob.budgets = blob.budgets.map((b) =>
+    b && typeof b === 'object'
+      ? {
+          ...b,
+          category: typeof b.category === 'string' ? b.category : '',
+          cap: num(b.cap, 0),
+          period: BUDGET_PERIODS.includes((b as { period: BudgetPeriod }).period) ? (b as { period: BudgetPeriod }).period : 'monthly',
+          rollover: typeof b.rollover === 'boolean' ? b.rollover : false,
+          createdAt: num(b.createdAt, Date.now()),
+        }
+      : b,
+  );
   if (blob.coachLog !== undefined && !Array.isArray(blob.coachLog)) delete blob.coachLog;
   return { blob, changed: JSON.stringify(blob) !== before };
 }

@@ -1,4 +1,9 @@
-import type { Category, UserPreferences } from './types';
+import type {
+  BudgetPeriod,
+  Category,
+  ManualAsset,
+  UserPreferences,
+} from './types';
 
 export const DEFAULT_PREFS: UserPreferences = {
   baseCurrency: 'MYR',
@@ -7,7 +12,13 @@ export const DEFAULT_PREFS: UserPreferences = {
   llmKeyFinger: '',
   autoCategorize: true,
   advisorRules: true,
+  billReminders: false,
+  billNoticeWindowDays: 3,
 };
+
+/** Budget / recurring / liability billing cadences. */
+export const BUDGET_PERIODS: BudgetPeriod[] = ['daily', 'weekly', 'monthly', 'yearly'];
+export const ASSET_KINDS: ManualAsset['kind'][] = ['bank', 'cash', 'property', 'other'];
 
 export const CATEGORIES: Category[] = [
   { id: 'c-food', name: 'Food & Dining', icon: '🍽' },
