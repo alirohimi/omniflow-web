@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { useVaultStore } from '../store/store';
 import { useAuthStore } from '../auth/AuthProvider';
 import { CURRENCIES } from '../domain/enums';
+import { EmergencyPanel } from './EmergencyPanel';
 import { testLLMKey } from '../ai';
 import type { LLMConfig } from '../ai/categorize';
 import type { LLMProvider } from '../domain/types';
@@ -252,6 +253,9 @@ export function SettingsView() {
           </label>
         </div>
       </div>
+
+      <h2 className="section-title">Emergency reserve</h2>
+      <EmergencyPanel />
 
       <h2 className="section-title">AI — bring-your-own key (optional)</h2>
       <div className="card">

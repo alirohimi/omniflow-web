@@ -7,8 +7,9 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
-import { currencyInfo, formatMoney } from '../domain/enums';
+import { currencyInfo, formatMoney, EMERGENCY_DEFAULT } from '../domain/enums';
 import { runRules, spendOverLastDays, summarizeDashboard, type DashboardSummary } from '../ai';
+import { computeEmergency } from '../insights';
 import { IPlus, IRefresh, IChevron } from '../icons';
 import Markdown from '../components/Markdown';
 
@@ -57,6 +58,20 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
 
   const ret = live.portfolio?.totalReturnPct ?? null;
   const pacePct = projected > 0 ? Math.min(100, (spentThisMonth / projected) * 100) : 0;
+
+  const emRes = useMemo(
+    () =>
+      computeEmergency({
+        emergency: vault.emergency ?? EMERGENCY_DEFAULT,
+        expenses: vault.expenses,
+        accounts: vault.accounts,
+        portfolio: live.portfolio,
+        fx: live.fx,
+        base,
+        now: Date.now(),
+      }),
+    [vault, live.portfolio, live.fx, base],
+  );
 
   const [aiSummary, setAiSummary] = useState<DashboardSummary | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
@@ -145,6 +160,36 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
           </div>
         </div>
         <div className="bar"><i style={{ width: `${pacePct}%` }} /></div>
+      </div>
+
+      <h2 className="section-title">Emergency reserve</h2>
+      <div className="card">
+        <div className="hero">
+          <div>
+            <div className="hero-lbl">Coverage · {base}</div>
+            <div className="hero-num">
+              {emRes.coverageMonths != null
+                ? `${emRes.coverageMonths.toFixed(1)} mo`
+                : emRes.lines.length > 0
+                  ? '—'
+                  : 'not set'}
+            </div>
+            <div className="hero-sub">
+              {formatMoney(emRes.reserve, base)} set aside
+              {emRes.target > 0 ? ` of ${formatMoney(emRes.target, base)} target` : ''}
+            </div>
+          </div>
+          <button className="btn ghost sm" onClick={() => onOpenTab('settings')}>
+            Manage <IChevron size={16} />
+          </button>
+        </div>
+        {emRes.lines.length > 0 ? (
+          <div className="bar"><i style={{ width: `${Math.min(100, Math.round(emRes.pctOfTarget))}%` }} /></div>
+        ) : (
+          <div className="small muted" style={{ marginTop: 8 }}>
+            No reserve lines yet — designate an account or record a manual amount under Settings.
+          </div>
+        )}
       </div>
 
       {advice.length > 0 && (
