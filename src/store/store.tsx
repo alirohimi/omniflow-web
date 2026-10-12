@@ -37,6 +37,12 @@ import type {
   Category,
   CoachMessage,
   LLMProvider,
+  Budget,
+  Recurring,
+  Liability,
+  ManualAsset,
+  Dividend,
+  Disposal,
 } from '../domain/types';
 import { emptyVault, healVault, withoutUndefined } from '../domain/seed';
 import { encryptVault, decryptVault, fingerprintSecret, type VaultCipher } from '../security/vault';
@@ -152,6 +158,20 @@ export interface VaultStore {
   /** Patch an existing holding (units, entry, symbol, class, currency, account). */
   updateHolding: (id: string, patch: Partial<Omit<InvestmentHolding, 'id'>>) => void;
   updateHoldingPrice: (id: string, local: number, base: number) => void;
+
+  // ---- extended entities (budgets / recurring / liabilities / assets / dividends / disposals)
+  addBudget: (input: Omit<Budget, 'id' | 'createdAt'> & { createdAt?: number }) => string;
+  deleteBudget: (id: string) => void;
+  addRecurring: (input: Omit<Recurring, 'id'>) => string;
+  deleteRecurring: (id: string) => void;
+  addLiability: (input: Omit<Liability, 'id'>) => string;
+  deleteLiability: (id: string) => void;
+  addAsset: (input: Omit<ManualAsset, 'id'>) => string;
+  deleteAsset: (id: string) => void;
+  addDividend: (input: Omit<Dividend, 'id'>) => string;
+  deleteDividend: (id: string) => void;
+  addDisposal: (input: Omit<Disposal, 'id'>) => string;
+  deleteDisposal: (id: string) => void;
 
   setPrefs: (patch: Partial<UserPreferences>) => void;
   setLlmKey: (
@@ -850,6 +870,83 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     [persist],
   );
 
+  // ---- extended-entity CRUD (budgets / recurring / liabilities / assets / dividends / disposals).
+  // Generic factories keep the 12 near-identical mutators DRY. Arrays are
+  // optional on old encrypted blobs, so every read normalizes with ?? [].
+
+  type EntKey = 'budgets' | 'recurring' | 'liabilities' | 'assets' | 'dividends' | 'disposals';
+  type Prefix = 'b' | 'r' | 'l' | 'a' | 'd' | 's';
+  const entId = (p: Prefix) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const setEnt = (key: EntKey, fn: (arr: unknown[]) => unknown[]) => {
+    setVault((prev) => {
+      if (!prev) return prev;
+      const arr = ((prev as unknown as Record<string, unknown[]>)[key] ?? []) as unknown[];
+      const next = { ...prev, [key]: fn(arr), updatedAt: Date.now() } as VaultBlob;
+      void persist(next);
+      return next;
+    });
+  };
+
+  const addBudget = useCallback(
+    (input: Omit<Budget, 'id' | 'createdAt'> & { createdAt?: number }): string => {
+      const id = entId('b');
+      setEnt('budgets', (arr) => [...(arr as Budget[]), { ...input, id, createdAt: input.createdAt ?? Date.now() }]);
+      return id;
+    },
+    [],
+  );
+  const deleteBudget = useCallback((id: string) => setEnt('budgets', (a) => a.filter((x) => (x as Budget).id !== id)), []);
+
+  const addRecurring = useCallback(
+    (input: Omit<Recurring, 'id'>): string => {
+      const id = entId('r');
+      setEnt('recurring', (arr) => [...(arr as Recurring[]), { ...input, id }]);
+      return id;
+    },
+    [],
+  );
+  const deleteRecurring = useCallback((id: string) => setEnt('recurring', (a) => a.filter((x) => (x as Recurring).id !== id)), []);
+
+  const addLiability = useCallback(
+    (input: Omit<Liability, 'id'>): string => {
+      const id = entId('l');
+      setEnt('liabilities', (arr) => [...(arr as Liability[]), { ...input, id }]);
+      return id;
+    },
+    [],
+  );
+  const deleteLiability = useCallback((id: string) => setEnt('liabilities', (a) => a.filter((x) => (x as Liability).id !== id)), []);
+
+  const addAsset = useCallback(
+    (input: Omit<ManualAsset, 'id'>): string => {
+      const id = entId('a');
+      setEnt('assets', (arr) => [...(arr as ManualAsset[]), { ...input, id }]);
+      return id;
+    },
+    [],
+  );
+  const deleteAsset = useCallback((id: string) => setEnt('assets', (a) => a.filter((x) => (x as ManualAsset).id !== id)), []);
+
+  const addDividend = useCallback(
+    (input: Omit<Dividend, 'id'>): string => {
+      const id = entId('d');
+      setEnt('dividends', (arr) => [...(arr as Dividend[]), { ...input, id }]);
+      return id;
+    },
+    [],
+  );
+  const deleteDividend = useCallback((id: string) => setEnt('dividends', (a) => a.filter((x) => (x as Dividend).id !== id)), []);
+
+  const addDisposal = useCallback(
+    (input: Omit<Disposal, 'id'>): string => {
+      const id = entId('s');
+      setEnt('disposals', (arr) => [...(arr as Disposal[]), { ...input, id }]);
+      return id;
+    },
+    [],
+  );
+  const deleteDisposal = useCallback((id: string) => setEnt('disposals', (a) => a.filter((x) => (x as Disposal).id !== id)), []);
+
   const setLlmKey = useCallback(
     async (
       _provider: 'none' | 'openai' | 'anthropic' | 'gemini' | 'adacode',
@@ -1056,6 +1153,18 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     deleteHolding,
     updateHolding,
     updateHoldingPrice,
+    addBudget,
+    deleteBudget,
+    addRecurring,
+    deleteRecurring,
+    addLiability,
+    deleteLiability,
+    addAsset,
+    deleteAsset,
+    addDividend,
+    deleteDividend,
+    addDisposal,
+    deleteDisposal,
     setPrefs,
     setLlmKey,
     retrySync,
