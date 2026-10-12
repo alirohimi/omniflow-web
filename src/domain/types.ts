@@ -63,6 +63,11 @@ export interface InvestmentAccount {
   accountType: 'broker' | 'robo' | 'crypto' | 'cash' | 'other';
   baseCurrencyValue: number; // last aggregated value in base currency (denormalized)
   lastUpdated: number;      // epoch ms
+  /** Optional: starting capital in base currency (deposit at the account's
+   *  inception). When set, P&L is measured against it instead of the
+   *  holdings' summed cost basis — matching what the user actually put in.
+   *  Optional so old encrypted blobs heal cleanly. */
+  initialDepositBase?: number;
 }
 
 /** A holding inside an account. */

@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { valueInBase, buildPortfolio } from '../src/ai/portfolio';
 import { fxService } from '../src/services/fx';
 import type { RatesForBase } from '../src/services/fx';
-import type { InvestmentHolding, QuoteSnapshot } from '../src/domain/types';
+import type { InvestmentAccount, InvestmentHolding, QuoteSnapshot } from '../src/domain/types';
 
 /** 1 base = rates[code] code. toBase(1, code) = 1 / rates[code]. */
 const myrFx = (usdRate: number): RatesForBase => ({
@@ -168,5 +168,70 @@ describe('buildPortfolio — offline with corrupt holdings', () => {
     expect(p.staleQuoteCount).toBe(3);
     // per-account lines are untouched with zero accounts — totals still sound
     expect(p.byAccount).toHaveLength(0);
+  });
+});
+
+describe('buildPortfolio — deposit P&L (starting-capital tracking)', () => {
+  const acc = (over: Partial<InvestmentAccount>): InvestmentAccount => ({
+    id: 'a1',
+    platformName: 'Luno',
+    accountType: 'crypto',
+    baseCurrencyValue: 0,
+    lastUpdated: 0,
+    ...over,
+  } as InvestmentAccount);
+
+  it('computes pnlBase + depositReturnPct against the recorded capital', () => {
+    const fx = myrFx(4.0);
+    const a = acc({ initialDepositBase: 4000 });
+    const h = holding({
+      accountId: 'a1',
+      symbol: 'AAPL',
+      assetClass: 'equity-us',
+      holdingCurrency: 'USD',
+      units: 5,
+      averageEntryPrice: 180,
+      currentPriceLocal: 200,
+      currentPriceBase: 800,
+    });
+    const p = buildPortfolio([a], [h], {}, 'MYR', ratesOf(fx));
+    const line = p.byAccount[0];
+    // value = 200 x 5 x 4.0 = 4000; deposit 4000 -> pnl 0
+    expect(line.valueBase).toBe(4000);
+    expect(line.depositBase).toBe(4000);
+    expect(line.pnlBase).toBe(0);
+    expect(line.depositReturnPct).toBe(0);
+  });
+
+  it('deposit beats cost basis as the P&L reference', () => {
+    const fx = myrFx(4.0);
+    const a = acc({ initialDepositBase: 3000 });
+    const h = holding({
+      accountId: 'a1',
+      symbol: 'AAPL',
+      assetClass: 'equity-us',
+      holdingCurrency: 'USD',
+      units: 5,
+      averageEntryPrice: 180, // cost = 3600 (x4 = 14400 base) but deposit is 3000
+      currentPriceLocal: 200, // value = 4000 base
+      currentPriceBase: 800,
+    });
+    const p = buildPortfolio([a], [h], {}, 'MYR', ratesOf(fx));
+    const line = p.byAccount[0];
+    expect(line.valueBase).toBe(4000);
+    expect(line.depositBase).toBe(3000);
+    expect(line.pnlBase).toBe(1000); // 4000 - 3000
+    expect(line.depositReturnPct).toBe((1000 / 3000) * 100);
+  });
+
+  it('accounts without a deposit report null P&L fields', () => {
+    const fx = myrFx(4.0);
+    const a = acc({}); // no initialDepositBase
+    const h = holding({ accountId: 'a1', currentPriceLocal: 200, currentPriceBase: 800 });
+    const p = buildPortfolio([a], [h], {}, 'MYR', ratesOf(fx));
+    const line = p.byAccount[0];
+    expect(line.depositBase).toBeNull();
+    expect(line.pnlBase).toBeNull();
+    expect(line.depositReturnPct).toBeNull();
   });
 });

@@ -32,6 +32,12 @@ export interface AccountLine {
   valueLocal: number;
   costBase: number;
   returnPct: number | null;
+  /** P&L against the user's INITIAL DEPOSIT (account.initialDepositBase) when
+   *  one is set — the real "did my money grow?" number. `pnlBase` is the
+   *  absolute change; null when no deposit is recorded. */
+  depositBase: number | null;
+  pnlBase: number | null;
+  depositReturnPct: number | null;
 }
 
 export interface PortfolioSummary {
@@ -110,7 +116,13 @@ export function buildPortfolio(
     const valueLocal = accLines.reduce((s, l) => s + l.valueLocal, 0);
     const costBase = accLines.reduce((s, l) => s + l.costBase, 0);
     const returnPct = costBase > 0 ? ((valueBase - costBase) / costBase) * 100 : null;
-    return { account: acc, lines: accLines, valueBase, valueLocal, costBase, returnPct };
+    const depositBase =
+      typeof acc.initialDepositBase === 'number' && Number.isFinite(acc.initialDepositBase) && acc.initialDepositBase > 0
+        ? acc.initialDepositBase
+        : null;
+    const pnlBase = depositBase != null ? valueBase - depositBase : null;
+    const depositReturnPct = depositBase != null ? ((valueBase - depositBase) / depositBase) * 100 : null;
+    return { account: acc, lines: accLines, valueBase, valueLocal, costBase, returnPct, depositBase, pnlBase, depositReturnPct };
   });
 
   const totalValueBase = lines.reduce((s, l) => s + l.valueBase, 0);

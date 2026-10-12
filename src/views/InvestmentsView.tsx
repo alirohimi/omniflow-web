@@ -8,10 +8,12 @@ import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
 import { useToast } from '../components/Toast';
 import { DelButton } from '../components/DelButton';
+import { EmergencyPanel } from './EmergencyPanel';
 import { fxService } from '../services';
 import { valueInBase } from '../ai/portfolio';
+import type { AccountLine } from '../ai/portfolio';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
-import { IRefresh, IPlus, IPencil, IX } from '../icons';
+import { IRefresh, IPlus, IPencil, IX, IChevron } from '../icons';
 import type { InvestmentAccount, InvestmentHolding } from '../domain/types';
 
 const ASSET_CLASSES = ['equity-us', 'equity-local', 'etf', 'crypto', 'cash', 'mmf'] as const;
@@ -35,6 +37,7 @@ export function InvestmentsView() {
   // ---- account + holding form state
   const [platform, setPlatform] = useState('');
   const [acctType, setAcctType] = useState<InvestmentAccount['accountType']>('broker');
+  const [deposit, setDeposit] = useState('');
   const [accountId, setAccountId] = useState('');
   const [symbol, setSymbol] = useState('');
   const [assetClass, setAssetClass] = useState<InvestmentHolding['assetClass']>('equity-us');
@@ -102,10 +105,53 @@ export function InvestmentsView() {
   const addAccount = () => {
     const name = platform.trim();
     if (!name) return;
-    const id = store.addAccount({ platformName: name, accountType: acctType });
+    const d = parseFloat(deposit);
+    const id = store.addAccount({
+      platformName: name,
+      accountType: acctType,
+      initialDepositBase: Number.isFinite(d) && d > 0 ? d : undefined,
+    });
     setAccountId(id);
     setPlatform('');
+    setDeposit('');
     toast(`Account "${name}" created and set as target`);
+  };
+
+  /** Per-account live lines (account id -> AccountLine) so the account rows
+   *  can show live value + P&L against the recorded deposit. */
+  const accLines = useMemo(() => {
+    const m = new Map<string, AccountLine>();
+    if (live.portfolio) for (const a of live.portfolio.byAccount) m.set(a.account.id, a);
+    return m;
+  }, [live.portfolio]);
+
+  /** Accounts already designated as emergency-reserve lines. */
+  const reservedIds = useMemo(
+    () => new Set((vault.emergency?.items ?? []).filter((i) => i.kind === 'account').map((i) => i.accountId)),
+    [vault.emergency],
+  );
+
+  const toReserve = (id: string) => {
+    const acc = vault.accounts.find((a) => a.id === id);
+    if (!acc) return;
+    store.addEmergencyItem({
+      kind: 'account',
+      name: acc.platformName,
+      currency: base,
+      accountId: id,
+      createdAt: Date.now(),
+    });
+    toast(`"${acc.platformName}" added to the emergency reserve.`);
+  };
+
+  const saveDeposit = (id: string, raw: string) => {
+    const v = raw.trim() === '' ? undefined : parseFloat(raw);
+    if (raw.trim() !== '' && (!Number.isFinite(v!) || (v as number) <= 0)) {
+      toast('Deposit must be a positive amount in ' + base + '.', 'err');
+      return;
+    }
+    store.updateAccount(id, { initialDepositBase: v });
+    toast(v ? 'Starting capital saved — P&L now measures against it.' : 'Starting capital cleared.');
   };
 
   const addHolding = async () => {
@@ -187,6 +233,23 @@ export function InvestmentsView() {
             <div className="lbl">Holdings</div>
           </div>
         </div>
+        {(() => {
+          const withDep = live.portfolio?.byAccount.filter((a) => a.depositBase != null && a.valueBase > 0) ?? [];
+          if (withDep.length === 0) return null;
+          const dep = withDep.reduce((s, a) => s + (a.depositBase ?? 0), 0);
+          const pnl = withDep.reduce((s, a) => s + (a.valueBase - (a.depositBase ?? 0)), 0);
+          const pct = dep > 0 ? (pnl / dep) * 100 : 0;
+          return (
+            <div className="row" style={{ marginTop: 10 }}>
+              <span className="small muted">
+                {'P&L on recorded capital: '}<span className={pnl >= 0 ? 'pos' : 'neg'}>{pnl >= 0 ? '+' : ''}{formatMoney(pnl, base)} ({pct >= 0 ? '+' : ''}{pct.toFixed(1)}%)</span>
+                {withDep.length < (live.portfolio?.byAccount.length ?? 0) && (
+                  <span> · {withDep.length} of {live.portfolio?.byAccount.length} accounts</span>
+                )}
+              </span>
+            </div>
+          );
+        })()}
         {live.error && <div className="small neg" style={{ marginTop: 10 }}>{live.error}</div>}
         <div className="row small muted" style={{ marginTop: 10 }}>
           <span>
@@ -214,6 +277,9 @@ export function InvestmentsView() {
               <option value="other">Other</option>
             </select>
           </label>
+          <label className="field"><span>Starting capital ({base}, optional)</span>
+            <input type="number" inputMode="decimal" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="5000" />
+          </label>
         </div>
         <button className="btn ghost sm" onClick={addAccount}><IPlus size={16} /> Create account</button>
 
@@ -222,23 +288,61 @@ export function InvestmentsView() {
             {vault.accounts.map((a) => {
               const holdings = vault.holdings.filter((h) => h.accountId === a.id).length;
               const isTarget = a.id === accountId;
+              const line = accLines.get(a.id);
+              const hasDeposit = typeof a.initialDepositBase === 'number' && a.initialDepositBase > 0;
               return (
-                <div className="item" key={a.id}>
-                  <div className="grow">
-                    <div className="title">
-                      {a.platformName}
-                      {isTarget && <span className="chip sm" style={{ marginLeft: 8 }}>target</span>}
+                <div key={a.id}>
+                  <div className="item">
+                    <div className="grow">
+                      <div className="title">
+                        {a.platformName}
+                        {isTarget && <span className="chip sm" style={{ marginLeft: 8 }}>target</span>}
+                        {reservedIds.has(a.id) && <span className="chip sm ok" style={{ marginLeft: 8 }}>in reserve</span>}
+                      </div>
+                      <div className="meta">
+                        {a.accountType} · {holdings} holding{holdings === 1 ? '' : 's'}
+                        {line && line.valueBase > 0 && (
+                          <>
+                            {' · live '}
+                            {formatMoney(line.valueBase, base)}
+                            {line.depositBase != null && (
+                              <>
+                                {' · P&L '}
+                                <span className={line.pnlBase! >= 0 ? 'pos' : 'neg'}>
+                                  {line.pnlBase! >= 0 ? '+' : ''}{formatMoney(line.pnlBase!, base)} ({line.depositReturnPct! >= 0 ? '+' : ''}{line.depositReturnPct!.toFixed(1)}%)
+                                </span>
+                              </>
+                            )}
+                          </>
+                        )}
+                      </div>
                     </div>
-                    <div className="meta">{a.accountType} · {holdings} holding{holdings === 1 ? '' : 's'}</div>
+                    <button
+                      className="btn ghost sm"
+                      onClick={() => toReserve(a.id)}
+                      disabled={reservedIds.has(a.id)}
+                      title={reservedIds.has(a.id) ? 'Already counted in the emergency reserve' : 'Count this account toward the emergency reserve'}
+                    >
+                      {reservedIds.has(a.id) ? <><IX size={14} /> In reserve</> : 'To reserve'}
+                    </button>
+                    <button
+                      className={`btn ghost sm${isTarget ? ' active' : ''}`}
+                      aria-pressed={isTarget}
+                      onClick={() => setAccountId(a.id)}
+                    >
+                      {isTarget ? 'Target set' : 'Set target'}
+                    </button>
+                    <DelButton label={`Delete ${a.platformName}`} onConfirm={() => removeAccount(a.id)} />
                   </div>
-                  <button
-                    className={`btn ghost sm${isTarget ? ' active' : ''}`}
-                    aria-pressed={isTarget}
-                    onClick={() => setAccountId(a.id)}
-                  >
-                    {isTarget ? 'Target set' : 'Set target'}
-                  </button>
-                  <DelButton label={`Delete ${a.platformName}`} onConfirm={() => removeAccount(a.id)} />
+                  <div className="row" style={{ padding: '8px 14px 10px' }}>
+                    <span className="small muted" style={{ flex: 1, minWidth: 0 }}>
+                      Starting capital: {hasDeposit ? formatMoney(a.initialDepositBase!, base) : 'not set'}
+                    </span>
+                    <DepositEdit
+                      initial={hasDeposit ? String(a.initialDepositBase) : ''}
+                      onDone={(v) => saveDeposit(a.id, v)}
+                    />
+                  </div>
                 </div>
               );
             })}
@@ -248,6 +352,9 @@ export function InvestmentsView() {
           <div className="empty">No accounts yet — create one above.</div>
         )}
       </div>
+
+      <h2 className="section-title">Emergency reserve</h2>
+      <EmergencyPanel />
 
       <h2 className="section-title" ref={addHoldFormRef}>{editingId ? 'Edit holding' : 'Add holding'}</h2>
       <div className="card">
@@ -361,5 +468,43 @@ export function InvestmentsView() {
 
       {vault.holdings.length === 0 && <div className="empty">No holdings yet. Create an account, then add a holding above.</div>}
     </>
+  );
+}
+
+/** Compact inline editor for an account's starting-capital (deposit) value.
+ *  Renders a small input + save that expands in place; keeps the accounts
+ *  list tidy without a separate modal. */
+function DepositEdit({ initial, onDone }: { initial: string; onDone: (value: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(initial);
+  const start = () => {
+    setVal(initial);
+    setEditing(true);
+  };
+  const commit = () => {
+    onDone(val);
+    setEditing(false);
+  };
+  if (!editing) {
+    return (
+      <button className="btn ghost sm" onClick={start} title="Edit starting capital">
+        <IPencil size={13} /> Edit
+      </button>
+    );
+  }
+  return (
+    <div className="row" style={{ gap: 6 }}>
+      <input
+        type="number"
+        inputMode="decimal"
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') commit(); }}
+        style={{ width: 100 }}
+        aria-label="Starting capital"
+      />
+      <button className="btn ghost sm" onClick={commit}>Save</button>
+    </div>
   );
 }

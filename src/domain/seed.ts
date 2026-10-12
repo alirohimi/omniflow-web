@@ -110,6 +110,10 @@ export function healVault(blob: VaultBlob): { blob: VaultBlob; changed: boolean 
       platformName: typeof a.platformName === 'string' ? a.platformName : '',
       baseCurrencyValue: num(a.baseCurrencyValue, 0),
       lastUpdated: num(a.lastUpdated, Date.now()),
+      initialDepositBase:
+        typeof a.initialDepositBase === 'number' && Number.isFinite(a.initialDepositBase) && a.initialDepositBase > 0
+          ? a.initialDepositBase
+          : undefined,
     };
   });
 

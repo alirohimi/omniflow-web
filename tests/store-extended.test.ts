@@ -281,6 +281,46 @@ describe('extended-entity CRUD (budgets/recurring/liabilities/assets/dividends/d
     await unmount();
   });
 
+  it('deleting an account prunes emergency lines that mirror it', async () => {
+    const { storeRef, unmount } = await unlockFreshVault('user-acc-prune');
+    const store = storeRef.current!;
+
+    await act(async () => {
+      const accId = store.addAccount({ platformName: 'Luno', accountType: 'crypto', initialDepositBase: 5000 });
+      store.addEmergencyItem({
+        kind: 'account',
+        name: 'Luno',
+        currency: 'MYR',
+        accountId: accId,
+        createdAt: Date.now(),
+      });
+      store.addEmergencyItem({
+        kind: 'manual',
+        name: 'Cash buffer',
+        currency: 'MYR',
+        amount: 1000,
+        createdAt: Date.now(),
+      });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    let v = storeRef.current!.vault!;
+    expect(v.accounts).toHaveLength(1);
+    expect(v.emergency?.items).toHaveLength(2);
+    const accId = v.accounts[0].id;
+
+    // delete the account -> its mirrored emergency line must vanish; the manual one survives.
+    await act(async () => {
+      store.deleteAccount(accId);
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    v = storeRef.current!.vault!;
+    expect(v.accounts).toHaveLength(0);
+    expect(v.emergency?.items).toHaveLength(1);
+    expect(v.emergency?.items[0].kind).toBe('manual');
+    await unmount();
+  });
+
   it('extended entities survive the encrypted cloud persist round-trip', async () => {
     const USER = 'user-ext-rt';
     const { storeRef, unmount } = await unlockFreshVault(USER);

@@ -107,6 +107,8 @@ export interface NewHoldingInput {
 export interface NewAccountInput {
   platformName: string;
   accountType: InvestmentAccount['accountType'];
+  /** Optional starting capital (deposit) in base currency. */
+  initialDepositBase?: number;
 }
 
 export interface VaultStore {
@@ -155,6 +157,8 @@ export interface VaultStore {
 
   addAccount: (input: NewAccountInput) => string;
   deleteAccount: (id: string) => void;
+  /** Patch an existing account (platformName, accountType, deposit). */
+  updateAccount: (id: string, patch: Partial<Omit<InvestmentAccount, 'id' | 'baseCurrencyValue' | 'lastUpdated'>>) => void;
   addHolding: (input: NewHoldingInput) => string;
   deleteHolding: (id: string) => void;
   /** Patch an existing holding (units, entry, symbol, class, currency, account). */
@@ -765,6 +769,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
           lastUpdated: Date.now(),
           ...input,
         };
+        if (acc.initialDepositBase != null && (!Number.isFinite(acc.initialDepositBase) || acc.initialDepositBase <= 0)) {
+          delete acc.initialDepositBase;
+        }
         const next = { ...prev, accounts: [...prev.accounts, acc], updatedAt: Date.now() };
         void persist(next);
         return next;
@@ -778,10 +785,33 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     (id: string) => {
       setVault((prev) => {
         if (!prev) return prev;
-        const next = {
+        const next: VaultBlob = {
           ...prev,
           accounts: prev.accounts.filter((a) => a.id !== id),
           holdings: prev.holdings.filter((h) => h.accountId !== id),
+          emergency: prev.emergency
+            ? { ...prev.emergency, items: prev.emergency.items.filter((it) => it.accountId !== id) }
+            : prev.emergency,
+          updatedAt: Date.now(),
+        };
+        void persist(next);
+        return next;
+      });
+    },
+    [persist],
+  );
+
+  const updateAccount = useCallback(
+    (id: string, patch: Partial<Omit<InvestmentAccount, 'id' | 'baseCurrencyValue' | 'lastUpdated'>>) => {
+      setVault((prev) => {
+        if (!prev) return prev;
+        const clean = withoutUndefined(patch);
+        if (clean.initialDepositBase != null && (!Number.isFinite(clean.initialDepositBase) || clean.initialDepositBase <= 0)) {
+          delete clean.initialDepositBase;
+        }
+        const next = {
+          ...prev,
+          accounts: prev.accounts.map((a) => (a.id === id ? { ...a, ...clean, lastUpdated: Date.now() } : a)),
           updatedAt: Date.now(),
         };
         void persist(next);
@@ -1188,6 +1218,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     addCategory,
     addAccount,
     deleteAccount,
+    updateAccount,
     addHolding,
     deleteHolding,
     updateHolding,

@@ -179,7 +179,7 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
               {emRes.target > 0 ? ` of ${formatMoney(emRes.target, base)} target` : ''}
             </div>
           </div>
-          <button className="btn ghost sm" onClick={() => onOpenTab('settings')}>
+          <button className="btn ghost sm" onClick={() => onOpenTab('investments')}>
             Manage <IChevron size={16} />
           </button>
         </div>
@@ -187,7 +187,7 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
           <div className="bar"><i style={{ width: `${Math.min(100, Math.round(emRes.pctOfTarget))}%` }} /></div>
         ) : (
           <div className="small muted" style={{ marginTop: 8 }}>
-            No reserve lines yet — designate an account or record a manual amount under Settings.
+            No reserve lines yet — designate an account or record a manual amount under Portfolio.
           </div>
         )}
       </div>
