@@ -1,6 +1,7 @@
 import type {
   BudgetPeriod,
   Category,
+  EmergencyFund,
   ManualAsset,
   UserPreferences,
 } from './types';
@@ -19,6 +20,15 @@ export const DEFAULT_PREFS: UserPreferences = {
 /** Budget / recurring / liability billing cadences. */
 export const BUDGET_PERIODS: BudgetPeriod[] = ['daily', 'weekly', 'monthly', 'yearly'];
 export const ASSET_KINDS: ManualAsset['kind'][] = ['bank', 'cash', 'property', 'other'];
+
+/** Fresh emergency-fund module. `targetMonths` defaults to 3 (the classic
+ *  YNAB starter cushion; the 3–6 range is the user's to widen). No
+ *  `targetOverrideBase` — the target is derived from essential spending
+ *  until the user pins an explicit number. */
+export const EMERGENCY_DEFAULT: EmergencyFund = {
+  items: [],
+  targetMonths: 3,
+};
 
 export const CATEGORIES: Category[] = [
   { id: 'c-food', name: 'Food & Dining', icon: '🍽' },

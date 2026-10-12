@@ -157,6 +157,44 @@ export interface Disposal {
   date: number;
 }
 
+/** A piece of the emergency reserve. Two source types so a user can either
+ *  DESIGNATE an existing tracked portfolio account (Mint/Copilot-style
+ *  "link a cushion to my HYSA") or record a MANUAL amount they hold
+ *  somewhere OmniFlow doesn't track. Emergency money is a SEPARATE line
+ *  from the investment portfolio by design — designating an account is a
+ *  reference, never a retype, so it never mixes into asset-class
+ *  aggregation or net-worth double-counts. */
+export interface EmergencyFundItem {
+  id: string;
+  /** 'account' = designated existing InvestmentAccount (live value, FX-aware)
+ *   'manual'   = a static snapshot amount the user maintains. */
+  kind: 'account' | 'manual';
+  /** For kind 'account': InvestmentAccount.id the item mirrors (live value is
+ *   pulled from portfolio aggregation so FX + quotes apply for free). */
+  accountId?: string;
+  name: string;          // display label (account name, or user-given)
+  /** Manual amount in `currency` (ignored for account items — they're live). */
+  amount?: number;
+  currency: string;      // ISO-4217 (manual items); account items inherit it.
+  createdAt: number;
+}
+
+/** The emergency-fund module (separate from the investment portfolio).
+ *  `targetMonths` is the classic 3–6-months-of-essentials target; the
+ *  engine measures coverage against essential spending, not total spend
+ *  (Bankrate/YNAB rule). All optional so old encrypted blobs keep
+ *  decrypting; readers normalize with `?? EMERGENCY_DEFAULT`. */
+export interface EmergencyFund {
+  items: EmergencyFundItem[];
+  /** Target reserve = essential monthly spend * targetMonths. Default 3. */
+  targetMonths: number;
+  /** Optional user override of the target in base currency; when set it
+   *  wins over the months-derived figure (the "I already know my number"
+   *  case). Empty/undefined = derived from spending. */
+  targetOverrideBase?: number;
+  note?: string;
+}
+
 /** App-wide preferences. */
 export interface UserPreferences {
   baseCurrency: string; // default 'MYR'
@@ -209,6 +247,8 @@ export interface VaultBlob {
   dividends?: Dividend[];
   /** Disposal events for realized gains / cost basis (P0 #10). */
   disposals?: Disposal[];
+  /** Emergency reserve module (separate from the investment portfolio). */
+  emergency?: EmergencyFund;
 }
 
 /** One coach chat turn, persisted (encrypted) with the vault. Compact by

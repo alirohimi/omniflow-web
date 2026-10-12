@@ -26,12 +26,15 @@ import type {
   QuoteSnapshot,
   UserPreferences,
   CoachMessage,
+  EmergencyFund,
 } from '../domain/types';
+import type { RatesForBase } from '../services/fx';
 import type { PortfolioSummary } from './portfolio';
 import { spendOverLastDays } from './advisor';
 import type { LLMConfig } from './categorize';
 import { callLLM as callLLMDefault } from './categorize';
 import { currencyInfo } from '../domain/enums';
+import { computeEmergency } from '../insights/emergency';
 import {
   ACTION_CONTRACT,
   parseAction,
@@ -54,6 +57,13 @@ export interface CoachContext {
    *  told the exact valid set) and into `parseAction` (so proposals are
    *  validated against the real list, not an empty one). */
   categories: Category[];
+  /** Emergency-reserve module (separate from the portfolio). The coach gets
+   *  its coverage facts so it can advise on topping up the cushion. */
+  emergency?: EmergencyFund;
+  /** FX table — converts manual emergency lines to base. null = offline. */
+  fx?: RatesForBase | null;
+  /** Clock for the essential-spend window. Defaults to Date.now(). */
+  now?: number;
 }
 
 /** Derived, LLM-safe brief. This — and ONLY this — is what a BYOK call may
@@ -84,6 +94,20 @@ export interface CoachBrief {
   /** Exact category names available to the user — the only valid values for
    *  `category` in add_expense / edit_expense actions. */
   categories: string[];
+  // Emergency-reserve facts (separate line from the portfolio). Absent when
+  // the view didn't compute it (offline FX + no spend). The coach treats the
+  // whole block as optional and never invents numbers when it's missing.
+  emergency?: {
+    reserve: number;         // base currency, all lines combined
+    target: number;          // base currency
+    coverageMonths: number | null;
+    monthlyEssential: number;
+    targetSource: 'override' | 'derived' | 'zero-spend';
+    status: 'none' | 'building' | 'ok' | 'over';
+    liquidValue: number;
+    investedValue: number;
+    lineCount: number;
+  };
 }
 
 const round = (n: number, d = 0): number => {
@@ -93,7 +117,7 @@ const round = (n: number, d = 0): number => {
 
 /** Build the compact, LLM-safe brief from the full context. */
 export function buildBrief(ctx: CoachContext): CoachBrief {
-  const { prefs, portfolio, holdings, quotes, expenses, accounts, categories } = ctx;
+  const { prefs, portfolio, holdings, quotes, expenses, accounts, categories, emergency, fx, now } = ctx;
   const sym = currencyInfo(prefs.baseCurrency);
   void sym;
 
@@ -135,6 +159,33 @@ export function buildBrief(ctx: CoachContext): CoachBrief {
   const catTotal = [...byCat.values()].reduce((a, b) => a + b, 0);
   const topCat = [...byCat.entries()].sort((a, b) => b[1] - a[1])[0];
 
+  // Emergency-reserve facts (separate line from the portfolio). Only when
+  // the view computed them — otherwise the block is omitted and the coach
+  // must not invent a cushion number.
+  let emergencyBrief: CoachBrief['emergency'];
+  if (emergency) {
+    const res = computeEmergency({
+      emergency,
+      expenses,
+      accounts,
+      portfolio,
+      fx: fx ?? null,
+      base: prefs.baseCurrency,
+      now: now ?? Date.now(),
+    });
+    emergencyBrief = {
+      reserve: round(res.reserve, 2),
+      target: round(res.target, 2),
+      coverageMonths: res.coverageMonths == null ? null : round(res.coverageMonths, 1),
+      monthlyEssential: round(res.monthlyEssential, 2),
+      targetSource: res.targetSource,
+      status: res.status,
+      liquidValue: round(res.liquidValue, 2),
+      investedValue: round(res.investedValue, 2),
+      lineCount: res.lines.length,
+    };
+  }
+
   return {
     baseCurrency: prefs.baseCurrency,
     netWorthBase: round(portfolio?.totalValueBase ?? totalVal, 2),
@@ -174,6 +225,7 @@ export function buildBrief(ctx: CoachContext): CoachBrief {
     // add_expense / edit_expense it proposes, and parseAction validates
     // against the same list (threaded in by coachAsk).
     categories: categories.map((c) => c.name),
+    emergency: emergencyBrief,
   };
 }
 
@@ -255,6 +307,38 @@ const INTENTS: Intent[] = [
       let cat = '';
       if (b.topCategory) cat = ` Your heaviest category is ${b.topCategory.name} at ${b.topCategory.pct}% of tracked spend.`;
       return `You're running ${money(b.spend30Base, b.baseCurrency)} over 30 days — about ${money(b.dailyPace, b.baseCurrency)}/day,${headroom}.${cat} Savings are what you pay yourself first, before rent gets a vote. Even 5% of income on autopilot compounds into the boring, reliable kind of wealth.`;
+    },
+  },
+  {
+    id: 'cushion',
+    match: /emergency|cushion|rain ?y|buffer|how much (cash|money) (do i|should i) (have|set|keep|hold)|safety net|liquidity|liquid/i,
+    answer: (b) => {
+      const e = b.emergency;
+      if (!e || e.lineCount === 0)
+        return 'You have no emergency reserve set up yet, and that is the one thing that decides whether a job loss is a blip or a crisis. Start a separate cushion — even a small one — before you let the growth slice decide your entire financial fate. Size it to your essential spend, not your total spend.';
+      const cov =
+        e.coverageMonths != null
+          ? ` You currently cover ${round(e.coverageMonths, 1)} months of essential spend.`
+          : '';
+      const targetLine =
+        e.targetSource === 'override'
+          ? ` Your pinned target is ${money(e.target, b.baseCurrency)}.`
+          : e.targetSource === 'derived'
+            ? ` At ${money(e.monthlyEssential, b.baseCurrency)}/month of essentials, a 3-month cushion lands around ${money(e.target, b.baseCurrency)}.`
+            : '';
+      const statusLine =
+        e.status === 'over'
+          ? ` You are past target — consider whether the extra belongs in the cushion or is being held hostage as "savings" that will never get spent.`
+          : e.status === 'ok'
+            ? ` You are at or past target. Keep it boring and liquid; the cushion earns nothing on purpose.`
+            : e.status === 'building'
+              ? ` You are ${money(e.reserve, b.baseCurrency)} of ${money(e.target, b.baseCurrency)} — a ${money(Math.max(0, e.target - e.reserve), b.baseCurrency)} gap. Fund the gap before the growth slice; an underfunded cushion is a liability in disguise.`
+              : '';
+      const liquidity =
+        e.investedValue > 0
+          ? ` Note: ${money(e.investedValue, b.baseCurrency)} of it is parked in a brokerage account, not instant cash — in a true emergency you need the liquid slice, not the invested one.`
+          : '';
+      return `Your emergency reserve is ${money(e.reserve, b.baseCurrency)}.${cov}${targetLine}${statusLine}${liquidity}`;
     },
   },
   {

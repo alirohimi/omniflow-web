@@ -93,8 +93,14 @@ export function CoachView() {
       // The user's category list — threaded to parseAction so proposed
       // add_expense / edit_expense actions validate against real names.
       categories: store.categories,
+      // Emergency-reserve module + live FX table — buildBrief converts
+      // manual lines to base and derives the coverage facts the coach
+      // quotes (omitted when offline + no spend, in which case the coach
+      // must not invent cushion numbers).
+      emergency: vault.emergency,
+      fx: live.fx,
     };
-  }, [vault, live.quotes, live.portfolio, store.categories]);
+  }, [vault, live.quotes, live.portfolio, live.fx, store.categories]);
 
   // Keep the newest message in view as the thread grows.
   useEffect(() => {

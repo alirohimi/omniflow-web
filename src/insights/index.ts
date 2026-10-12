@@ -13,3 +13,4 @@ export * from './recurring';
 export * from './rebalance';
 export * from './dividends';
 export * from './pnl';
+export * from './emergency';

@@ -1,11 +1,12 @@
 import type {
   BudgetPeriod,
   Category,
+  EmergencyFundItem,
   ManualAsset,
   UserPreferences,
   VaultBlob,
 } from './types';
-import { DEFAULT_PREFS, CATEGORIES, BUDGET_PERIODS, ASSET_KINDS } from './enums';
+import { DEFAULT_PREFS, CATEGORIES, BUDGET_PERIODS, ASSET_KINDS, EMERGENCY_DEFAULT } from './enums';
 
 /** Fresh, empty vault (used on first launch before any data is entered). */
 export function emptyVault(prefs?: Partial<UserPreferences>): VaultBlob {
@@ -26,6 +27,7 @@ export function emptyVault(prefs?: Partial<UserPreferences>): VaultBlob {
     assets: [],
     dividends: [],
     disposals: [],
+    emergency: { ...EMERGENCY_DEFAULT, items: [] },
   };
 }
 
@@ -127,6 +129,15 @@ export function healVault(blob: VaultBlob): { blob: VaultBlob; changed: boolean 
   if (!Array.isArray(blob.assets)) blob.assets = [];
   if (!Array.isArray(blob.dividends)) blob.dividends = [];
   if (!Array.isArray(blob.disposals)) blob.disposals = [];
+  // Emergency module: prefill from the default on old blobs so the
+  // dashboard + coach always see a well-shaped module, then per-row guards
+  // (best-effort; never drop user data).
+  if (!blob.emergency || typeof blob.emergency !== 'object') blob.emergency = { ...EMERGENCY_DEFAULT, items: [] };
+  if (!Array.isArray(blob.emergency.items)) blob.emergency.items = [];
+  if (typeof blob.emergency.targetMonths !== 'number' || !Number.isFinite(blob.emergency.targetMonths) || blob.emergency.targetMonths < 1) {
+    blob.emergency.targetMonths = EMERGENCY_DEFAULT.targetMonths;
+  }
+  blob.emergency = { ...blob.emergency, targetMonths: Math.round(blob.emergency.targetMonths) };
   // Per-row shape guards (best-effort; never drop user data).
   blob.recurring = blob.recurring.map((r) =>
     r && typeof r === 'object'
@@ -206,6 +217,43 @@ export function healVault(blob: VaultBlob): { blob: VaultBlob; changed: boolean 
         }
       : b,
   );
+  blob.emergency!.items = blob.emergency!.items.map((it) => {
+    if (!it || typeof it !== 'object') return it;
+    const kind: 'manual' | 'account' =
+      (it as { kind?: unknown }).kind === 'manual' ? 'manual' : 'account';
+    const id: string =
+      typeof (it as { id?: unknown }).id === 'string' ? (it as { id: string }).id : `e-${Math.random().toString(36).slice(2, 8)}`;
+    // account items: keep the reference (string), drop a stale manual amount;
+    // manual items: keep the amount (finite), clear a dangling accountId.
+    const accountId: string | undefined =
+      kind === 'manual'
+        ? undefined
+        : typeof (it as { accountId?: unknown }).accountId === 'string'
+          ? (it as { accountId: string }).accountId
+          : '';
+    const amount: number | undefined =
+      kind === 'manual'
+        ? (typeof (it as { amount?: unknown }).amount === 'number' &&
+            Number.isFinite((it as { amount: number }).amount)
+            ? (it as { amount: number }).amount
+            : 0)
+        : undefined;
+    return {
+      id,
+      kind,
+      name:
+        typeof (it as { name?: unknown }).name === 'string'
+          ? (it as { name: string }).name
+          : '',
+      currency:
+        typeof (it as { currency?: unknown }).currency === 'string'
+          ? (it as { currency: string }).currency
+          : '',
+      createdAt: num((it as { createdAt?: unknown }).createdAt, Date.now()),
+      accountId,
+      amount,
+    } as EmergencyFundItem;
+  });
   if (blob.coachLog !== undefined && !Array.isArray(blob.coachLog)) delete blob.coachLog;
   return { blob, changed: JSON.stringify(blob) !== before };
 }

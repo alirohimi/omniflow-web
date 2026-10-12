@@ -43,6 +43,8 @@ import type {
   ManualAsset,
   Dividend,
   Disposal,
+  EmergencyFund,
+  EmergencyFundItem,
 } from '../domain/types';
 import { emptyVault, healVault, withoutUndefined } from '../domain/seed';
 import { encryptVault, decryptVault, fingerprintSecret, type VaultCipher } from '../security/vault';
@@ -172,6 +174,12 @@ export interface VaultStore {
   deleteDividend: (id: string) => void;
   addDisposal: (input: Omit<Disposal, 'id'>) => string;
   deleteDisposal: (id: string) => void;
+  // ---- emergency reserve (separate line from the portfolio) ----
+  addEmergencyItem: (input: Omit<EmergencyFundItem, 'id'>) => string;
+  deleteEmergencyItem: (id: string) => void;
+  /** Patch the module-level scalars (targetMonths / targetOverrideBase /
+   *  note). Items are managed via add/deleteEmergencyItem. */
+  setEmergency: (patch: Partial<Omit<EmergencyFund, 'items'>>) => void;
 
   setPrefs: (patch: Partial<UserPreferences>) => void;
   setLlmKey: (
@@ -875,7 +883,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   // optional on old encrypted blobs, so every read normalizes with ?? [].
 
   type EntKey = 'budgets' | 'recurring' | 'liabilities' | 'assets' | 'dividends' | 'disposals';
-  type Prefix = 'b' | 'r' | 'l' | 'a' | 'd' | 's';
+  type Prefix = 'b' | 'r' | 'l' | 'a' | 'd' | 's' | 'e';
   const entId = (p: Prefix) =>
     `${p}-${crypto.randomUUID()}`; // 128-bit id; prefix keeps it sortable & entity-typed
   const setEnt = (key: EntKey, fn: (arr: unknown[]) => unknown[]) => {
@@ -883,6 +891,17 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       if (!prev) return prev;
       const arr = ((prev as unknown as Record<string, unknown[]>)[key] ?? []) as unknown[];
       const next = { ...prev, [key]: fn(arr), updatedAt: Date.now() } as VaultBlob;
+      void persist(next);
+      return next;
+    });
+  };
+  /** Patch the emergency-reserve module (a nested object, not an array key).
+   *  Reads the current module from `prev` so old blobs heal in place. */
+  const setEmergencyModule = (fn: (em: EmergencyFund) => EmergencyFund) => {
+    setVault((prev) => {
+      if (!prev) return prev;
+      const em = prev.emergency ?? { items: [], targetMonths: 3 };
+      const next = { ...prev, emergency: fn(em), updatedAt: Date.now() } as VaultBlob;
       void persist(next);
       return next;
     });
@@ -947,6 +966,25 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     [],
   );
   const deleteDisposal = useCallback((id: string) => setEnt('disposals', (a) => a.filter((x) => (x as Disposal).id !== id)), []);
+
+  // ---- Emergency reserve (nested module, not an array key) ----
+  const addEmergencyItem = useCallback(
+    (input: Omit<EmergencyFundItem, 'id'>): string => {
+      const id = entId('e');
+      setEmergencyModule((em) => ({
+        ...em,
+        items: [...em.items, { ...withoutUndefined(input), id }],
+      }));
+      return id;
+    },
+    [],
+  );
+  const deleteEmergencyItem = useCallback((id: string) => {
+    setEmergencyModule((em) => ({ ...em, items: em.items.filter((it) => it.id !== id) }));
+  }, []);
+  const setEmergency = useCallback((patch: Partial<Omit<EmergencyFund, 'items'>>) => {
+    setEmergencyModule((em) => ({ ...em, ...withoutUndefined(patch) }));
+  }, []);
 
   const setLlmKey = useCallback(
     async (
@@ -1166,6 +1204,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     deleteDividend,
     addDisposal,
     deleteDisposal,
+    addEmergencyItem,
+    deleteEmergencyItem,
+    setEmergency,
     setPrefs,
     setLlmKey,
     retrySync,
