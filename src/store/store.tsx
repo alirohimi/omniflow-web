@@ -876,7 +876,8 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
   type EntKey = 'budgets' | 'recurring' | 'liabilities' | 'assets' | 'dividends' | 'disposals';
   type Prefix = 'b' | 'r' | 'l' | 'a' | 'd' | 's';
-  const entId = (p: Prefix) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const entId = (p: Prefix) =>
+    `${p}-${crypto.randomUUID()}`; // 128-bit id; prefix keeps it sortable & entity-typed
   const setEnt = (key: EntKey, fn: (arr: unknown[]) => unknown[]) => {
     setVault((prev) => {
       if (!prev) return prev;
@@ -890,7 +891,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const addBudget = useCallback(
     (input: Omit<Budget, 'id' | 'createdAt'> & { createdAt?: number }): string => {
       const id = entId('b');
-      setEnt('budgets', (arr) => [...(arr as Budget[]), { ...input, id, createdAt: input.createdAt ?? Date.now() }]);
+      setEnt('budgets', (arr) => [...(arr as Budget[]), { ...withoutUndefined(input), id, createdAt: input.createdAt ?? Date.now() }]);
       return id;
     },
     [],
@@ -900,7 +901,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const addRecurring = useCallback(
     (input: Omit<Recurring, 'id'>): string => {
       const id = entId('r');
-      setEnt('recurring', (arr) => [...(arr as Recurring[]), { ...input, id }]);
+      setEnt('recurring', (arr) => [...(arr as Recurring[]), { ...withoutUndefined(input), id }]);
       return id;
     },
     [],
@@ -910,7 +911,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const addLiability = useCallback(
     (input: Omit<Liability, 'id'>): string => {
       const id = entId('l');
-      setEnt('liabilities', (arr) => [...(arr as Liability[]), { ...input, id }]);
+      setEnt('liabilities', (arr) => [...(arr as Liability[]), { ...withoutUndefined(input), id }]);
       return id;
     },
     [],
@@ -920,7 +921,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const addAsset = useCallback(
     (input: Omit<ManualAsset, 'id'>): string => {
       const id = entId('a');
-      setEnt('assets', (arr) => [...(arr as ManualAsset[]), { ...input, id }]);
+      setEnt('assets', (arr) => [...(arr as ManualAsset[]), { ...withoutUndefined(input), id }]);
       return id;
     },
     [],
@@ -930,7 +931,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const addDividend = useCallback(
     (input: Omit<Dividend, 'id'>): string => {
       const id = entId('d');
-      setEnt('dividends', (arr) => [...(arr as Dividend[]), { ...input, id }]);
+      setEnt('dividends', (arr) => [...(arr as Dividend[]), { ...withoutUndefined(input), id }]);
       return id;
     },
     [],
@@ -940,7 +941,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const addDisposal = useCallback(
     (input: Omit<Disposal, 'id'>): string => {
       const id = entId('s');
-      setEnt('disposals', (arr) => [...(arr as Disposal[]), { ...input, id }]);
+      setEnt('disposals', (arr) => [...(arr as Disposal[]), { ...withoutUndefined(input), id }]);
       return id;
     },
     [],

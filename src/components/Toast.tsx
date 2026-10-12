@@ -28,9 +28,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const toast = useCallback((msg: string, kind: Kind = 'ok') => {
     const id = ++idRef.current;
     setItems((p) => [...p, { id, msg, kind }]);
+    // Errors need to be read + acted on; auto-dismiss faster for informational toasts.
     window.setTimeout(
       () => setItems((p) => p.filter((t) => t.id !== id)),
-      2400,
+      kind === 'err' ? 5000 : 2400,
     );
   }, []);
 
