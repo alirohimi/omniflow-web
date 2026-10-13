@@ -34,11 +34,17 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Unit tests
-        # pool=vmForks: on GH's runners the default tinypool thread pool can
-        # drop its worker channel under load ("Channel closed"), failing the
-        # run with 0 test results. vmForks isolates each file in a fresh
-        # child + vm context; slow-file tests need testTimeout headroom.
-        run: npx vitest run --pool=vmForks --testTimeout=30000
+        # Default thread pool + raised Node heap limit. On GH's ubuntu-latest
+        # the 16-file suite (heavy React + @supabase/supabase-js graph loaded
+        # per file) can OOM a worker at Node's default ~4 GB old-space limit
+        # ("JavaScript heap out of memory" -> tinypool 'Worker exited
+        # unexpectedly', exit 1) even though every test passes. Bump the heap
+        # so no worker hits the limit. The async vault tests (store-extended,
+        # vault-race) use real timers + polling; 30s testTimeout absorbs
+        # slow-runner slack.
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: npx vitest run --testTimeout=30000
       - name: Typecheck + build
         env:
           BASE_URL: ${{ env.PAGES_BASE }}
