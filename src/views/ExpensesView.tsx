@@ -338,12 +338,23 @@ export function ExpensesView() {
     if (!pdfRows || !pdfMeta) return;
     setPdfImporting(true);
     const enabledIdx = pdfRows.map((_, i) => i).filter((i) => !pdfDisabled.has(i));
-    if (enabledIdx.length === 0) {
+    // Incoming money (deposits, salary, refunds) is never an expense — only
+    // outflows are tracked, so 'in' rows are excluded from the import even
+    // if the user ticks them in the review table.
+    const inCount = pdfRows.filter((r) => r.direction === 'in').length;
+    const importIdx = enabledIdx.filter((i) => pdfRows[i].direction !== 'in');
+    if (importIdx.length === 0) {
+      toast(inCount > 0 ? `No outflows to import — ${inCount} incoming line(s) excluded.` : 'Nothing to import.');
       setPdfImporting(false);
+      if (inCount === 0) {
+        setPdfRows(null);
+        setPdfMeta(null);
+        setPdfDisabled(new Set());
+      }
       return;
     }
     // Fetch FX once for any foreign currencies present.
-    const foreign = [...new Set(enabledIdx.map((i) => pdfRows[i].currency).filter((c): c is string => !!c))]
+    const foreign = [...new Set(importIdx.map((i) => pdfRows[i].currency).filter((c): c is string => !!c))]
       .filter((c) => c !== base);
     let rates = null;
     if (foreign.length > 0) {
@@ -353,7 +364,7 @@ export function ExpensesView() {
         rates = null; // offline: import in original currency, rate 1
       }
     }
-    const inputs: Parameters<typeof store.addExpenses>[0] = enabledIdx.map((i) => {
+    const inputs: Parameters<typeof store.addExpenses>[0] = importIdx.map((i) => {
       const row = pdfRows[i];
       const currency = row.currency || base;
       const rate =
@@ -375,7 +386,11 @@ export function ExpensesView() {
     });
     store.addExpenses(inputs);
     store.setPendingImport(null); // import finished — clear the checkpoint
-    toast(`Imported ${enabledIdx.length} transactions from ${pdfMeta.fileName}`);
+    const excluded = enabledIdx.length - importIdx.length;
+    toast(
+      `Imported ${importIdx.length} outflow${importIdx.length === 1 ? '' : 's'} from ${pdfMeta.fileName}` +
+        (excluded > 0 ? ` · ${excluded} incoming line(s) excluded` : inCount > 0 ? ` · ${inCount} incoming excluded` : ''),
+    );
     setPdfRows(null);
     setPdfMeta(null);
     setPdfDisabled(new Set());
@@ -487,6 +502,11 @@ export function ExpensesView() {
           <div style={{ marginTop: 12 }}>
             <div className="row small" style={{ marginBottom: 8 }}>
               <span className="chip sm">{pdfRows.length} found</span>
+              {pdfRows.filter((r) => r.direction === 'in').length > 0 && (
+                <span className="chip sm" title="Incoming money (deposits, refunds) is not tracked as an expense">
+                  {pdfRows.filter((r) => r.direction === 'in').length} incoming excluded
+                </span>
+              )}
               <span className="chip sm {pdfMeta.parser === 'llm' ? 'ok' : ''}">
                 {pdfMeta.parser === 'llm' ? 'AI-extracted' : 'rules-parsed'}
               </span>
@@ -498,15 +518,21 @@ export function ExpensesView() {
             {pdfRows.map((row, i) => {
               const off = pdfDisabled.has(i);
               const isIncome = row.direction === 'in';
+              // Incoming rows are never importable — the commit step drops
+              // them, so show that explicitly instead of a live checkbox.
               return (
-                <div key={i} className="item" style={{ opacity: off ? 0.45 : 1 }}>
-                  <input
-                    type="checkbox"
-                    checked={!off}
-                    onChange={() => toggleRow(i)}
-                    style={{ width: 18, height: 18, flex: 'none', marginTop: 2 }}
-                    aria-label={`Include ${row.merchant}`}
-                  />
+                <div key={i} className="item" style={{ opacity: isIncome ? 0.5 : off ? 0.45 : 1 }}>
+                  {isIncome ? (
+                    <span className="chip sm" style={{ flex: 'none', marginTop: 2 }} title="Incoming money is not tracked as an expense">in</span>
+                  ) : (
+                    <input
+                      type="checkbox"
+                      checked={!off}
+                      onChange={() => toggleRow(i)}
+                      style={{ width: 18, height: 18, flex: 'none', marginTop: 2 }}
+                      aria-label={`Include ${row.merchant}`}
+                    />
+                  )}
                   <div className="grow" style={{ minWidth: 0 }}>
                     <div className="title" style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
                       <input

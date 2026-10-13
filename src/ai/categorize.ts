@@ -149,7 +149,9 @@ export async function categorizeByLLM(
 // transits it per-request. Override with VITE_ADACODE_RELAY_URL if you
 // deploy your own relay (e.g. on your own Supabase project).
 const ADACODE_RELAY_URL: string =
-  (import.meta.env.VITE_ADACODE_RELAY_URL as string | undefined) ??
+  (typeof import.meta !== 'undefined' && import.meta.env
+    ? import.meta.env.VITE_ADACODE_RELAY_URL
+    : undefined) ??
   'https://ijwpyikcbqdskuynwsuz.functions.supabase.co/adacode-relay';
 
 async function apiErrorBody(res: Response): Promise<string> {

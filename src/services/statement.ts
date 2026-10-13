@@ -199,8 +199,16 @@ const DATE_TOKEN_RE =
 // "USD4.16") and not followed by "-<letter>" (part of a name, e.g. "7-Eleven").
 const AMOUNT_RE =
   /(?<![A-Za-z0-9])(-?\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|-?\d+(?:\.\d{1,2})?)(?![A-Za-z0-9])(?!-[A-Za-z])/g;
+// Income (inflow) hints. Strong words go first: 'credit' and 'transfer' are
+// too noisy on their own (merchant names like "CREDIT UNION", "TRANSFER TO
+// MUM") so they only count when followed by in/from/into — the bare forms are
+// dropped. Word boundaries keep "cash in" matching but not "cashpoint".
 const INCOME_HINT_RE =
-  /\b(deposit|credit|salary|payroll|refund|cashback|cash ?(in|back)|dividend|income|transfer ?(in|from)|received|paid ?in)\b/i;
+  /\b(deposit|salary|payroll|refund|cashback|dividend|income|received|paid in|cash (in|back)|transfer (in|from|into)|credit(ed|ing) (in|to))\b/i;
+// Outflow (spend) hints, used only as a tiebreaker when a line has both
+// income and outflow words — e.g. "DEBIT CARD PURCHASE ... CREDIT UNION".
+const OUTFLOW_HINT_RE =
+  /\b(debit|purchase|payment to|billed|withdrawn?|charge[d]?|spent)\b/i;
 
 export function parseStatement(text: string): ParsedStatementLine[] {
   const lines = text
@@ -262,11 +270,19 @@ function parseLine(line: string): ParsedStatementLine | null {
   }
   if (amounts.length === 0) return null;
 
-  const isIncome = INCOME_HINT_RE.test(line);
+  const hasIncome = INCOME_HINT_RE.test(line);
+  const hasOutflow = OUTFLOW_HINT_RE.test(line);
   const last = amounts[amounts.length - 1];
-  // An explicit income hint (salary/deposit/refund/credit) wins; otherwise a
-  // signed-negative final amount is a withdrawal, a positive one a purchase.
-  let direction: Direction = isIncome ? 'in' : 'out';
+  // Precedence: an income hint wins over an outflow hint ("DEBIT ... CREDITED
+  // IN" is still an inflow); a lone outflow hint wins over nothing; otherwise
+  // the sign of the final amount decides — negative = withdrawal (out), a
+  // bare positive = purchase (out), because statements that show credits as
+  // plus-sign usually label them "credit/deposit" and hit the income branch.
+  let direction: Direction =
+    hasIncome && !hasOutflow ? 'in'
+    : hasOutflow ? 'out'
+    : last.neg ? 'out'
+    : 'out';
 
   // Currency hint.
   const curMatch = line.match(KNOWN_CURRENCY_RE);
@@ -277,9 +293,10 @@ function parseLine(line: string): ParsedStatementLine | null {
     .replace(AMOUNT_RE, ' ')
     .replace(KNOWN_CURRENCY_RE, ' ')
     .replace(
-      /(debit|credit|withdraw|payment|purchase|refund|deposit|cash ?(in|out|back))/gi,
+      /(debit|credit|withdraw|payment|purchase|refund|deposit|salary|payroll|dividend|income|cash ?(in|out|back)|transfer ?(in|from|out))\b/gi,
       ' ',
     )
+    .replace(/\bMY\b/g, ' ') // country token, not part of a merchant name
     .replace(/\s{2,}/g, ' ')
     .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '')
     .trim();
