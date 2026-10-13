@@ -14,7 +14,13 @@
 // "paste statement text" path.
 // ============================================================================
 
-import { callLLM, categorize, type LLMConfig } from '../ai/categorize';
+import {
+  callLLM,
+  categorize,
+  categorizeByDictionary,
+  LLM_MAX_TOKENS,
+  type LLMConfig,
+} from '../ai/categorize';
 import { CATEGORIES } from '../domain/enums';
 import type {
   Category,
@@ -37,61 +43,110 @@ export interface ParseStatementResult {
 }
 
 // ---------------------------------------------------------------------------
-// 1. LLM parser (BYOK)
+// 1. LLM parser (BYOK) — chunked so big statements never send one blob
 // ---------------------------------------------------------------------------
 
 const KNOWN_CURRENCY_RE =
   /\b(MYR|SGD|USD|EUR|GBP|JPY|AUD|CAD|HKD|CNY|IDR|THB|PHP|VND|INR|KRW|CHF)\b/;
 
+/** Hard cap per LLM call. We split the statement ourselves so the prompt
+ *  stays small even for multi-year statements — one call, one chunk. */
+export const LLM_CHUNK_CHARS = 12000;
+
+const LLM_SYSTEM =
+  'You are a bank/card statement parser. From the raw statement text, extract ' +
+  'every individual transaction. For each, output { date (YYYY-MM-DD or null), ' +
+  'merchant (short name), description (extra detail, "" if none), amount (positive ' +
+  'number, no sign), direction ("out" for spend/withdrawal, "in" for deposit/salary/' +
+  'refund/credit), currency (ISO-4217 or null) }. ' +
+  'Skip totals, balances, headers, and non-transaction lines. ' +
+  'Reply with ONLY a JSON array of these objects — no prose, no markdown.';
+
+/** Split a big statement into LLM-sized chunks on line boundaries, so no
+ *  single call ever ships the whole blob. Chunks keep whole lines: a
+ *  transaction never straddles two chunks. */
+export function chunkStatementText(text: string, maxChars: number = LLM_CHUNK_CHARS): string[] {
+  const t = text.trim();
+  if (t.length <= maxChars) return [t];
+  const lines = t.split(/\r?\n/);
+  const chunks: string[] = [];
+  let buf = '';
+  for (const line of lines) {
+    // A single line longer than the cap gets its own chunk (rare: wrapped text).
+    if (line.length > maxChars) {
+      if (buf) { chunks.push(buf); buf = ''; }
+      let i = 0;
+      while (i < line.length) chunks.push(line.slice(i, i + maxChars));
+      i += maxChars;
+      continue;
+    }
+    if (buf && buf.length + line.length + 1 > maxChars) {
+      chunks.push(buf);
+      buf = line;
+    } else {
+      buf = buf ? buf + '\n' + line : line;
+    }
+  }
+  if (buf) chunks.push(buf);
+  return chunks;
+}
+
 export function buildLLMPrompt(text: string): { system: string; user: string } {
-  const system =
-    'You are a bank/card statement parser. From the raw statement text, extract ' +
-    'every individual transaction. For each, output { date (YYYY-MM-DD or null), ' +
-    'merchant (short name), description (extra detail, "" if none), amount (positive ' +
-    'number, no sign), direction ("out" for spend/withdrawal, "in" for deposit/salary/' +
-    'refund/credit), currency (ISO-4217 or null) }. ' +
-    'Skip totals, balances, headers, and non-transaction lines. ' +
-    'Reply with ONLY a JSON array of these objects — no prose, no markdown.';
-  // Keep the prompt bounded: statements can be long; cap to the useful part.
-  const user = text.length > 12000 ? text.slice(0, 12000) : text;
-  return { system, user };
+  const chunks = chunkStatementText(text);
+  // Single-chunk statements pass through unchanged; multi-chunk callers are
+  // expected to feed one chunk at a time (see parseStatementWithLLM).
+  const user = chunks.length === 1 ? chunks[0] : text.slice(0, LLM_CHUNK_CHARS);
+  return { system: LLM_SYSTEM, user };
 }
 
 async function parseStatementWithLLM(
   text: string,
   llm: LLMConfig,
-): Promise<ParsedStatementLine[] | null> {
-  const { system, user } = buildLLMPrompt(text);
-  let raw: string;
-  try {
-    raw = await callLLM(llm, system, user, [], true);
-  } catch {
-    return null; // let the caller fall back to regex
+  signal?: AbortSignal,
+  onProgress?: (p: number, phase: string) => void,
+): Promise<{ lines: ParsedStatementLine[] | null; error?: string }> {
+  const chunks = chunkStatementText(text);
+  const all: ParsedStatementLine[] = [];
+  for (let ci = 0; ci < chunks.length; ci++) {
+    if (signal?.aborted) return { lines: null, error: 'cancelled' };
+    onProgress?.(ci / chunks.length, `Extracting ${ci + 1}/${chunks.length}`);
+    let raw: string;
+    try {
+      raw = await callLLM(llm, LLM_SYSTEM, chunks[ci], [], true, LLM_MAX_TOKENS.statementChunk);
+    } catch {
+      // One bad chunk must not kill the whole import: keep what we have.
+      if (all.length > 0) break;
+      return { lines: null, error: `chunk ${ci + 1} failed` };
+    }
+    const arr = extractJsonArray(raw);
+    if (!arr) {
+      if (all.length > 0) break;
+      if (ci === chunks.length - 1) return { lines: null, error: 'no JSON found' };
+      continue;
+    }
+    for (const o of arr) {
+      if (typeof o?.merchant !== 'string' || !o.merchant.trim()) continue;
+      const amount = Number(o.amount);
+      if (!isFinite(amount) || amount <= 0) continue;
+      const dir: Direction =
+        o.direction === 'in' || o.direction === 'credit' ? 'in' : 'out';
+      all.push({
+        raw: '',
+        merchant: o.merchant.trim(),
+        description:
+          typeof o.description === 'string' && o.description
+            ? o.description
+            : undefined,
+        amount,
+        direction: dir,
+        currency:
+          typeof o.currency === 'string' && o.currency ? o.currency : undefined,
+        date: parseISODate(o.date),
+      });
+    }
+    onProgress?.((ci + 1) / chunks.length, `Extracting ${ci + 1}/${chunks.length}`);
   }
-  const arr = extractJsonArray(raw);
-  if (!arr) return null;
-  const lines: ParsedStatementLine[] = [];
-  for (const o of arr) {
-    if (typeof o?.merchant !== 'string' || !o.merchant.trim()) continue;
-    const amount = Number(o.amount);
-    if (!isFinite(amount) || amount <= 0) continue;
-    const dir: Direction =
-      o.direction === 'in' || o.direction === 'credit' ? 'in' : 'out';
-    lines.push({
-      raw: '',
-      merchant: o.merchant.trim(),
-      description:
-        typeof o.description === 'string' && o.description
-          ? o.description
-          : undefined,
-      amount,
-      direction: dir,
-      currency:
-        typeof o.currency === 'string' && o.currency ? o.currency : undefined,
-      date: parseISODate(o.date),
-    });
-  }
-  return lines.length ? lines : null;
+  return all.length ? { lines: all } : { lines: null, error: 'no transactions found' };
 }
 
 /** Pull a JSON array out of an LLM reply that may have stray prose around it. */
@@ -272,45 +327,133 @@ function dateFromParts(
  * Run every line through the app's categorize() engine so imported
  * transactions get the same auto-category a manually typed one would.
  * Income-direction lines are forced to 'Income' regardless of LLM output.
+ *
+ * When an LLM key is present, merchants are sent in batches (one call per
+ * batch, not one call per line) — a 300-transaction statement becomes ~5
+ * round-trips instead of 300. Batches fall back to the dictionary per-row
+ * on failure, so one bad batch never loses the rest.
  */
 export async function categorizeLines(
   lines: ParsedStatementLine[],
-  opts: { categories?: Category[]; llm?: LLMConfig | null; onProgress?: (p: number) => void },
+  opts: {
+    categories?: Category[];
+    llm?: LLMConfig | null;
+    signal?: AbortSignal;
+    onProgress?: (p: number, phase: string) => void;
+  },
 ): Promise<void> {
   const cats = opts.categories?.length ? opts.categories : CATEGORIES;
-  for (let i = 0; i < lines.length; i++) {
-    const ln = lines[i];
+  const llm = opts.llm && opts.llm.apiKey ? opts.llm : null;
+
+  // Income lines: deterministic, zero cost.
+  for (const ln of lines) {
     if (ln.direction === 'in') {
       ln.category = 'Income';
       ln.aiTier = 'dictionary';
-    } else {
-      try {
-        const r = await categorize(
-          { merchant: ln.merchant, description: ln.description },
-          cats,
-          opts.llm ?? undefined,
-        );
-        ln.category = r.category;
-        ln.aiTier = r.tier;
-      } catch {
-        ln.category = 'Other';
-        ln.aiTier = 'llm-failed';
+    }
+  }
+
+  const out = lines.filter((ln) => ln.direction !== 'in');
+  if (out.length === 0) return;
+
+  if (!llm) {
+    // Dictionary tier: fast, no network.
+    for (let i = 0; i < out.length; i++) {
+      const r = categorizeByDictionary(out[i], cats);
+      out[i].category = r.category;
+      out[i].aiTier = r.tier;
+      opts.onProgress?.((i + 1) / out.length, `Categorizing ${i + 1}/${out.length}`);
+    }
+    return;
+  }
+
+  // LLM tier: batch by distinct merchant (same merchant -> same category).
+  const BATCH = 40;
+  const uniq = new Map<string, { line: ParsedStatementLine; idx: number }>();
+  out.forEach((ln, idx) => uniq.set(ln.merchant.toLowerCase(), { line: ln, idx }));
+  const uniqMerchants = [...uniq.values()];
+  for (let b = 0; b < uniqMerchants.length; b += BATCH) {
+    if (opts.signal?.aborted) return;
+    const batch = uniqMerchants.slice(b, b + BATCH);
+    opts.onProgress?.(
+      Math.min(1, b / uniqMerchants.length),
+      `Categorizing batch ${Math.floor(b / BATCH) + 1}/${Math.ceil(uniqMerchants.length / BATCH)}`,
+    );
+    const r = await categorizeBatchLLM(batch.map((u) => u.line), cats, llm);
+    const ok = r ? new Map(r.map((c, i) => [i, c])) : null;
+    for (const u of batch) {
+      const i = batch.indexOf(u);
+      if (ok && ok.has(i)) {
+        u.line.category = ok.get(i)!.category;
+        u.line.aiTier = 'llm-byok';
+      } else {
+        // Per-row dictionary fallback: one bad batch never loses the rest.
+        const d = categorizeByDictionary(u.line, cats);
+        u.line.category = d.category;
+        u.line.aiTier = 'dictionary';
       }
     }
-    opts.onProgress?.((i + 1) / Math.max(1, lines.length));
   }
+  opts.onProgress?.(1, 'Categorizing');
+}
+
+/** One LLM call that returns a category for up to `BATCH` merchants.
+ *  Returns null when the provider fails so callers can fall back. */
+async function categorizeBatchLLM(
+  lines: ParsedStatementLine[],
+  categories: Category[],
+  llm: LLMConfig,
+): Promise<{ category: string }[] | null> {
+  const names = categories.map((c) => c.name);
+  const sys =
+    'You are a personal finance categorisation engine. Given a list of merchant ' +
+    'names, pick exactly one category for each from this list: [' +
+    names.join(', ') + ']. If none fit, use "Other". Reply with ONLY a JSON ' +
+    'array of {"merchant":string,"category":string} in the same order, no prose.';
+  const user = JSON.stringify(
+    lines.map((ln) => ({
+      merchant: ln.merchant,
+      description: ln.description ?? '',
+      currency: ln.currency ?? null,
+    })),
+  );
+  let raw: string;
+  try {
+    raw = await callLLM(llm, sys, user, [], true, LLM_MAX_TOKENS.statementChunk);
+  } catch {
+    return null;
+  }
+  const arr = extractJsonArray(raw);
+  if (!arr || !Array.isArray(arr) || arr.length < lines.length) {
+    // Partial/invalid reply: caller falls back per-row.
+    if (!arr) return null;
+  }
+  const out: { category: string }[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const o = arr[i];
+    if (o && typeof o.category === 'string' && o.category.trim()) {
+      out.push({ category: o.category.trim() });
+    } else {
+      out.push({ category: 'Other' });
+    }
+  }
+  return out;
 }
 
 /**
  * Parse raw statement text via LLM (when a key is present) or regex, then
  * categorize every line. The `pdf.ts` wrapper feeds this its extracted
  * text, but it is also directly usable for pasted statement text.
+ *
+ * `signal` aborts mid-parse (the user tapped Cancel). On abort the partial
+ * checkpoint is cleared by the caller, not re-thrown.
  */
 export async function parseStatementText(
   text: string,
   opts: {
     llm?: LLMConfig | null;
     categories?: Category[];
+    signal?: AbortSignal;
     onProgress?: (p: number, phase: string) => void;
   },
 ): Promise<ParseStatementResult> {
@@ -319,23 +462,36 @@ export async function parseStatementText(
   let llmError: string | undefined;
   let llmSkipped = false;
   if (opts.llm && opts.llm.apiKey) {
-    lines = await parseStatementWithLLM(text, opts.llm);
-    if (lines) {
+    if (opts.signal?.aborted) throw new Error('import cancelled');
+    const res = await parseStatementWithLLM(text, opts.llm, opts.signal, (p, ph) =>
+      opts.onProgress?.(p * 0.3, ph),
+    );
+    if (res.error === 'cancelled') throw new Error('import cancelled');
+    if (res.lines) {
       parser = 'llm';
+      lines = res.lines;
     } else {
       llmSkipped = true;
-      llmError = 'LLM returned no usable transactions; used regex fallback.';
+      llmError =
+        res.error === 'no transactions found'
+          ? 'LLM found no transactions; used regex fallback.'
+          : 'LLM extraction failed; used regex fallback.';
     }
   }
   if (!lines) {
+    if (opts.signal?.aborted) throw new Error('import cancelled');
     lines = parseStatement(text);
   }
 
-  opts.onProgress?.(0.5, 'Categorizing');
+  if (lines.length === 0) {
+    return { lines, parser, llmSkipped, llmError };
+  }
+
   await categorizeLines(lines, {
     categories: opts.categories,
     llm: opts.llm ?? undefined,
-    onProgress: (p) => opts.onProgress?.(0.5 + p * 0.5, 'Categorizing'),
+    signal: opts.signal,
+    onProgress: (p, phase) => opts.onProgress?.(0.3 + p * 0.7, phase),
   });
 
   return { lines, parser, llmSkipped, llmError };
@@ -345,4 +501,6 @@ export const __test = {
   parseLine,
   dateFromParts,
   buildLLMPrompt,
+  chunkStatementText,
+  categorizeBatchLLM,
 };

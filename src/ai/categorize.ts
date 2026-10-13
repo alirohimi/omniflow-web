@@ -88,6 +88,14 @@ export interface LLMConfig {
   model?: string;
 }
 
+/** Bounded LLM response size so a provider's own output can never stall or
+ *  blow the context. Bump via `categorizeByLLM`/`parseStatement` callers
+ *  that ask for a JSON array. */
+export const LLM_MAX_TOKENS = {
+  categorize: 256,      // single JSON object: {"category", "merchant", ...}
+  statementChunk: 8192, // one extraction chunk: array of many transactions
+} as const;
+
 export async function categorizeByLLM(
   input: CategorizeInput,
   categories: Category[],
@@ -103,7 +111,7 @@ export async function categorizeByLLM(
     currency: input.currency ?? null,
   });
 
-  const raw = await callLLM(cfg, sys, user, [], true);
+  const raw = await callLLM(cfg, sys, user, [], true, LLM_MAX_TOKENS.categorize);
   let parsed: any;
   try {
     parsed = JSON.parse(raw);
@@ -166,6 +174,7 @@ export async function callLLM(
   user: string,
   images: string[] = [],
   jsonMode = false,
+  maxTokens: number = 256,
 ): Promise<string> {
   const imgs = images.filter(Boolean);
   if (cfg.provider === 'anthropic') {
@@ -193,7 +202,7 @@ export async function callLLM(
       },
       body: JSON.stringify({
         model,
-        max_tokens: 256,
+        max_tokens: maxTokens,
         system: sys,
         messages: [{ role: 'user', content }],
       }),
@@ -226,6 +235,7 @@ export async function callLLM(
       systemInstruction: { parts: [{ text: sys }] },
       generationConfig: {
         temperature: 0,
+        maxOutputTokens: maxTokens,
         ...(jsonMode ? { responseMimeType: 'application/json' } : {}),
       },
     });
@@ -285,6 +295,7 @@ export async function callLLM(
         body: JSON.stringify({
           model,
           temperature: 0,
+          max_tokens: maxTokens,
           ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
           messages: [
             { role: 'system', content: sys },
@@ -329,6 +340,7 @@ export async function callLLM(
     body: JSON.stringify({
       model,
       temperature: 0,
+      max_tokens: maxTokens,
       ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
       messages: [
         { role: 'system', content: sys },

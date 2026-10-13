@@ -139,8 +139,10 @@ export function ExpensesView() {
   // Two phases survive a refresh: 'parse' (raw text extracted, re-parse on
   // resume) and 'review' (rows derived, restore the review screen directly).
   const pdfRef = useRef<HTMLInputElement>(null);
+  const pdfAbort = useRef<AbortController | null>(null);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfPhase, setPdfPhase] = useState<string | null>(null);
+  const [pdfProgress, setPdfProgress] = useState<number | null>(null);
   const [pdfRows, setPdfRows] = useState<ParsedStatementLine[] | null>(null);
   const [pdfMeta, setPdfMeta] = useState<{ parser: 'llm' | 'regex'; fileName: string; llmError?: string } | null>(null);
   const [pdfDisabled, setPdfDisabled] = useState<Set<number>>(new Set());
@@ -168,16 +170,34 @@ export function ExpensesView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const cancelPdfParse = () => {
+    pdfAbort.current?.abort();
+  };
+
+  const finishPdfBusy = () => {
+    setPdfBusy(false);
+    setPdfPhase(null);
+    setPdfProgress(null);
+    pdfAbort.current = null;
+  };
+
   // Re-parse persisted raw text (a refresh happened between extract and parse).
   const resumeParsePhase = async (p: PendingImport) => {
     setPdfBusy(true);
     setPdfPhase('Resuming import…');
+    setPdfProgress(null);
     setPdfError(null);
+    const ac = new AbortController();
+    pdfAbort.current = ac;
     try {
       const result = await parseStatementText(p.text ?? '', {
         llm: store.llmConfig ?? undefined,
         categories: store.vault?.categories,
-        onProgress: (_x, ph) => setPdfPhase(ph),
+        signal: ac.signal,
+        onProgress: (x, ph) => {
+          setPdfPhase(ph);
+          setPdfProgress(x);
+        },
       });
       if (result.lines.length === 0) {
         store.setPendingImport(null);
@@ -199,10 +219,14 @@ export function ExpensesView() {
       setPdfMeta({ parser: result.parser, fileName: p.fileName, llmError: result.llmError });
       setPdfDisabled(new Set(p.disabled));
     } catch (e) {
-      setPdfError(e instanceof Error ? e.message : String(e));
+      if (ac.signal.aborted) {
+        // Cancelled: keep the checkpoint so a later resume can re-parse.
+        setPdfError('Import cancelled. It can be resumed from Settings → Pending import.');
+      } else {
+        setPdfError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
-      setPdfBusy(false);
-      setPdfPhase(null);
+      finishPdfBusy();
     }
   };
 
@@ -213,6 +237,9 @@ export function ExpensesView() {
     setPdfMeta(null);
     setPdfError(null);
     setPdfDisabled(new Set());
+    setPdfProgress(null);
+    const ac = new AbortController();
+    pdfAbort.current = ac;
     setPdfPhase('Reading PDF');
     try {
       // Phase A: extract the text layer. Checkpoint it immediately so a refresh
@@ -244,7 +271,11 @@ export function ExpensesView() {
       const result = await parseStatementText(text, {
         llm: store.llmConfig ?? undefined,
         categories: vault.categories,
-        onProgress: (_p, phase) => setPdfPhase(phase),
+        signal: ac.signal,
+        onProgress: (x, phase) => {
+          setPdfPhase(phase);
+          setPdfProgress(x);
+        },
       });
 
       if (result.lines.length === 0) {
@@ -270,10 +301,15 @@ export function ExpensesView() {
       setPdfRows(result.lines);
       setPdfMeta({ parser: result.parser, fileName: file.name, llmError: result.llmError });
     } catch (e) {
-      setPdfError(e instanceof Error ? e.message : String(e));
+      if (ac.signal.aborted) {
+        // Cancelled mid-parse: keep the checkpoint so Settings → Resume can
+        // re-derive rows from the already-extracted text.
+        setPdfError('Import cancelled. You can resume it from Settings → Pending import.');
+      } else {
+        setPdfError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
-      setPdfBusy(false);
-      setPdfPhase(null);
+      finishPdfBusy();
     }
   };
 
@@ -419,7 +455,32 @@ export function ExpensesView() {
           <IImage size={15} />
           {pdfBusy ? pdfPhase ?? 'Working…' : 'Choose PDF statement'}
         </button>
-        {pdfBusy && pdfPhase && <div className="small muted" style={{ marginTop: 8 }}>{pdfPhase}…</div>}
+        {pdfBusy && pdfPhase && (
+          <div style={{ marginTop: 8 }}>
+            <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+              <div className="spinner sm" aria-hidden />
+              <span className="small muted grow" style={{ minWidth: 0 }}>{pdfPhase}…</span>
+              {pdfProgress != null && (
+                <span className="small mono">{Math.round(pdfProgress * 100)}%</span>
+              )}
+              <button className="btn ghost sm" onClick={cancelPdfParse} type="button">
+                Cancel
+              </button>
+            </div>
+            {pdfProgress != null && (
+              <div
+                className="bar"
+                role="progressbar"
+                aria-valuenow={Math.round(pdfProgress * 100)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                style={{ marginTop: 8 }}
+              >
+                <i style={{ width: `${Math.round(pdfProgress * 100)}%` }} />
+              </div>
+            )}
+          </div>
+        )}
         {pdfError && <div className="small" style={{ color: 'var(--bad)', marginTop: 8 }}>{pdfError}</div>}
 
         {pdfRows && pdfMeta && (
