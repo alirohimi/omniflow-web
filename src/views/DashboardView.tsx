@@ -59,6 +59,20 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
   const ret = live.portfolio?.totalReturnPct ?? null;
   const pacePct = projected > 0 ? Math.min(100, (spentThisMonth / projected) * 100) : 0;
 
+  // Portfolio meta line: only surface live/cached/uncounted counts when there
+  // is something to report (a fresh empty vault would otherwise read
+  // "0 live · 0 cached" noise under the hero number).
+  const liveCt = live.portfolio?.liveQuoteCount ?? 0;
+  const staleCt = live.portfolio?.staleQuoteCount ?? 0;
+  const unctd = live.portfolio?.uncounted ?? 0;
+  const quoteMeta = live.loading
+    ? 'Fetching live quotes…'
+    : (liveCt || staleCt || unctd)
+      ? `${liveCt} live · ${staleCt} cached${unctd ? ` · ${unctd} uncounted` : ''}`
+      : '';
+  const fxMeta = live.fxSource === 'offline' ? 'offline FX (cached/approx)' : '';
+  const metaLine = [quoteMeta, fxMeta].filter(Boolean).join(' · ');
+
   const emRes = useMemo(
     () =>
       computeEmergency({
@@ -118,13 +132,11 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
             <IRefresh size={16} /> {live.loading ? '…' : 'Refresh'}
           </button>
         </div>
-        <div className="row small muted meta-row">
-          <span>
-            {live.loading ? 'Fetching live quotes…' : `${live.portfolio?.liveQuoteCount ?? 0} live · ${live.portfolio?.staleQuoteCount ?? 0} cached`}
-            {live.portfolio && live.portfolio.uncounted > 0 ? ` · ${live.portfolio.uncounted} uncounted` : ''}
-            {live.fxSource === 'offline' ? ' · offline FX (cached/approx)' : ''}
-          </span>
-        </div>
+        {metaLine ? (
+          <div className="row small muted meta-row">
+            <span>{metaLine}</span>
+          </div>
+        ) : null}
       </div>
 
       {aiLoading ? (
@@ -166,30 +178,31 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
       <div className="card">
         <div className="hero">
           <div>
-            <div className="hero-lbl">Coverage · {base}</div>
-            <div className="hero-num">
-              {emRes.coverageMonths != null
-                ? `${emRes.coverageMonths.toFixed(1)} mo`
-                : emRes.lines.length > 0
-                  ? '—'
-                  : 'not set'}
-            </div>
+            <div className="hero-lbl">Reserve · {base}</div>
+            <div className="hero-num">{formatMoney(emRes.reserve, base)}</div>
             <div className="hero-sub">
-              {formatMoney(emRes.reserve, base)} set aside
-              {emRes.target > 0 ? ` of ${formatMoney(emRes.target, base)} target` : ''}
+              {emRes.lines.length === 0 ? (
+                <span className="muted">No lines yet — add one under Portfolio</span>
+              ) : emRes.coverageMonths != null ? (
+                <span>{emRes.coverageMonths.toFixed(1)} mo of essentials</span>
+              ) : (
+                <span className="muted">Coverage not measurable yet</span>
+              )}
             </div>
           </div>
           <button className="btn ghost sm" onClick={() => onOpenTab('investments')}>
             Manage <IChevron size={16} />
           </button>
         </div>
-        {emRes.lines.length > 0 ? (
-          <div className="bar"><i style={{ width: `${Math.min(100, Math.round(emRes.pctOfTarget))}%` }} /></div>
-        ) : (
-          <div className="small muted" style={{ marginTop: 8 }}>
-            No reserve lines yet — designate an account or record a manual amount under Portfolio.
-          </div>
-        )}
+        {emRes.lines.length > 0 && emRes.target > 0 ? (
+          <>
+            <div className="bar"><i style={{ width: `${Math.min(100, Math.round(emRes.pctOfTarget))}%` }} /></div>
+            <div className="small muted" style={{ marginTop: 6 }}>
+              {Math.min(100, Math.round(emRes.pctOfTarget))}% of {formatMoney(emRes.target, base)} target
+              {emRes.gap > 0 ? ` · gap ${formatMoney(emRes.gap, base)}` : ' · target met'}
+            </div>
+          </>
+        ) : null}
       </div>
 
       {advice.length > 0 && (

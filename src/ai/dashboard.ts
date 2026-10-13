@@ -92,10 +92,20 @@ export function rulesSummary(
   const sym = currencyInfo(brief.baseCurrency).symbol;
   const lines: string[] = [];
 
+  // Empty-portfolio onboarding: a single merged sentence, not the "No
+  // investments tracked yet." line AND the empty-nudge rule side by side
+  // (that reads as the same fact twice). The onboarding/empty line must only
+  // appear when the portfolio truly has no value — a populated portfolio
+  // should report its net worth, never a contradictory "no investments" fact.
+  const netWorthRule = rules.find((r) => r.title === 'No investments tracked');
   if (brief.netWorthBase > 0) {
     const ret = brief.portfolioReturnPct;
     const retStr = ret != null ? ` (${ret >= 0 ? '+' : ''}${ret}% vs cost)` : '';
     lines.push(`Net worth ${sym}${Math.round(brief.netWorthBase).toLocaleString()}${retStr}`);
+  } else if (netWorthRule) {
+    lines.push(
+      'Add holdings (Luno, IBKR, StashAway, or manual) to unlock diversification and FX-concentration insights.',
+    );
   } else {
     lines.push('No investments tracked yet.');
   }
@@ -106,10 +116,10 @@ export function rulesSummary(
     );
   }
 
-  if (rules.length > 0) {
-    const top = rules[0];
-    lines.push(`${top.title}: ${top.detail}`);
-  } else if (lines.length < 3) {
+  const remaining = rules.filter((r) => r.title !== 'No investments tracked');
+  if (remaining.length > 0) {
+    lines.push(`${remaining[0].title}: ${remaining[0].detail}`);
+  } else if (lines.length < 3 && !netWorthRule) {
     lines.push('No pacing or concentration alerts — all clear.');
   }
 
