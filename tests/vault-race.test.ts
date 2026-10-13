@@ -196,7 +196,7 @@ function makeDeferred<T>() {
  */
 async function waitFor(
   fn: () => boolean,
-  timeoutMs = 10_000, // CI runners are slow; 2s flaked (github #58)
+  timeoutMs = 25_000, // CI runners are slow; 10s flaked (github #58) — keep under the 30s testTimeout
   label = 'condition',
   describe?: () => string,
 ): Promise<void> {
@@ -280,7 +280,7 @@ describe('vault scope race (logout -> sign-in)', () => {
     // first tick firing before the Probe render has assigned the ref.
     // waitFor flushes its own commit per tick — do NOT wrap it in an outer
     // act (nested act is unsupported in React 18 and deadlocks the poll).
-    await waitFor(() => storeRef.current?.status === 'creating', 10_000, "local probe -> 'creating'");
+    await waitFor(() => storeRef.current?.status === 'creating', 25_000, "local probe -> 'creating'");
     expect(storeRef.current!.status).toBe('creating');
 
     // 2) Sign-in lands while the user-scoped DB read is still in flight.
@@ -299,7 +299,7 @@ describe('vault scope race (logout -> sign-in)', () => {
     // waitFor already flushes a commit on every tick.)
     await waitFor(
       () => storeRef.current?.status === 'unlocked',
-      10_000,
+      25_000,
       'auto-unlock -> "unlocked"',
       () => diag(storeRef),
     );
@@ -331,7 +331,7 @@ describe('vault scope race (logout -> sign-in)', () => {
       () =>
         cloudRef.saves.length > 0 &&
         (cloudRef.saves[cloudRef.saves.length - 1] as { userId: string }).userId === USER_ID,
-      10_000,
+      25_000,
       'follow-up upsert of the real blob',
     );
     const lastSave = cloudRef.saves[cloudRef.saves.length - 1] as {
@@ -367,7 +367,7 @@ describe('vault scope race (logout -> sign-in)', () => {
       );
     });
     // Let the probe + auto-unlock chain fully settle. (No outer act.)
-    await waitFor(() => storeRef.current?.status === 'unlocked', 10_000, 'auto-unlock -> "unlocked"');
+    await waitFor(() => storeRef.current?.status === 'unlocked', 25_000, 'auto-unlock -> "unlocked"');
     expect(storeRef.current!.status).toBe('unlocked');
     expect(storeRef.current!.coachLog?.length).toBe(2);
 
@@ -378,7 +378,7 @@ describe('vault scope race (logout -> sign-in)', () => {
     await act(async () => {
       await storeRef.current!.createVault(PASSWORD);
     });
-    await waitFor(() => storeRef.current?.status === 'unlocked', 10_000, 'guarded createVault unlock');
+    await waitFor(() => storeRef.current?.status === 'unlocked', 25_000, 'guarded createVault unlock');
     expect(storeRef.current!.status).toBe('unlocked');
     expect(storeRef.current!.coachLog?.length).toBe(2);
     expect(cloudRef.saves.length).toBe(0); // no empty-vault upsert

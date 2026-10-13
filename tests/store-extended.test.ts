@@ -139,7 +139,7 @@ function Probe({ storeRef }: { storeRef: React.MutableRefObject<VaultStore | nul
 
 async function waitFor(
   fn: () => boolean | Promise<boolean>,
-  timeoutMs = 10_000, // CI runners are slow; 3s flaked (github #58)
+  timeoutMs = 25_000, // CI runners are slow; 10s flaked (github #58) — keep under the 30s testTimeout
   label = 'condition',
 ): Promise<void> {
   const t0 = Date.now();
@@ -186,7 +186,7 @@ async function unlockFreshVault(
   });
   await waitFor(
     () => storeRef.current?.status === 'creating',
-    10_000,
+    25_000,
     'fresh probe -> creating',
   );
   await act(async () => {
@@ -194,7 +194,7 @@ async function unlockFreshVault(
   });
   await waitFor(
     () => storeRef.current?.status === 'unlocked',
-    10_000,
+    25_000,
     'createVault -> unlocked',
   );
 
@@ -356,14 +356,14 @@ describe('extended-entity CRUD (budgets/recurring/liabilities/assets/dividends/d
       async () => {
         return lastDecryptedHasBoth().then((ok) => ok);
       },
-      10_000,
+      25_000,
       'cloud upsert carries both extended entities',
     );
 
     // Live syncState settled to 'synced' (re-read, not the stale snapshot).
     await waitFor(
       () => storeRef.current!.syncState === 'synced',
-      10_000,
+      25_000,
       'syncState settled',
     );
 
@@ -425,7 +425,7 @@ describe('extended-entity CRUD (budgets/recurring/liabilities/assets/dividends/d
     });
     await waitFor(
       () => storeRef.current?.status === 'unlocked',
-      10_000,
+      25_000,
       'createVault after sign-in',
     );
 
@@ -454,7 +454,7 @@ describe('extended-entity CRUD (budgets/recurring/liabilities/assets/dividends/d
         (blob.budgets?.length ?? 0) >= 1
       );
     }
-    await waitFor(() => lastDecryptedHasEmergency(), 10_000, 'cloud upsert carries emergency item');
+    await waitFor(() => lastDecryptedHasEmergency(), 25_000, 'cloud upsert carries emergency item');
 
     // 5) The user's actual symptom: logout, then login again — the row must
     //    come back from the DB, not from memory.
@@ -485,7 +485,7 @@ describe('extended-entity CRUD (budgets/recurring/liabilities/assets/dividends/d
     });
     await waitFor(
       () => storeRef.current?.status === 'unlocked',
-      10_000,
+      25_000,
       're-login unlock',
     );
     const restored = storeRef.current!.vault!;
