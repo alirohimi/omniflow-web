@@ -376,4 +376,130 @@ describe('extended-entity CRUD (budgets/recurring/liabilities/assets/dividends/d
     expect(restored!.liabilities![0]).toMatchObject({ name: 'Card', apr: 16, extraPayment: 100 });
     await unmount();
   });
+
+  it('emergency writes survive logout when the app mounts SIGNED OUT first (production order)', async () => {
+    // Regression test for the "emergency reserve disappears after logout" bug.
+    // The production app mounts <AuthProvider><VaultProvider> BEFORE sign-in,
+    // so the first render has scope='local' / cloudOn=false. The []-deps CRUD
+    // callbacks (addEmergencyItem, setEnt, ...) froze the FIRST-RENDER persist
+    // closure. Old persist read cloudOn from that stale closure -> every post-
+    // sign-in mutation was a silent in-memory no-op, never written to the DB
+    // row, so it vanished on the next logout. persist now reads live refs, so
+    // writes made through the frozen chain persist for real.
+    const USER = 'user-late-signin';
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    cloudRef.saves = [];
+    cloudRef.strict = async () => undefined;
+    // 1) Production order: the app mounts while SIGNED OUT.
+    authRef.set({
+      user: null,
+      accountPassword: null,
+      accessToken: null,
+      restoring: false,
+      cloudAvailable: true,
+    });
+
+    const storeRef = React.createRef<VaultStore | null>();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root: Root = createRoot(container);
+    await act(async () => {
+      root.render(
+        React.createElement(VaultProvider, null, React.createElement(Probe, { storeRef })),
+      );
+    });
+
+    // 2) Sign in, then create the vault. Production drives this through the
+    //    single-credential auto-flow effect, but that effect stalls under
+    //    act() state coalescing in the harness (the probe re-settle never
+    //    re-triggers it), so we call the SAME createVault() it would call —
+    //    which is also the explicit path a user hits on first run.
+    authRef.set({
+      user: { id: USER },
+      accountPassword: PASSWORD,
+      accessToken: 'fake-jwt',
+      restoring: false,
+    });
+    await act(async () => {
+      await storeRef.current!.createVault(PASSWORD, { baseCurrency: 'MYR' });
+    });
+    await waitFor(
+      () => storeRef.current?.status === 'unlocked',
+      3_000,
+      'createVault after sign-in',
+    );
+
+    // 3) Add an emergency item + an extended entity through the stable CRUD
+    //    callbacks (the ones frozen onto the first-render chain — the bug).
+    await act(async () => {
+      storeRef.current!.addEmergencyItem({
+        kind: 'manual',
+        name: 'Cash buffer',
+        currency: 'MYR',
+        amount: 5_000,
+        createdAt: Date.now(),
+      });
+      storeRef.current!.addBudget({ category: 'Food & Dining', cap: 800, period: 'monthly', rollover: false });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    // 4) The encrypted cloud upsert must actually carry both rows.
+    async function lastDecryptedHasEmergency(): Promise<boolean> {
+      const saves = cloudRef.saves.filter((s) => s.userId === USER);
+      if (saves.length === 0) return false;
+      const blob = await decryptVault<VaultBlob>(saves[saves.length - 1].cipher, PASSWORD);
+      return (
+        !!blob &&
+        (blob.emergency?.items?.length ?? 0) >= 1 &&
+        (blob.budgets?.length ?? 0) >= 1
+      );
+    }
+    await waitFor(() => lastDecryptedHasEmergency(), 4_000, 'cloud upsert carries emergency item');
+
+    // 5) The user's actual symptom: logout, then login again — the row must
+    //    come back from the DB, not from memory.
+    authRef.set({
+      user: null,
+      accountPassword: null,
+      accessToken: null,
+      restoring: false,
+    });
+    // Re-login: strict now returns the last cipher saved for this user.
+    cloudRef.strict = (id: string) => {
+      const saves = cloudRef.saves.filter((s) => s.userId === id);
+      return Promise.resolve(
+        saves.length ? saves[saves.length - 1].cipher : undefined,
+      );
+    };
+    authRef.set({
+      user: { id: USER },
+      accountPassword: PASSWORD,
+      accessToken: 'fake-jwt',
+      restoring: false,
+    });
+    // 5b) Explicit unlock, mirroring the auto-flow's unlock(pp) call. It
+    //     re-reads the DB row via fetchCloudVaultStrict — so it only succeeds
+    //     if the writes in step 3 actually reached the store.
+    await act(async () => {
+      await storeRef.current!.unlock(PASSWORD);
+    });
+    await waitFor(
+      () => storeRef.current?.status === 'unlocked',
+      3_000,
+      're-login unlock',
+    );
+    const restored = storeRef.current!.vault!;
+    expect(restored.emergency?.items).toHaveLength(1);
+    expect(restored.emergency?.items[0]).toMatchObject({
+      name: 'Cash buffer',
+      kind: 'manual',
+      amount: 5_000,
+    });
+    expect(restored.budgets).toHaveLength(1);
+
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
 });

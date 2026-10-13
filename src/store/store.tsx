@@ -282,6 +282,18 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const passRef = useRef<string>(''); // holds passphrase in-memory only
   const cipherRef = useRef<VaultCipher | null>(null); // last encrypted blob
   const chainRef = useRef<Promise<void>>(Promise.resolve());
+  // Latest-auth refs: the provider mounts BEFORE sign-in (user=null ->
+  // cloudOn=false, scope='local'). The extended-entity CRUD mutators are
+  // stable callbacks ([] deps) that froze the FIRST-render `persist`
+  // closure, where cloudOn was still false. Reading scope/cloudOn straight
+  // from that stale closure made every later mutation a silent no-op
+  // (in-memory only) — the value vanished on the next logout because it was
+  // never written to the DB. The refs below let a stable `persist` always
+  // see the current auth state.
+  const scopeRef = useRef(scope);
+  const cloudOnRef = useRef(cloudOn);
+  scopeRef.current = scope;
+  cloudOnRef.current = cloudOn;
 
   // Probe admin status + pull this user's LLM policy when the cloud user is
   // known. Both are no-ops (feature off) when the 0002 migration has not been
@@ -335,6 +347,12 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   // There is no local write path — the DB row is the only copy.
   const persist = useCallback(
     async (next: VaultBlob) => {
+      // Read the CURRENT auth state from refs: this callback is captured by
+      // the stable ([]-deps) extended-entity mutators, which froze the
+      // first-render closure (cloudOn=false). Refs make late writes persist
+      // for real even when the closure is stale.
+      const scope = scopeRef.current;
+      const cloudOn = cloudOnRef.current;
       const pass = passRef.current;
       if (!pass || !cloudOn) return; // unsigned-in scope: in-memory only
       chainRef.current = chainRef.current.then(
@@ -358,7 +376,13 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         },
       );
     },
-    [scope, cloudOn],
+    // Stable on purpose: the body reads scope/cloudOn from refs, so a single
+    // first-render instance is correct for every later auth state. This is
+    // what the []-deps extended-entity mutators (addEmergencyItem, setEnt,
+    // ...) resolve against — if persist were re-created on each sign-in,
+    // their frozen first-render copy would keep writing (or refusing) based
+    // on the stale pre-sign-in closure.
+    [],
   );
 
   // ---- keepalive last-save flush (unload-time persistence) -----------------
