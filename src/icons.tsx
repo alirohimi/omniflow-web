@@ -122,6 +122,20 @@ export const IClose = (p: P) => (
   </S>
 );
 
+export const ICheck = (p: P) => (
+  <S {...p}>
+    <path d="M4.5 12.5 9.5 17.5 19.5 7" />
+  </S>
+);
+
+export const IDots = (p: P) => (
+  <S {...p}>
+    <circle cx="5.5" cy="12" r="1.4" />
+    <circle cx="12" cy="12" r="1.4" />
+    <circle cx="18.5" cy="12" r="1.4" />
+  </S>
+);
+
 export const ILock = (p: P) => (
   <S {...p}>
     <rect x="5" y="10.5" width="14" height="9.5" rx="2" />

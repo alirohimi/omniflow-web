@@ -3,17 +3,19 @@
 // Grouped by platformName, with live quotes and FX-converted base values.
 // ============================================================================
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
 import { useToast } from '../components/Toast';
 import { DelButton } from '../components/DelButton';
+import { Disclosure } from '../components/Disclosure';
 import { EmergencyPanel } from './EmergencyPanel';
 import { fxService } from '../services';
 import { valueInBase } from '../ai/portfolio';
 import type { AccountLine } from '../ai/portfolio';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
-import { IRefresh, IPlus, IPencil, IX, IChevron } from '../icons';
+import { IRefresh, IPlus, IPencil, IX, IDots, ICheck } from '../icons';
 import type { InvestmentAccount, InvestmentHolding } from '../domain/types';
 
 const ASSET_CLASSES = ['equity-us', 'equity-local', 'etf', 'crypto', 'cash', 'mmf'] as const;
@@ -274,7 +276,7 @@ export function InvestmentsView() {
         </div>
       </div>
 
-      <h2 className="section-title">Accounts</h2>
+      <Disclosure id="accounts" title={`Accounts${vault.accounts.length ? ` (${vault.accounts.length})` : ''}`}>
       <div className="card">
         <div className="cols">
           <label className="field"><span>Platform (Luno, IBKR, Moomoo…)</span>
@@ -293,7 +295,7 @@ export function InvestmentsView() {
             <input type="number" inputMode="decimal" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="5000" />
           </label>
         </div>
-        <button className="btn ghost sm" onClick={addAccount}><IPlus size={16} /> Create account</button>
+        <button className="btn ghost sm" onClick={addAccount} style={{ width: '100%' }}><IPlus size={16} /> Create account</button>
 
         {vault.accounts.length > 0 && (
           <div className="list">
@@ -302,56 +304,59 @@ export function InvestmentsView() {
               const isTarget = a.id === accountId;
               const line = accLines.get(a.id);
               const hasDeposit = typeof a.initialDepositBase === 'number' && a.initialDepositBase > 0;
+              const reserved = reservedIds.has(a.id);
+              const pnlGood = line?.pnlBase != null && line.pnlBase >= 0;
+              const pnlBad = line?.pnlBase != null && line.pnlBase < 0;
               return (
-                <div key={a.id}>
-                  <div className="item">
-                    <div className="grow">
-                      <div className="title">
-                        {a.platformName}
-                        {isTarget && <span className="chip sm" style={{ marginLeft: 8 }}>target</span>}
-                        {reservedIds.has(a.id) && <span className="chip sm ok" style={{ marginLeft: 8 }}>in reserve</span>}
-                      </div>
-                      <div className="meta">
-                        {a.accountType} · {holdings} holding{holdings === 1 ? '' : 's'}
-                        {line && line.valueBase > 0 && (
-                          <>
-                            {' · live '}
-                            {formatMoney(line.valueBase, base)}
-                            {line.depositBase != null && (
-                              <>
-                                {' · P&L '}
-                                <span className={line.pnlBase! >= 0 ? 'pos' : 'neg'}>
-                                  {line.pnlBase! >= 0 ? '+' : ''}{formatMoney(line.pnlBase!, base)} ({line.depositReturnPct! >= 0 ? '+' : ''}{line.depositReturnPct!.toFixed(1)}%)
-                                </span>
-                              </>
-                            )}
-                          </>
-                        )}
-                      </div>
+                <div className="acc-card" key={a.id}>
+                  <div className="acc-head">
+                    <div className="acc-name grow">
+                      {a.platformName}
+                      {isTarget && (
+                        <button className={`chip sm ${isTarget ? 'on' : ''}`} aria-pressed={isTarget} onClick={() => setAccountId(a.id)} title="Holding form target">
+                          <ICheck size={12} /> target
+                        </button>
+                      )}
+                      {reserved && (
+                        <button className="chip sm ok" aria-pressed title="Remove from emergency reserve" onClick={() => unReserve(a.id)}>
+                          in reserve
+                        </button>
+                      )}
                     </div>
-                    <button
-                      className="btn ghost sm"
-                      onClick={() => (reservedIds.has(a.id) ? unReserve(a.id) : toReserve(a.id))}
-                      aria-pressed={reservedIds.has(a.id)}
-                      title={reservedIds.has(a.id) ? 'Remove this account from the emergency reserve' : 'Count this account toward the emergency reserve'}
-                    >
-                      {reservedIds.has(a.id) ? <><IX size={14} /> Remove</> : 'To reserve'}
-                    </button>
-                    <button
-                      className={`btn ghost sm${isTarget ? ' active' : ''}`}
-                      aria-pressed={isTarget}
-                      onClick={() => setAccountId(a.id)}
-                    >
-                      {isTarget ? 'Target set' : 'Set target'}
-                    </button>
-                    <DelButton label={`Delete ${a.platformName}`} onConfirm={() => removeAccount(a.id)} />
+                    <MenuButton
+                      items={[
+                        {
+                          label: reserved ? 'Remove from reserve' : 'Add to reserve',
+                          icon: ICheck,
+                          onClick: () => (reserved ? unReserve(a.id) : toReserve(a.id)),
+                        },
+                        {
+                          label: 'Set as target',
+                          icon: ICheck,
+                          hide: isTarget,
+                          onClick: () => setAccountId(a.id),
+                        },
+                        { label: 'Delete account', danger: true, onClick: () => removeAccount(a.id) },
+                      ]}
+                    />
                   </div>
-                  <div className="row" style={{ padding: '8px 14px 10px' }}>
-                    <span className="small muted" style={{ flex: 1, minWidth: 0 }}>
-                      Starting capital: {hasDeposit ? formatMoney(a.initialDepositBase!, base) : 'not set'}
-                    </span>
+                  <div className="acc-value">
+                    {line && line.valueBase > 0 ? (
+                      <span className="val">{formatMoney(line.valueBase, base)}</span>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                    {line?.depositBase != null && (
+                      <span className={`ret ${pnlGood ? 'pos' : pnlBad ? 'neg' : ''}`}>
+                        {line.pnlBase! >= 0 ? '+' : ''}{formatMoney(line.pnlBase!, base)} ({line.depositReturnPct! >= 0 ? '+' : ''}{line.depositReturnPct!.toFixed(1)}%)
+                      </span>
+                    )}
+                  </div>
+                  <div className="acc-foot">
+                    <span className="muted small">{a.accountType} · {holdings} holding{holdings === 1 ? '' : 's'}</span>
                     <DepositEdit
                       initial={hasDeposit ? String(a.initialDepositBase) : ''}
+                      display={hasDeposit ? formatMoney(a.initialDepositBase!, base) : 'none'}
                       onDone={(v) => saveDeposit(a.id, v)}
                     />
                   </div>
@@ -364,12 +369,13 @@ export function InvestmentsView() {
           <div className="empty">No accounts yet — create one above.</div>
         )}
       </div>
+      </Disclosure>
 
       <h2 className="section-title">Emergency reserve</h2>
       <EmergencyPanel />
 
-      <h2 className="section-title" ref={addHoldFormRef}>{editingId ? 'Edit holding' : 'Add holding'}</h2>
-      <div className="card">
+      <Disclosure id="add-holding" title={editingId ? 'Edit holding' : 'Add holding'} defaultOpen={editingId != null || accountId !== ''}>
+      <div className="card" ref={addHoldFormRef}>
         {!accountId && !editingId && (
           <div className="small muted" style={{ marginBottom: 8 }}>
             Set a target account above, then add holdings to it.
@@ -419,6 +425,7 @@ export function InvestmentsView() {
           {accountId ? (editingId ? 'Save changes' : 'Add holding') : 'Set a target account first'}
         </button>
       </div>
+      </Disclosure>
 
       {[...grouped.entries()].map(([plat, holds]) => (
         <div key={plat}>
@@ -486,7 +493,15 @@ export function InvestmentsView() {
 /** Compact inline editor for an account's starting-capital (deposit) value.
  *  Renders a small input + save that expands in place; keeps the accounts
  *  list tidy without a separate modal. */
-function DepositEdit({ initial, onDone }: { initial: string; onDone: (value: string) => void }) {
+function DepositEdit({
+  initial,
+  display,
+  onDone,
+}: {
+  initial: string;
+  display?: string;
+  onDone: (value: string) => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(initial);
   const start = () => {
@@ -499,8 +514,18 @@ function DepositEdit({ initial, onDone }: { initial: string; onDone: (value: str
   };
   if (!editing) {
     return (
-      <button className="btn ghost sm" onClick={start} title="Edit starting capital">
-        <IPencil size={13} /> Edit
+      <button className="dep-edit" onClick={start} title="Edit starting capital">
+        {display ? (
+          <>
+            <span className="val">{display}</span>
+            <IPencil size={13} />
+          </>
+        ) : (
+          <>
+            Set starting capital
+            <IPlus size={13} />
+          </>
+        )}
       </button>
     );
   }
@@ -517,6 +542,88 @@ function DepositEdit({ initial, onDone }: { initial: string; onDone: (value: str
         aria-label="Starting capital"
       />
       <button className="btn ghost sm" onClick={commit}>Save</button>
+    </div>
+  );
+}
+
+/** Themed overflow menu for an account card. A single 44px "⋯" button
+ *  replaces three side-by-side ghost buttons that no longer fit on phones,
+ *  keeping destructive delete inside a two-tap armed flow. The popover is a
+ *  themed component (not a native control) and closes on outside tap or
+ *  Escape. */
+function MenuButton({ items }: {
+  items: {
+    label: string;
+    icon?: (p: { size?: number }) => ReactNode;
+    danger?: boolean;
+    hide?: boolean;
+    onClick: () => void;
+  }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [armed, setArmed] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const timer = useRef<number>(0);
+  const visible = items.filter((i) => !i.hide);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = () => { setOpen(false); setArmed(null); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', onKey);
+      window.clearTimeout(timer.current);
+    };
+  }, [open]);
+
+  const fire = (i: (typeof items)[0]) => {
+    if (i.danger) {
+      if (armed === i.label) {
+        setOpen(false);
+        setArmed(null);
+        i.onClick();
+        return;
+      }
+      setArmed(i.label);
+      timer.current = window.setTimeout(() => setArmed(null), 2500);
+      return;
+    }
+    setOpen(false);
+    i.onClick();
+  };
+
+  return (
+    <div className="acc-menu" ref={rootRef} onPointerDown={(e) => e.stopPropagation()}>
+      <button
+        className="menu-toggle"
+        aria-label="Account actions"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <IDots size={18} />
+      </button>
+      {open && visible.length > 0 && (
+        <div className="menu-pop" role="menu">
+          {visible.map((i) => {
+            const Icon = i.icon;
+            const armedNow = armed === i.label;
+            return (
+              <button
+                key={i.label}
+                role="menuitem"
+                className={`menu-item${i.danger ? ' danger' : ''}${armedNow ? ' armed' : ''}`}
+                onClick={() => fire(i)}
+              >
+                {Icon && <Icon size={15} />}
+                {i.danger && armedNow ? 'Tap again to confirm' : i.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

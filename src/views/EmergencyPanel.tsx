@@ -18,6 +18,7 @@ import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
 import { useToast } from '../components/Toast';
 import { DelButton } from '../components/DelButton';
+import { Disclosure } from '../components/Disclosure';
 import { IPlus } from '../icons';
 import { CURRENCIES, currencyInfo, formatMoney, EMERGENCY_DEFAULT } from '../domain/enums';
 import { computeEmergency } from '../insights';
@@ -197,6 +198,7 @@ export function EmergencyPanel() {
         </div>
       )}
 
+      <Disclosure id="em-addline" title="Add a reserve line">
       <div className="row" style={{ marginTop: 14 }}>
         <span>Reserve line type</span>
         <span className="switch">
@@ -246,7 +248,9 @@ export function EmergencyPanel() {
       <button className="btn sm" style={{ width: '100%', marginTop: 12 }} onClick={addLine}>
         <IPlus size={16} /> Add reserve line
       </button>
+      </Disclosure>
 
+      <Disclosure id="em-target" title="Reserve target">
       <h2 className="section-title">Target</h2>
       <div className="cols">
         <label className="field"><span>Months of essentials</span>
@@ -277,6 +281,7 @@ export function EmergencyPanel() {
         Months multiplies your 90-day essential spend. A pinned target overrides the months figure when set;
         clear it to go back to derived.
       </div>
+      </Disclosure>
     </div>
   );
 }

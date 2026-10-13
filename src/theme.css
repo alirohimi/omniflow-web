@@ -276,6 +276,35 @@ h1, h2, h3 { font-family: var(--font-display); }
   color: var(--muted); text-transform: uppercase; letter-spacing: 1px;
 }
 
+/* ---------- Disclosure (mobile-first collapsible section) ----------
+ * On coarse pointers (phones) the body collapses behind a themed button so
+ * dense config forms don't stack down the page; on fine pointers (desktop)
+ * it renders expanded with the toggle hidden. */
+.disclosure { margin: 12px 0; }
+.disclosure-toggle {
+  width: 100%; min-height: 48px;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: var(--bg-2); border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0 14px; color: var(--text);
+  font: inherit; font-size: 13px; font-weight: 650;
+  cursor: pointer;
+}
+.disclosure-toggle:active { background: var(--bg-3, var(--bg-2)); }
+.disclosure-chev {
+  width: 9px; height: 9px; flex: none;
+  border-right: 2px solid var(--faint); border-bottom: 2px solid var(--faint);
+  transform: rotate(-45deg);
+  transition: transform .15s ease;
+}
+.disclosure-toggle[aria-expanded="true"] .disclosure-chev { transform: rotate(45deg); }
+.disclosure-body { padding: 4px 0; }
+/* Desktop: always expanded, hide the toggle */
+@media (pointer: fine) {
+  .disclosure-toggle { display: none; }
+  .disclosure-body { padding: 0; }
+}
+
 /* ---------- Hero stat (Monitor surface: one dominant number) ---------- */
 .hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .hero-lbl {
@@ -391,6 +420,12 @@ textarea { resize: vertical; min-height: 44px; }
 .chip svg { color: inherit; }
 .chip.neg { color: var(--bad); border-color: var(--bad); background: var(--bad-soft); }
 .chip.ok { color: var(--good); border-color: var(--good); background: var(--good-soft); }
+/* Interactive chip (used as a toggle, e.g. "target" / "in reserve"): when
+   active it glows in the accent color. Button chips get a real cursor + a
+   coarse-pointer hit area. */
+.chip.on { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
+button.chip { cursor: pointer; font: inherit; font-weight: 500; }
+button.chip { -webkit-tap-highlight-color: transparent; }
 
 /* ---------- Status badge (sync state, etc.) ---------- */
 .badge {
@@ -414,6 +449,79 @@ textarea { resize: vertical; min-height: 44px; }
 .item .grow { flex: 1; min-width: 0; }
 .item .title { font-weight: 600; font-size: 14.5px; }
 .item .meta { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- Account cards (Investments tab) ----------
+   Stacked 3-line card: name + state chips / live value + P&L / type +
+   holdings + starting-capital edit. Every action collapses into a single
+   themed overflow menu, so rows no longer fight for horizontal space on
+   phones. */
+.acc-card {
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 13px; padding: 13px 14px;
+  transition: border-color .15s, background .15s;
+}
+.acc-card:hover { border-color: var(--line-2); background: var(--card-2); }
+.acc-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.acc-name {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0;
+  font-weight: 600; font-size: 15px; line-height: 1.35;
+}
+.acc-name .chip { flex: none; }
+.acc-value { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.acc-value .val {
+  font-family: var(--font-display); font-weight: 700; font-size: 20px;
+  font-variant-numeric: tabular-nums; letter-spacing: -0.3px;
+}
+.acc-value .ret { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.acc-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap;
+}
+/* Inline "edit starting capital" control — quiet until active */
+.dep-edit {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: none; border: 1px dashed var(--line-2); border-radius: 9px;
+  padding: 6px 10px; font: inherit; font-size: 12.5px; color: var(--muted);
+  cursor: pointer; transition: color .15s, border-color .15s, background .15s;
+}
+.dep-edit:hover { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
+.dep-edit .val { font-family: var(--font-display); font-weight: 700; font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* Themed overflow menu (⋯) on each account card */
+.acc-menu { position: relative; flex: none; }
+.menu-toggle {
+  width: 44px; height: 44px; display: grid; place-items: center;
+  background: none; border: 0; border-radius: 12px; color: var(--faint);
+  cursor: pointer; transition: color .15s, background .15s;
+}
+.menu-toggle:hover { color: var(--text); background: var(--bg-2); }
+.menu-toggle[aria-expanded="true"] { color: var(--text); background: var(--bg-2); }
+.menu-pop {
+  position: absolute; right: 0; top: 44px; z-index: 60;
+  min-width: 190px;
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--card-2);
+  border: 1px solid var(--line-2);
+  border-radius: 13px; padding: 5px;
+  box-shadow: 0 12px 32px rgba(2, 6, 16, 0.5);
+  animation: rise .16s cubic-bezier(.2, .8, .3, 1);
+}
+.menu-item {
+  display: flex; align-items: center; gap: 9px;
+  background: none; border: 0; border-radius: 9px; padding: 10px 11px;
+  font: inherit; font-size: 13.5px; font-weight: 500; color: var(--text);
+  cursor: pointer; text-align: left; white-space: nowrap;
+  transition: background .15s, color .15s;
+}
+.menu-item:hover { background: var(--bg-2); }
+.menu-item svg { color: var(--muted); flex: none; }
+.menu-item.danger { color: var(--bad); }
+.menu-item.danger svg { color: var(--bad); }
+.menu-item.danger:hover { background: var(--bad-soft); }
+.menu-item.armed { background: var(--bad); color: #fff; }
+.menu-item.armed svg { color: #fff; }
 
 /* ---------- Toggle switches (iOS-style, themed — replaces native checkboxes) ---------- */
 .switch { position: relative; display: inline-flex; flex: none; }
@@ -593,6 +701,9 @@ textarea { resize: vertical; min-height: 44px; }
      expects on touch. Bring them up to a real tap area on coarse pointers. */
   .coach-chips .chip { min-height: 44px; padding: 11px 14px; }
   button, .chip, .seg button { touch-action: manipulation; } /* kill 300ms tap delay */
+  /* Account-card state chips ("target", "in reserve") become real 44px taps */
+  .acc-name button.chip { min-height: 40px; padding: 8px 14px; font-size: 13px; }
+  .dep-edit { min-height: 40px; }
 }
 
 /* Small phones */
@@ -613,6 +724,13 @@ textarea { resize: vertical; min-height: 44px; }
   .item { padding: 12px; gap: 10px; }
   .gate { padding: 16px; }
   .gate .panel { padding: 26px 18px; }
+  /* Account cards: keep value prominent, let the overflow menu + chips wrap
+     instead of crowding one line on narrow screens. */
+  .acc-card { padding: 12px; gap: 7px; }
+  .acc-value .val { font-size: 18px; }
+  .acc-value .ret { font-size: 12.5px; }
+  /* Popover stays within the card's right edge even on very small phones */
+  .menu-pop { min-width: 168px; }
 }
 
 /* PWA standalone (iOS / Android install): clear the status bar + home indicator */
