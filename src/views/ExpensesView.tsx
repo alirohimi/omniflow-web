@@ -12,10 +12,10 @@ import { useVaultStore } from '../store/store';
 import { useToast } from '../components/Toast';
 import { DelButton } from '../components/DelButton';
 import { fxService } from '../services';
-import { parseReceipt } from '../services';
+import { parseReceipt, importStatement, type ParsedStatementLine } from '../services';
 import { categorize } from '../ai';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
-import { IReceipt, IScan } from '../icons';
+import { IReceipt, IScan, IImage } from '../icons';
 import type { Expense } from '../domain/types';
 
 const PAYMENT_METHODS = ['card', 'qr', 'ewallet', 'cash', 'bank', 'other'] as const;
@@ -128,6 +128,106 @@ export function ExpensesView() {
     }
   };
 
+  // ---- PDF statement import state
+  const pdfRef = useRef<HTMLInputElement>(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfPhase, setPdfPhase] = useState<string | null>(null);
+  const [pdfRows, setPdfRows] = useState<ParsedStatementLine[] | null>(null);
+  const [pdfMeta, setPdfMeta] = useState<{ parser: 'llm' | 'regex'; fileName: string; llmError?: string } | null>(null);
+  const [pdfDisabled, setPdfDisabled] = useState<Set<number>>(new Set());
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const [pdfImporting, setPdfImporting] = useState(false);
+
+  const runPdfImport = async (file: File) => {
+    setPdfBusy(true);
+    setPdfRows(null);
+    setPdfMeta(null);
+    setPdfError(null);
+    setPdfDisabled(new Set());
+    setPdfPhase('Reading PDF');
+    try {
+      const result = await importStatement(file, {
+        llm: store.llmConfig ?? undefined,
+        categories: vault.categories,
+        onProgress: (_p, phase) => setPdfPhase(phase),
+      });
+      if (result.lines.length === 0) {
+        setPdfError(
+          'No transactions found. If the PDF is a scanned image (no text layer), ' +
+            'use the QR / screenshot OCR path instead.',
+        );
+        return;
+      }
+      setPdfRows(result.lines);
+      setPdfMeta({ parser: result.parser, fileName: file.name, llmError: result.llmError });
+    } catch (e) {
+      setPdfError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPdfBusy(false);
+      setPdfPhase(null);
+    }
+  };
+
+  const patchRow = (i: number, patch: Partial<ParsedStatementLine>) => {
+    setPdfRows((rows) => (rows ? rows.map((r, j) => (j === i ? { ...r, ...patch } : r)) : rows));
+  };
+
+  const toggleRow = (i: number) => {
+    setPdfDisabled((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  };
+
+  const importRows = async () => {
+    if (!pdfRows || !pdfMeta) return;
+    setPdfImporting(true);
+    const enabledIdx = pdfRows.map((_, i) => i).filter((i) => !pdfDisabled.has(i));
+    if (enabledIdx.length === 0) {
+      setPdfImporting(false);
+      return;
+    }
+    // Fetch FX once for any foreign currencies present.
+    const foreign = [...new Set(enabledIdx.map((i) => pdfRows[i].currency).filter((c): c is string => !!c))]
+      .filter((c) => c !== base);
+    let rates = null;
+    if (foreign.length > 0) {
+      try {
+        rates = await fxService.latest(base);
+      } catch {
+        rates = null; // offline: import in original currency, rate 1
+      }
+    }
+    const inputs: Parameters<typeof store.addExpenses>[0] = enabledIdx.map((i) => {
+      const row = pdfRows[i];
+      const currency = row.currency || base;
+      const rate =
+        currency === base || !rates ? 1 : fxService.toBase(1, currency, rates);
+      const isIncome = row.direction === 'in';
+      return {
+        originalAmount: row.amount,
+        originalCurrency: currency,
+        fxRate: isFinite(rate) ? rate : 1,
+        category: row.category || (isIncome ? 'Income' : 'Other'),
+        aiTier: row.aiTier ?? 'dictionary',
+        merchant: row.merchant.trim() || 'Unknown',
+        paymentMethod: 'bank' as const,
+        source: 'import' as const,
+        note: `Imported from ${pdfMeta.fileName} (${pdfMeta.parser})` +
+          (row.raw ? ` · ${row.raw.slice(0, 120)}` : ''),
+        timestamp: row.date,
+      };
+    });
+    store.addExpenses(inputs);
+    toast(`Imported ${enabledIdx.length} transactions from ${pdfMeta.fileName}`);
+    setPdfRows(null);
+    setPdfMeta(null);
+    setPdfDisabled(new Set());
+    setPdfImporting(false);
+  };
+
   return (
     <>
       <h2 className="section-title">Capture</h2>
@@ -179,6 +279,132 @@ export function ExpensesView() {
         {ocrResult && (
           <div className="small muted" style={{ marginTop: 8 }}>
             Found: {ocrResult.amount != null ? ocrResult.amount : '?'} {ocrResult.currency} @ {ocrResult.merchant}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <h3>Import a statement (PDF)</h3>
+        <p className="small muted" style={{ marginTop: 0 }}>
+          Monthly bank / card / e-wallet statement. The PDF is read on your
+          device (never uploaded); AI extracts every transaction and
+          auto-categorizes each merchant. Review and edit before importing.
+          {store.llmConfig ? ' Uses your AI key for extraction.' : ' Falls back to the built-in rules (no key needed).'}
+        </p>
+        <input ref={pdfRef} type="file" accept="application/pdf" style={{ display: 'none' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = '';
+            if (f) void runPdfImport(f);
+          }} />
+        <button className="btn ghost sm" disabled={pdfBusy} onClick={() => pdfRef.current?.click()}>
+          <IImage size={15} />
+          {pdfBusy ? pdfPhase ?? 'Working…' : 'Choose PDF statement'}
+        </button>
+        {pdfBusy && pdfPhase && <div className="small muted" style={{ marginTop: 8 }}>{pdfPhase}…</div>}
+        {pdfError && <div className="small" style={{ color: 'var(--bad)', marginTop: 8 }}>{pdfError}</div>}
+
+        {pdfRows && pdfMeta && (
+          <div style={{ marginTop: 12 }}>
+            <div className="row small" style={{ marginBottom: 8 }}>
+              <span className="chip sm">{pdfRows.length} found</span>
+              <span className="chip sm {pdfMeta.parser === 'llm' ? 'ok' : ''}">
+                {pdfMeta.parser === 'llm' ? 'AI-extracted' : 'rules-parsed'}
+              </span>
+              <span className="muted">{pdfMeta.fileName}</span>
+            </div>
+            {pdfMeta.parser === 'llm' && pdfMeta.llmError && (
+              <div className="small muted" style={{ marginBottom: 8 }}>{pdfMeta.llmError}</div>
+            )}
+            {pdfRows.map((row, i) => {
+              const off = pdfDisabled.has(i);
+              const isIncome = row.direction === 'in';
+              return (
+                <div key={i} className="item" style={{ opacity: off ? 0.45 : 1 }}>
+                  <input
+                    type="checkbox"
+                    checked={!off}
+                    onChange={() => toggleRow(i)}
+                    style={{ width: 18, height: 18, flex: 'none', marginTop: 2 }}
+                    aria-label={`Include ${row.merchant}`}
+                  />
+                  <div className="grow" style={{ minWidth: 0 }}>
+                    <div className="title" style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
+                      <input
+                        value={row.merchant}
+                        onChange={(e) => patchRow(i, { merchant: e.target.value })}
+                        style={{ minWidth: 0, flex: 1, padding: '2px 4px', minHeight: 0, fontSize: 14 }}
+                        aria-label="Merchant"
+                      />
+                      <select
+                        value={row.direction}
+                        onChange={(e) => patchRow(i, { direction: e.target.value as 'in' | 'out', category: e.target.value === 'in' ? 'Income' : row.category || 'Other' })}
+                        style={{ flex: 'none', width: 74, padding: '2px 4px', minHeight: 0, fontSize: 12.5 }}
+                        aria-label="Direction"
+                      >
+                        <option value="out">out</option>
+                        <option value="in">in</option>
+                      </select>
+                    </div>
+                    <div className="meta" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        value={row.amount}
+                        onChange={(e) => patchRow(i, { amount: Number(e.target.value) })}
+                        style={{ width: 92, padding: '2px 6px', minHeight: 0, fontSize: 12.5 }}
+                        aria-label="Amount"
+                      />
+                      <select
+                        value={row.currency || base}
+                        onChange={(e) => patchRow(i, { currency: e.target.value })}
+                        style={{ width: 84, padding: '2px 6px', minHeight: 0, fontSize: 12.5 }}
+                        aria-label="Currency"
+                      >
+                        {[...new Set([base, ...CURRENCIES.map((c) => c.code)])].map((c) => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={row.category || (isIncome ? 'Income' : 'Other')}
+                        onChange={(e) => patchRow(i, { category: e.target.value })}
+                        style={{ width: 130, padding: '2px 6px', minHeight: 0, fontSize: 12.5 }}
+                        aria-label="Category"
+                      >
+                        {vault.categories.map((c) => (
+                          <option key={c.id} value={c.name}>{c.icon} {c.name}</option>
+                        ))}
+                      </select>
+                      {row.date && (
+                        <span>{new Date(row.date).toLocaleDateString()}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="amt">
+                    {isIncome ? '+' : ''}{currencyInfo(row.currency || base).symbol}
+                    {row.amount.toFixed(2)}
+                    {row.currency && row.currency !== base ? (
+                      <div className="meta" style={{ textAlign: 'right' }}>in {row.currency}</div>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+            <div className="row" style={{ marginTop: 10, gap: 8 }}>
+              <button
+                className="btn sm"
+                style={{ flex: 1 }}
+                disabled={pdfImporting}
+                onClick={() => void importRows()}
+              >
+                {pdfImporting
+                  ? 'Importing…'
+                  : `Import ${pdfRows.length - pdfDisabled.size} ${pdfRows.length - pdfDisabled.size === 1 ? 'transaction' : 'transactions'}`}
+              </button>
+              <button className="btn ghost sm" onClick={() => { setPdfRows(null); setPdfMeta(null); setPdfDisabled(new Set()); }}>
+                Discard
+              </button>
+            </div>
           </div>
         )}
       </div>

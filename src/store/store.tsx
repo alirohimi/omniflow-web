@@ -145,6 +145,8 @@ export interface VaultStore {
   llmConfig: LLMConfig | null;
 
   addExpense: (input: NewExpenseInput) => string;
+  /** Batch insert (PDF/CSV statement import). One persist per batch. */
+  addExpenses: (inputs: NewExpenseInput[]) => string[];
   deleteExpense: (id: string) => void;
   /** Patch fields on an existing expense (the coach's edit_expense action). */
   editExpense: (
@@ -718,6 +720,33 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     [persist],
   );
 
+  const addExpenses = useCallback(
+    (inputs: NewExpenseInput[]): string[] => {
+      if (inputs.length === 0) return [];
+      const stamp = Date.now().toString(36);
+      const ids = inputs.map((_, i) => `ex-${stamp}-${i.toString(36)}`);
+      setVault((prev) => {
+        if (!prev) return prev;
+        const added: Expense[] = inputs.map((input, i) => ({
+          id: ids[i],
+          ...withoutUndefined(input),
+          baseCurrency: prev.prefs.baseCurrency,
+          baseAmount: input.originalAmount * input.fxRate,
+          timestamp: input.timestamp ?? Date.now(),
+        }));
+        const next = {
+          ...prev,
+          expenses: [...added, ...prev.expenses],
+          updatedAt: Date.now(),
+        };
+        void persist(next); // one write for the whole batch
+        return next;
+      });
+      return ids;
+    },
+    [persist],
+  );
+
   const deleteExpense = useCallback(
     (id: string) => {
       setVault((prev) => {
@@ -1237,6 +1266,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     vault,
     llmConfig,
     addExpense,
+    addExpenses,
     deleteExpense,
     editExpense,
     addCategory,

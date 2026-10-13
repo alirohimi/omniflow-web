@@ -25,6 +25,21 @@ export {
   type ParsedReceipt,
 } from './ocr';
 
+export {
+  extractPdfText,
+  importStatement,
+  buildLines,
+} from './pdf';
+
+export {
+  parseStatement,
+  parseStatementText,
+  categorizeLines,
+  type ParsedStatementLine,
+  type ParseStatementResult,
+  type Direction,
+} from './statement';
+
 // Re-export a properly-wired marketData instance. The module-level one in
 // marketData.ts has an undefined fx; here we expose the wired version.
 import { MarketDataService } from './marketData';
