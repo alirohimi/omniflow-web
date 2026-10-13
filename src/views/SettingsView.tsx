@@ -46,6 +46,16 @@ export function SettingsView() {
   const [pwBusy, setPwBusy] = useState(false);
   const [pwMsg, setPwMsg] = useState<string | null>(null);
 
+  // Danger zone: two-tap armed confirmation. No native dialog — iOS standalone
+  // PWAs silently swallow window.confirm(), which made this button a no-op in
+  // the installed app. Mirrors the DelButton armed-destructive pattern.
+  const [eraseArmed, setEraseArmed] = useState(false);
+  useEffect(() => {
+    if (!eraseArmed) return;
+    const t = window.setTimeout(() => setEraseArmed(false), 2500);
+    return () => window.clearTimeout(t);
+  }, [eraseArmed]);
+
   // ---- admin: LLM policy + member directory (only when the 0002 migration
   // has been applied AND this user is signed in to the shared DB). ----
   const [members, setMembers] = useState<MemberRow[]>([]);
@@ -613,14 +623,26 @@ export function SettingsView() {
 
       <h2 className="section-title">Danger zone</h2>
       <div className="card">
-        <button className="btn danger sm"
+        <button
+          className={`btn danger sm${eraseArmed ? ' active' : ''}`}
           onClick={() => {
-            if (confirm('Erase ALL OmniFlow data from the database? This cannot be undone.')) {
+            if (eraseArmed) {
+              setEraseArmed(false);
               void store.eraseAll();
+            } else {
+              setEraseArmed(true);
             }
-          }}>
-          Erase all data
+          }}
+          style={eraseArmed ? { background: 'var(--bad)', color: '#fff', borderColor: 'var(--bad)' } : undefined}
+        >
+          {eraseArmed ? 'Tap again to erase everything' : 'Erase all data'}
         </button>
+        {!eraseArmed && (
+          <div className="small muted" style={{ marginTop: 8 }}>
+            Removes the vault, portfolio, and sync row from this device.
+            No undo.
+          </div>
+        )}
       </div>
     </>
   );

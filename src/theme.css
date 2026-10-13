@@ -589,6 +589,9 @@ textarea { resize: vertical; min-height: 44px; }
   .item .del { min-width: 44px; min-height: 44px; }
   .item .edit { min-width: 44px; min-height: 44px; }
   .tabbar button { min-height: 52px; }
+  /* Quick-prompt chips render ~30px tall — below the 44px target Apple's HIG
+     expects on touch. Bring them up to a real tap area on coarse pointers. */
+  .coach-chips .chip { min-height: 44px; padding: 11px 14px; }
   button, .chip, .seg button { touch-action: manipulation; } /* kill 300ms tap delay */
 }
 

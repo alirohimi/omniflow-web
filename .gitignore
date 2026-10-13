@@ -32,3 +32,6 @@ yarn-error.log*
 
 # Supabase CLI temp (regenerated on every npx supabase call)
 supabase/.temp/
+
+# throwaway QA scaffolding (CDP probes + screenshots)
+scripts/

@@ -144,6 +144,18 @@ export function InvestmentsView() {
     toast(`"${acc.platformName}" added to the emergency reserve.`);
   };
 
+  /** Reverse of toReserve. Tapping the reserved account row again removes its
+   *  reserve line so the button never becomes a dead "In reserve" state that
+   *  only EmergencyPanel can undo. */
+  const unReserve = (id: string) => {
+    const removed = (vault.emergency?.items ?? []).filter(
+      (i) => i.kind === 'account' && i.accountId === id,
+    );
+    if (removed.length === 0) return;
+    for (const item of removed) store.deleteEmergencyItem(item.id);
+    toast(`Removed "${vault.accounts.find((a) => a.id === id)?.platformName ?? 'account'}" from the reserve.`);
+  };
+
   const saveDeposit = (id: string, raw: string) => {
     const v = raw.trim() === '' ? undefined : parseFloat(raw);
     if (raw.trim() !== '' && (!Number.isFinite(v!) || (v as number) <= 0)) {
@@ -319,11 +331,11 @@ export function InvestmentsView() {
                     </div>
                     <button
                       className="btn ghost sm"
-                      onClick={() => toReserve(a.id)}
-                      disabled={reservedIds.has(a.id)}
-                      title={reservedIds.has(a.id) ? 'Already counted in the emergency reserve' : 'Count this account toward the emergency reserve'}
+                      onClick={() => (reservedIds.has(a.id) ? unReserve(a.id) : toReserve(a.id))}
+                      aria-pressed={reservedIds.has(a.id)}
+                      title={reservedIds.has(a.id) ? 'Remove this account from the emergency reserve' : 'Count this account toward the emergency reserve'}
                     >
-                      {reservedIds.has(a.id) ? <><IX size={14} /> In reserve</> : 'To reserve'}
+                      {reservedIds.has(a.id) ? <><IX size={14} /> Remove</> : 'To reserve'}
                     </button>
                     <button
                       className={`btn ghost sm${isTarget ? ' active' : ''}`}
