@@ -10,6 +10,11 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    // CI runners are slow: the async vault tests (store-extended, vault-race)
+    // use real timers + polling; the default 5s testTimeout can be exceeded on
+    // a cold runner even with 10s internal waits. 30s absorbs the slack.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
   build: {
     sourcemap: false,

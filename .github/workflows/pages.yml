@@ -34,7 +34,11 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Unit tests
-        run: npm test -- --run
+        # pool=vmForks: on GH's runners the default tinypool thread pool can
+        # drop its worker channel under load ("Channel closed"), failing the
+        # run with 0 test results. vmForks isolates each file in a fresh
+        # child + vm context; slow-file tests need testTimeout headroom.
+        run: npx vitest run --pool=vmForks --testTimeout=30000
       - name: Typecheck + build
         env:
           BASE_URL: ${{ env.PAGES_BASE }}
