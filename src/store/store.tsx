@@ -45,6 +45,7 @@ import type {
   Disposal,
   EmergencyFund,
   EmergencyFundItem,
+  PendingImport,
 } from '../domain/types';
 import { emptyVault, healVault, withoutUndefined } from '../domain/seed';
 import { encryptVault, decryptVault, fingerprintSecret, type VaultCipher } from '../security/vault';
@@ -186,6 +187,13 @@ export interface VaultStore {
   /** Patch the module-level scalars (targetMonths / targetOverrideBase /
    *  note). Items are managed via add/deleteEmergencyItem. */
   setEmergency: (patch: Partial<Omit<EmergencyFund, 'items'>>) => void;
+
+  // ---- in-flight PDF statement import checkpoint (survives a refresh) ----
+  /** Persist an in-progress PDF import into the encrypted vault blob. Passing
+   *  `null` clears it (import finished or the user discarded). Rides the same
+   *  upsert + keepalive-flush path as every other mutation, so the user's data
+   *  is in Supabase Postgres before a browser tab can die. */
+  setPendingImport: (p: import('../domain/types').PendingImport | null) => void;
 
   setPrefs: (patch: Partial<UserPreferences>) => void;
   setLlmKey: (
@@ -1069,6 +1077,23 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setEmergencyModule((em) => ({ ...em, ...withoutUndefined(patch) }));
   }, []);
 
+  // ---- In-flight PDF import checkpoint. A top-level object-or-null field
+  // (like `emergency`), not an array key. `null` clears it (finished /
+  // discarded). Every write re-encrypts the whole blob and upserts to Supabase
+  // via the same `persist` path, so a refresh mid-import loses nothing.
+  const setPendingImport = useCallback((p: PendingImport | null) => {
+    setVault((prev) => {
+      if (!prev) return prev;
+      // Normalizing `null` vs an empty value: only bump updatedAt when the
+      // value actually changes, so the "finished import" clear that follows
+      // right after the last addExpenses() doesn't spawn a redundant upsert.
+      if (prev.pendingImport === p && p !== null) return prev;
+      const next = { ...prev, pendingImport: p, updatedAt: Date.now() };
+      void persist(next);
+      return next;
+    });
+  }, [persist]);
+
   const setLlmKey = useCallback(
     async (
       _provider: 'none' | 'openai' | 'anthropic' | 'gemini' | 'adacode',
@@ -1292,6 +1317,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     addEmergencyItem,
     deleteEmergencyItem,
     setEmergency,
+    setPendingImport,
     setPrefs,
     setLlmKey,
     retrySync,

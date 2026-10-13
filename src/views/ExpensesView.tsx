@@ -7,16 +7,21 @@
 // The AIManager equivalent here is `categorize` (LLM BYOK -> dictionary).
 // ============================================================================
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVaultStore } from '../store/store';
 import { useToast } from '../components/Toast';
 import { DelButton } from '../components/DelButton';
 import { fxService } from '../services';
-import { parseReceipt, importStatement, type ParsedStatementLine } from '../services';
+import {
+  parseReceipt,
+  extractPdfText,
+  parseStatementText,
+  type ParsedStatementLine,
+} from '../services';
 import { categorize } from '../ai';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
 import { IReceipt, IScan, IImage } from '../icons';
-import type { Expense } from '../domain/types';
+import type { Expense, PendingImport } from '../domain/types';
 
 const PAYMENT_METHODS = ['card', 'qr', 'ewallet', 'cash', 'bank', 'other'] as const;
 
@@ -128,7 +133,11 @@ export function ExpensesView() {
     }
   };
 
-  // ---- PDF statement import state
+  // ---- PDF statement import state.
+  // `vault.pendingImport` (persisted, encrypted) is the source of truth that an
+  // import is in flight; the React state below is the snappy editing surface.
+  // Two phases survive a refresh: 'parse' (raw text extracted, re-parse on
+  // resume) and 'review' (rows derived, restore the review screen directly).
   const pdfRef = useRef<HTMLInputElement>(null);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfPhase, setPdfPhase] = useState<string | null>(null);
@@ -138,7 +147,67 @@ export function ExpensesView() {
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [pdfImporting, setPdfImporting] = useState(false);
 
+  // One-shot refresh rehydration. Runs on mount: if the encrypted blob still
+  // holds a pending import (a refresh happened mid-import), restore it. The
+  // ref guard means a later render re-applying the effect never re-triggers.
+  const rehydrated = useRef(false);
+  useEffect(() => {
+    if (rehydrated.current) return;
+    rehydrated.current = true;
+    const p = store.vault?.pendingImport;
+    if (!p) return; // no in-flight import: nothing to restore
+    if (p.phase === 'review' && p.lines.length > 0) {
+      // Rows already derived — restore the review screen as the user left it.
+      setPdfRows(p.lines);
+      setPdfMeta({ parser: p.parser, fileName: p.fileName, llmError: p.llmError });
+      setPdfDisabled(new Set(p.disabled));
+    } else if (p.phase === 'parse' && p.text) {
+      // Text extracted but not yet parsed — re-derive the rows from it.
+      void resumeParsePhase(p);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Re-parse persisted raw text (a refresh happened between extract and parse).
+  const resumeParsePhase = async (p: PendingImport) => {
+    setPdfBusy(true);
+    setPdfPhase('Resuming import…');
+    setPdfError(null);
+    try {
+      const result = await parseStatementText(p.text ?? '', {
+        llm: store.llmConfig ?? undefined,
+        categories: store.vault?.categories,
+        onProgress: (_x, ph) => setPdfPhase(ph),
+      });
+      if (result.lines.length === 0) {
+        store.setPendingImport(null);
+        setPdfError('No transactions found. If the PDF is a scanned image (no text layer), use the QR / screenshot OCR path instead.');
+        return;
+      }
+      // Rows now derived — move the checkpoint to the review phase.
+      store.setPendingImport({
+        phase: 'review',
+        text: p.text,
+        fileName: p.fileName,
+        parser: result.parser,
+        llmError: result.llmError,
+        lines: result.lines,
+        disabled: p.disabled,
+        createdAt: p.createdAt,
+      });
+      setPdfRows(result.lines);
+      setPdfMeta({ parser: result.parser, fileName: p.fileName, llmError: result.llmError });
+      setPdfDisabled(new Set(p.disabled));
+    } catch (e) {
+      setPdfError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPdfBusy(false);
+      setPdfPhase(null);
+    }
+  };
+
   const runPdfImport = async (file: File) => {
+    const createdAt = Date.now();
     setPdfBusy(true);
     setPdfRows(null);
     setPdfMeta(null);
@@ -146,18 +215,58 @@ export function ExpensesView() {
     setPdfDisabled(new Set());
     setPdfPhase('Reading PDF');
     try {
-      const result = await importStatement(file, {
+      // Phase A: extract the text layer. Checkpoint it immediately so a refresh
+      // that lands before the file handle closes can resume from text, not
+      // by re-picking the file.
+      let text: string;
+      try {
+        text = await extractPdfText(file, () => setPdfPhase('Reading PDF'));
+      } catch (e) {
+        store.setPendingImport(null);
+        throw new Error(
+          'Could not read that PDF. ' +
+            (e instanceof Error ? e.message : '') +
+            ' It may be scanned-image-only (no text layer).',
+        );
+      }
+      store.setPendingImport({
+        phase: 'parse',
+        text,
+        fileName: file.name,
+        parser: 'regex', // placeholder; finalized when parsing completes
+        lines: [],
+        disabled: [],
+        createdAt,
+      });
+
+      // Phase B: parse + auto-categorize the extracted text.
+      setPdfPhase('Parsing');
+      const result = await parseStatementText(text, {
         llm: store.llmConfig ?? undefined,
         categories: vault.categories,
         onProgress: (_p, phase) => setPdfPhase(phase),
       });
+
       if (result.lines.length === 0) {
+        store.setPendingImport(null);
         setPdfError(
           'No transactions found. If the PDF is a scanned image (no text layer), ' +
             'use the QR / screenshot OCR path instead.',
         );
         return;
       }
+
+      // Checkpoint: rows derived — a refresh now restores the review screen.
+      store.setPendingImport({
+        phase: 'review',
+        text,
+        fileName: file.name,
+        parser: result.parser,
+        llmError: result.llmError,
+        lines: result.lines,
+        disabled: [],
+        createdAt,
+      });
       setPdfRows(result.lines);
       setPdfMeta({ parser: result.parser, fileName: file.name, llmError: result.llmError });
     } catch (e) {
@@ -179,6 +288,14 @@ export function ExpensesView() {
       else next.add(i);
       return next;
     });
+  };
+
+  const discardPdf = () => {
+    setPdfRows(null);
+    setPdfMeta(null);
+    setPdfDisabled(new Set());
+    setPdfError(null);
+    store.setPendingImport(null); // drop the in-flight checkpoint
   };
 
   const importRows = async () => {
@@ -221,6 +338,7 @@ export function ExpensesView() {
       };
     });
     store.addExpenses(inputs);
+    store.setPendingImport(null); // import finished — clear the checkpoint
     toast(`Imported ${enabledIdx.length} transactions from ${pdfMeta.fileName}`);
     setPdfRows(null);
     setPdfMeta(null);
@@ -401,7 +519,7 @@ export function ExpensesView() {
                   ? 'Importing…'
                   : `Import ${pdfRows.length - pdfDisabled.size} ${pdfRows.length - pdfDisabled.size === 1 ? 'transaction' : 'transactions'}`}
               </button>
-              <button className="btn ghost sm" onClick={() => { setPdfRows(null); setPdfMeta(null); setPdfDisabled(new Set()); }}>
+              <button className="btn ghost sm" onClick={discardPdf}>
                 Discard
               </button>
             </div>

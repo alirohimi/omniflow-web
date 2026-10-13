@@ -200,6 +200,58 @@ export interface EmergencyFund {
   note?: string;
 }
 
+/** Direction of a parsed statement line: 'out' = spend/withdrawal,
+ *  'in' = deposit/credit/salary/refund. */
+export type Direction = 'in' | 'out';
+
+/** One extracted, editable statement line — the shape the PDF review UI edits.
+ *  Lives in the domain (not services) so it can be persisted inside the
+ *  encrypted vault blob (see `PendingImport`). */
+export interface ParsedStatementLine {
+  /** Raw statement line it came from (kept for the user's reference). */
+  raw: string;
+  /** Parsed date, or undefined if the statement didn't carry one on the line. */
+  date?: number; // epoch ms
+  merchant: string;
+  description?: string;
+  /** Positive magnitude in the line's currency (use `direction` for sign). */
+  amount: number;
+  direction: Direction;
+  /** Detected ISO-4217 code, or undefined to let the UI default to base. */
+  currency?: string;
+  // Filled in after categorization:
+  category?: string;
+  aiTier?: AITier;
+}
+
+/** A PDF statement import in flight or awaiting review. Persisted inside the
+ *  encrypted vault so a page refresh / close mid-upload, mid-parse, or
+ *  mid-review survives: the review screen rehydrates on the next load and the
+ *  user can still commit (or discard) it. No plaintext statement text is ever
+ *  stored outside the ciphertext — the whole blob is AES-GCM encrypted and
+ *  scoped to a single user, so this adds zero new attack surface. */
+export interface PendingImport {
+  fileName: string;
+  /** 'parse' = text extracted, rows not yet derived (refresh -> re-parse the
+   *  persisted text). 'review' = rows derived and being edited (refresh ->
+   *  restore the review screen directly). */
+  phase: 'parse' | 'review';
+  /** Raw text layer extracted from the PDF (deterministic from the file).
+   *  Persisted so a refresh mid-parse can re-derive the rows without the user
+   *  re-picking the file. Lives only inside the encrypted blob. */
+  text?: string;
+  /** Which engine produced the structure (set once parse completes). */
+  parser: 'llm' | 'regex';
+  /** LLM diagnostic (e.g. "fell back to regex"), if any. */
+  llmError?: string;
+  /** The extracted, categorized, editable lines the review UI edits. Empty
+   *  until the parse phase completes. */
+  lines: ParsedStatementLine[];
+  /** Row indices the user unchecked (skipped on import). */
+  disabled: number[];
+  createdAt: number;
+}
+
 /** App-wide preferences. */
 export interface UserPreferences {
   baseCurrency: string; // default 'MYR'
@@ -254,6 +306,10 @@ export interface VaultBlob {
   disposals?: Disposal[];
   /** Emergency reserve module (separate from the investment portfolio). */
   emergency?: EmergencyFund;
+  /** In-progress PDF statement import (upload/parse/review). Persisted so a
+   *  refresh or close mid-import survives; cleared when the user commits it
+   *  to expenses or discards it. Optional so old encrypted blobs heal. */
+  pendingImport?: PendingImport | null;
 }
 
 /** One coach chat turn, persisted (encrypted) with the vault. Compact by

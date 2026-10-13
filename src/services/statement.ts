@@ -16,26 +16,16 @@
 
 import { callLLM, categorize, type LLMConfig } from '../ai/categorize';
 import { CATEGORIES } from '../domain/enums';
-import type { AITier, Category } from '../domain/types';
+import type {
+  Category,
+  Direction,
+  ParsedStatementLine,
+} from '../domain/types';
 
-export type Direction = 'in' | 'out';
-
-export interface ParsedStatementLine {
-  /** Raw statement line it came from (kept for the user's reference). */
-  raw: string;
-  /** Parsed date, or undefined if the statement didn't carry one on the line. */
-  date?: number; // epoch ms
-  merchant: string;
-  description?: string;
-  /** Positive magnitude in the line's currency (use `direction` for sign). */
-  amount: number;
-  direction: Direction;
-  /** Detected ISO-4217 code, or undefined to let the UI default to base. */
-  currency?: string;
-  // Filled in after categorization:
-  category?: string;
-  aiTier?: AITier;
-}
+// `Direction` and `ParsedStatementLine` are canonical in `domain/types` so
+// they can be persisted inside the encrypted vault blob (see `PendingImport`).
+// Re-exported here for the many importers that reach for them via `services`.
+export type { Direction, ParsedStatementLine } from '../domain/types';
 
 export interface ParseStatementResult {
   lines: ParsedStatementLine[];

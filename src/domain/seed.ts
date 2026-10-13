@@ -3,6 +3,8 @@ import type {
   Category,
   EmergencyFundItem,
   ManualAsset,
+  ParsedStatementLine,
+  PendingImport,
   UserPreferences,
   VaultBlob,
 } from './types';
@@ -28,6 +30,7 @@ export function emptyVault(prefs?: Partial<UserPreferences>): VaultBlob {
     dividends: [],
     disposals: [],
     emergency: { ...EMERGENCY_DEFAULT, items: [] },
+    pendingImport: null,
   };
 }
 
@@ -258,6 +261,52 @@ export function healVault(blob: VaultBlob): { blob: VaultBlob; changed: boolean 
       amount,
     } as EmergencyFundItem;
   });
+  // PendingImport (in-flight PDF statement import): heal to a well-shaped
+  // object or null so a refresh rehydrates it cleanly. Per-row guards mirror
+  // the ParsedStatementLine shape; best-effort, never drops user data.
+  if (blob.pendingImport && typeof blob.pendingImport === 'object') {
+    const p = blob.pendingImport;
+    const lines: ParsedStatementLine[] = (Array.isArray(p.lines) ? p.lines : [])
+      .filter((l): l is ParsedStatementLine => !!l && typeof l === 'object')
+      .map((l) => ({
+        raw: typeof l.raw === 'string' ? l.raw : '',
+        date: typeof l.date === 'number' && Number.isFinite(l.date) ? l.date : undefined,
+        merchant: typeof l.merchant === 'string' ? l.merchant : '',
+        description: typeof l.description === 'string' ? l.description : undefined,
+        amount: num(l.amount, 0),
+        direction: l.direction === 'in' ? 'in' : 'out',
+        currency: typeof l.currency === 'string' ? l.currency : undefined,
+        category: typeof l.category === 'string' ? l.category : undefined,
+        aiTier:
+          l.aiTier === 'dictionary' || l.aiTier === 'llm-byok' || l.aiTier === 'llm-failed'
+            ? l.aiTier
+            : 'dictionary',
+      }));
+    // phase: 'parse' when we still hold raw text but no derived rows yet;
+    // 'review' once lines exist. Prefer the persisted value, but fall back to
+    // what the data actually contains so a half-written blob heals sanely.
+    const hasText = typeof p.text === 'string' && (p.text as string).length > 0;
+    const phase: PendingImport['phase'] =
+      p.phase === 'parse' ? 'parse' : p.phase === 'review' ? 'review' : lines.length > 0 ? 'review' : hasText ? 'parse' : 'review';
+    // Keep the raw text only when it's a string; cap it so a pathological
+    // statement can't bloat the encrypted blob (the UI re-parses from this).
+    const text = hasText ? (p.text as string).slice(0, 400_000) : undefined;
+    const healed: PendingImport = {
+      fileName: typeof p.fileName === 'string' ? p.fileName : '',
+      phase,
+      text,
+      parser: p.parser === 'llm' ? 'llm' : 'regex',
+      llmError: typeof p.llmError === 'string' ? p.llmError : undefined,
+      lines,
+      disabled: Array.isArray(p.disabled) ? p.disabled.filter((d) => typeof d === 'number') : [],
+      createdAt: num(p.createdAt, Date.now()),
+    };
+    // A parse-phase checkpoint with no text yet (or review with no rows) has
+    // nothing worth rehydrating -> drop it. Otherwise keep the healed object.
+    blob.pendingImport = healed.lines.length === 0 && !healed.text ? null : healed;
+  } else if (blob.pendingImport !== undefined) {
+    blob.pendingImport = null;
+  }
   if (blob.coachLog !== undefined && !Array.isArray(blob.coachLog)) delete blob.coachLog;
   return { blob, changed: JSON.stringify(blob) !== before };
 }
