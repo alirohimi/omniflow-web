@@ -75,9 +75,9 @@ export function chunkStatementText(text: string, maxChars: number = LLM_CHUNK_CH
     // A single line longer than the cap gets its own chunk (rare: wrapped text).
     if (line.length > maxChars) {
       if (buf) { chunks.push(buf); buf = ''; }
-      let i = 0;
-      while (i < line.length) chunks.push(line.slice(i, i + maxChars));
-      i += maxChars;
+      for (let i = 0; i < line.length; i += maxChars) {
+        chunks.push(line.slice(i, i + maxChars));
+      }
       continue;
     }
     if (buf && buf.length + line.length + 1 > maxChars) {
