@@ -124,7 +124,9 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
                   {ret >= 0 ? '▲' : '▼'} {Math.abs(ret).toFixed(1)}% vs cost
                 </span>
               ) : (
-                <span className="muted">No holdings yet</span>
+                <button className="link" onClick={() => onOpenTab('investments')}>
+                  No holdings yet — add your first portfolio
+                </button>
               )}
             </div>
           </div>

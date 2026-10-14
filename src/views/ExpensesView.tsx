@@ -402,8 +402,8 @@ export function ExpensesView() {
       <h2 className="section-title">Capture</h2>
       <div className="card">
         <div className="row">
-          <span className="chip"><IReceipt size={14} /> Manual / Apple Pay</span>
-          <span className="chip"><IScan size={14} /> QR / e-wallet OCR</span>
+          <span className="chip sm"><IReceipt size={14} /> Manual / Apple Pay</span>
+          <span className="chip sm"><IScan size={14} /> QR / e-wallet OCR</span>
         </div>
 
         <label className="field"><span>Amount</span>

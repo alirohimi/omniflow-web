@@ -229,10 +229,10 @@ export function InvestmentsView() {
     <>
       <h2 className="section-title">Portfolio</h2>
       <div className="card">
-        <div className="kpi">
+        <div className="kpi" style={{ marginBottom: 4 }}>
           <div className="cell">
             <div className="num">{formatMoney(live.portfolio?.totalValueBase ?? 0, base)}</div>
-            <div className="lbl">Total value ({base})</div>
+            <div className="lbl">Value ({base})</div>
           </div>
           <div className="cell">
             <div className="num">

@@ -266,6 +266,9 @@ h1, h2, h3 { font-family: var(--font-display); }
   box-shadow: var(--shadow-soft);
   position: relative;
 }
+/* Stacked cards in the same group (capture card + list, etc.) sit flush:
+   first card keeps the group spacing, the rest close the gap. */
+.card + .card { margin-top: 0; }
 .card h2 { margin: 0 0 10px; font-size: 15px; font-weight: 700; font-family: var(--font-display); }
 .card h3 { margin: 14px 0 6px; font-size: 11.5px; color: var(--muted); font-weight: 650; text-transform: uppercase; letter-spacing: .6px; }
 
@@ -319,6 +322,13 @@ h1, h2, h3 { font-family: var(--font-display); }
 .hero-num.md { font-size: 20px; font-weight: 700; letter-spacing: -0.4px; margin-top: 4px; }
 .hero-sub { margin-top: 8px; font-size: 13px; color: var(--muted); }
 
+/* Quiet inline CTA link for empty states — reads as a link, not a button */
+.link {
+  color: var(--accent); font: inherit; font-size: 13px; font-weight: 600;
+  text-decoration: none; cursor: pointer; border: 0; background: none; padding: 2px 0;
+}
+.link:hover { text-decoration: underline; }
+
 /* Secondary stat row */
 .kpi { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .kpi .cell {
@@ -339,6 +349,8 @@ h1, h2, h3 { font-family: var(--font-display); }
 .muted { color: var(--muted); }
 .small { font-size: 12.5px; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* Stacked rows (e.g. chip rows, meta rows) keep a small gap between siblings */
+.row + .row { margin-top: 8px; }
 .meta-row { margin-top: 10px; }
 
 /* Priority indicator: a dot with real hierarchy, not an arrow glyph */
