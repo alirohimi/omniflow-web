@@ -169,13 +169,21 @@ export function SettingsView() {
     } else setAdminMsg('Could not update - you may not be an admin, or the 0003 migration has not been applied yet.');
   };
 
+  // True when a real (non-'none', key-bearing) platform default exists. The
+  // "Use default" button is a no-op without it, so gate + hint on this.
+  const hasPlatformDefault = !!(store.defaultLlm && store.defaultLlm.provider !== 'none' && store.defaultLlm.api_key);
+
   const applyDefaultToMember = async (member: MemberRow) => {
+    if (!hasPlatformDefault) {
+      setAdminMsg('No platform default is set yet - save one above, then "Use default" will apply it to this user.');
+      return;
+    }
     setDefBusy(true);
     const ok = await store.adminApplyDefault(member.user_id);
     setDefBusy(false);
     setAdminMsg(ok
       ? `${member.display_name || member.email}: platform default applied as their personal policy.`
-      : 'No platform default is set yet, or the 0003 migration has not been applied.');
+      : 'Could not apply the platform default - you may not be an admin, or the 0003 migration has not been applied.');
     if (ok) void refreshAdmin();
   };
 
@@ -586,7 +594,14 @@ export function SettingsView() {
                         {lockBusy ? 'Saving…' : 'Apply'}
                       </button>
                       <button className="btn ghost sm" onClick={() => void unlockUser(m)}>Clear</button>
-                      <button className="btn ghost sm" disabled={defBusy} onClick={() => void applyDefaultToMember(m)}>Use default</button>
+                      <button
+                        className="btn ghost sm"
+                        disabled={defBusy || !hasPlatformDefault}
+                        title={hasPlatformDefault
+                          ? 'Apply the platform default to this user'
+                          : 'Save a platform default first (section above), then this becomes available'}
+                        onClick={() => void applyDefaultToMember(m)}
+                      >Use default</button>
                     </div>
                   </div>
                 );
