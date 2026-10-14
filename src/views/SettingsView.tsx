@@ -71,7 +71,22 @@ export function SettingsView() {
   const [defProvider, setDefProvider] = useState<LLMProvider>(store.defaultLlm?.provider ?? 'none');
   const [defKey, setDefKey] = useState('');
   const [defModel, setDefModel] = useState('');
+  // A key already sits in the platform-default row; show it masked so the
+  // admin does not re-type it and can read the active model.
+  const [defKeyMasked, setDefKeyMasked] = useState(false);
   const [defBusy, setDefBusy] = useState(false);
+
+  // Re-sync the provider/model inputs when the saved row changes (e.g. right
+  // after a successful save, or on first mount when a default already exists).
+  // The key itself is never auto-filled — only a masked indicator is shown —
+  // so the raw secret stays out of the visible input.
+  useEffect(() => {
+    const def = store.defaultLlm;
+    if (!def) return;
+    setDefProvider(def.provider);
+    setDefModel(def.model ?? '');
+    setDefKeyMasked(def.provider !== 'none' && !!def.api_key);
+  }, [store.defaultLlm]);
 
   // Effective admin-assigned policy for the signed-in user. When present, the
   // BYOK section above is read-only and the key/model come from the admin,
@@ -155,16 +170,40 @@ export function SettingsView() {
       return;
     }
     if (!k) {
+      // No key typed: fall back to the already-stored key (if any) so the
+      // admin can edit the model without re-entering the secret.
+      const existing = store.defaultLlm && store.defaultLlm.provider !== 'none' ? store.defaultLlm.api_key : '';
+      if (!existing) {
+        setDefBusy(false);
+        setAdminMsg('An API key is required to set the platform default.');
+        return;
+      }
+      // Re-save with the existing key unchanged (fingerprint it, keep it verbatim).
+      const existingFinger = store.defaultLlm!.key_finger || (await fingerprintSecret(existing).catch(() => ''));
+      const okReuse = await store.adminSetLlmDefault(defProvider, existing, defModel.trim(), existingFinger);
       setDefBusy(false);
-      setAdminMsg('An API key is required to set the platform default.');
+      if (okReuse) {
+        setAdminMsg(
+          `Platform default saved (${defProvider}) - kept the existing stored key (key …${existingFinger}). ` +
+          'Users without their own key will use this; users with their own key keep using it.',
+        );
+        setDefKey('');
+        setDefKeyMasked(false);
+        void refreshAdmin();
+      } else setAdminMsg('Could not update - you may not be an admin, or the 0003 migration has not been applied yet.');
       return;
     }
     const finger = await fingerprintSecret(k);
     const ok = await store.adminSetLlmDefault(defProvider, k, defModel.trim(), finger);
     setDefBusy(false);
     if (ok) {
-      setAdminMsg(`Platform default set to ${defProvider}${defModel.trim() ? ' (' + defModel.trim() + ')' : ''}. Users without their own key will use this.`);
+      setAdminMsg(
+        `Platform default saved: ${defProvider}${defModel.trim() ? ' (' + defModel.trim() + ')' : ''} (key …${finger}). ` +
+        'It applies automatically to any user with no personal BYOK key and no admin lock. ' +
+        'Users who already have their own key keep using it - their key always wins over this default.',
+      );
       setDefKey('');
+      setDefKeyMasked(false); // the re-sync effect will re-set it to true once store.defaultLlm refreshes
       void refreshAdmin();
     } else setAdminMsg('Could not update - you may not be an admin, or the 0003 migration has not been applied yet.');
   };
@@ -532,8 +571,16 @@ export function SettingsView() {
               </label>
               {defProvider !== 'none' && (
                 <>
-                  <label className="field"><span>API key</span>
-                    <input type="password" value={defKey} onChange={(e) => setDefKey(e.target.value)} placeholder="sk-…" autoComplete="off" />
+                  <label className="field">
+                    <span>API key</span>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <input type="password" value={defKey} onChange={(e) => setDefKey(e.target.value)}
+                        placeholder={defKeyMasked ? 'already stored - leave blank to keep it' : 'sk-…'} autoComplete="off"
+                        style={{ flex: 1 }} />
+                      {defKeyMasked && (
+                        <span className="badge" style={{ background: 'var(--ok, #2e7d32)', color: '#fff' }}>stored</span>
+                      )}
+                    </div>
                   </label>
                   <label className="field"><span>Model (optional)</span>
                     <input value={defModel} onChange={(e) => setDefModel(e.target.value)} placeholder="e.g. adacode-3.0-flash" />
@@ -543,11 +590,14 @@ export function SettingsView() {
               <div className="row">
                 <button
                   className="btn sm"
-                  disabled={defBusy || (defProvider !== 'none' && !defKey.trim())}
+                  disabled={defBusy || (defProvider !== 'none' && !defKey.trim() && !defKeyMasked)}
                   onClick={() => void saveDefaultLlm()}
                 >
                   {defBusy ? 'Saving…' : defProvider === 'none' ? 'Clear platform default' : 'Save platform default'}
                 </button>
+                {defProvider !== 'none' && !defKey.trim() && defKeyMasked && (
+                  <span className="muted small">Key stays as-is (use the field above to rotate it).</span>
+                )}
               </div>
             </div>
             <p className="muted small">
