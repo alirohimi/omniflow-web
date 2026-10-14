@@ -654,6 +654,44 @@ button.chip { -webkit-tap-highlight-color: transparent; }
   border-radius: 99px; transition: width .4s ease;
 }
 
+/* ---------- Spending breakdown (Expenses tab) ----------
+   Scoped .bd-* classes so the view is self-contained; reuses the shared
+   glass tokens (item, chip, seg, track) where a concept already exists. */
+
+/* Section overline inside the breakdown card (quieter than .section-title). */
+.bd-h {
+  margin: 16px 0 8px; font-size: 11px; font-weight: 650; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .6px;
+}
+.bd-h:first-child { margin-top: 4px; }
+
+/* Per-category / per-budget distribution row: label + amount + track + share. */
+.bd-cat { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 6px 10px; padding: 9px 0; }
+.bd-cat + .bd-cat { border-top: 1px solid var(--line); }
+.bd-cat .lbl { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.bd-cat .lbl .ico { font-size: 16px; flex: none; width: 24px; text-align: center; }
+.bd-cat .lbl .nm { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bd-cat .amt { font-variant-numeric: tabular-nums; font-weight: 650; font-size: 13.5px; white-space: nowrap; }
+.bd-cat .bd-pct { grid-column: 1 / -1; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.bd-cat .bd-track { grid-column: 1 / -1; margin-top: 2px; }
+.bd-cat .bd-track > i { transition: width .4s ease; }
+.bd-track > i.warn { background: linear-gradient(90deg, var(--warn), #ffb057); }
+.bd-track > i.bad  { background: linear-gradient(90deg, var(--bad), #ff8fa3); }
+
+/* Trailing 14-day trend strip: a row of proportional bars. */
+.bd-trend { display: flex; align-items: flex-end; gap: 3px; height: 56px; margin-top: 4px; }
+.bd-trend > i {
+  flex: 1; min-width: 4px; border-radius: 3px 3px 0 0;
+  background: linear-gradient(180deg, var(--accent) 0%, var(--accent-strong) 100%);
+  opacity: .92; transition: height .3s ease; height: 3px;
+}
+.bd-trend > i.zero { background: var(--bg-3); opacity: 1; }
+.bd-trend-lbl { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--faint); margin-top: 6px; }
+
+/* Payment-method split: chips with a value + share. */
+.bd-pay { display: flex; flex-wrap: wrap; gap: 6px; }
+.bd-pay .chip { font-variant-numeric: tabular-nums; }
+
 /* ---------- Spinner (loading affordance) ---------- */
 .spinner {
   width: 18px; height: 18px; flex: none;

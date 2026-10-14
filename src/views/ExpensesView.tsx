@@ -21,6 +21,7 @@ import {
 import { categorize } from '../ai';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
 import { IReceipt, IScan, IImage } from '../icons';
+import { SpendingBreakdown } from '../components/SpendingBreakdown';
 import type { Expense, PendingImport } from '../domain/types';
 
 const PAYMENT_METHODS = ['card', 'qr', 'ewallet', 'cash', 'bank', 'other'] as const;
@@ -613,6 +614,16 @@ export function ExpensesView() {
           </div>
         )}
       </div>
+
+      {/* Spending breakdown: window selector + category / payment-method /
+          merchant aggregation + budget performance. All math lives in the
+          `spendingBreakdown` engine so it stays unit-testable; this is pure
+          presentation. */}
+      <SpendingBreakdown
+        expenses={vault.expenses}
+        budgets={vault.budgets ?? []}
+        baseCurrency={base}
+      />
 
       <h2 className="section-title">History</h2>
       <div className="row muted small" style={{ marginBottom: 6 }}>
