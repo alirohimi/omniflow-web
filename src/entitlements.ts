@@ -59,5 +59,8 @@ export function makeEntitlements(tier: Tier): Entitlements {
   };
 }
 
-/** Default tier when no row exists (safe: everything Pro is locked). */
-export const DEFAULT_TIER: Tier = 'free';
+/** Default tier when no row exists.
+ *  TESTING PHASE: Pro is the default so every existing and new user gets
+ *  full Pro features without requiring a Lemon Squeezy checkout. Revert to
+ *  'free' when the paywall goes live. */
+export const DEFAULT_TIER: Tier = 'pro';

@@ -68,30 +68,33 @@ describe('resolveLlmConfig — single shared AI config', () => {
     expect(cfg?.model).toBe('ada-x');
   });
 
-  it('a missing platform row (pre-0003) -> null (on-device rules)', () => {
+  it('a missing platform row (pre-0003) -> adacode-3.0-flash testing-phase fallback', () => {
     const cfg = resolveLlmConfig({
       vault: noByok,
       llmPolicy: undefined,
       defaultLlm: undefined,
     });
-    expect(cfg).toBeNull();
+    expect(cfg?.provider).toBe('adacode');
+    expect(cfg?.model).toBe('adacode-3.0-flash');
   });
 
-  it("the platform row set to 'none' -> null (on-device rules)", () => {
+  it("the platform row set to 'none' -> adacode-3.0-flash testing-phase fallback", () => {
     const cfg = resolveLlmConfig({
       vault: noByok,
       llmPolicy: undefined,
       defaultLlm: platform('none', '', ''),
     });
-    expect(cfg).toBeNull();
+    expect(cfg?.provider).toBe('adacode');
+    expect(cfg?.model).toBe('adacode-3.0-flash');
   });
 
-  it('a keyless platform row -> null (no usable key)', () => {
+  it('a keyless platform row -> adacode-3.0-flash testing-phase fallback', () => {
     const cfg = resolveLlmConfig({
       vault: noByok,
       llmPolicy: undefined,
       defaultLlm: platform('openai', '', 'gpt-4'),
     });
-    expect(cfg).toBeNull();
+    expect(cfg?.provider).toBe('adacode');
+    expect(cfg?.model).toBe('adacode-3.0-flash');
   });
 });
