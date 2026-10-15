@@ -1,16 +1,12 @@
 // ============================================================================
-// resolveLlm — pure, side-effect-free LLM resolution chain.
+// resolveLlm — pure, side-effect-free LLM resolution.
 //
-// Resolution order:
-//   1. Admin per-user lock (omniflow_llm_policy row). If this row exists,
-//      it is the final authority: provider!=none + key -> use it; provider
-//      'none' or missing key -> null (admin forced on-device rules, NO
-//      fall-through to BYOK or platform default).
-//   2. User's own BYOK key (vault.llmKey, encrypted inside the vault).
-//   3. Platform default (omniflow_llm_default single row, set by an admin).
-//   4. null  -> free on-device rule engine (no LLM call).
+// There is exactly ONE AI source: the admin-set platform default
+// (omniflow_llm_default single row). No per-user BYOK key and no per-user
+// admin lock. If the default is 'none' / unset, we return null and the app
+// falls through to the free on-device rule engine.
 //
-// This module is pure: no React, no Supabase, no fetch.  It is a simple
+// This module is pure: no React, no Supabase, no fetch. It is a simple
 // data-in / data-out function so it can be unit-tested in isolation and
 // consumed by the store's llmConfig useMemo.
 // ============================================================================
@@ -37,38 +33,12 @@ export interface ResolveArgs {
  * app should fall through to the free on-device rule engine.
  */
 export function resolveLlmConfig(args: ResolveArgs): LLMConfig | null {
-  const vault = args.vault;
-  const lock = args.llmPolicy;
+  // There is exactly ONE AI source: the admin-set platform default.
+  // No per-user BYOK key and no per-user admin lock.
   const def = args.defaultLlm;
-
-  // ---- Tier 1: admin per-user lock (omniflow_llm_policy) ----
-  // If the admin has set a row for this user, it is the final word.
-  // A 'none' provider or empty key means "force on-device"; do NOT fall
-  // through to BYOK or the platform default.
-  if (lock) {
-    if (lock.provider !== 'none' && lock.api_key) {
-      const k = lock.api_key;
-      const m = lock.model?.trim();
-      return { provider: lock.provider, apiKey: k, model: m || undefined };
-    }
-    // Explicit 'none' or keyless policy -> on-device only.
-    return null;
-  }
-
-  // ---- Tier 2: the user's own BYOK key ----
-  if (vault && vault.prefs.llmProvider !== 'none' && vault.llmKey) {
-    const k = vault.llmKey;
-    const m = vault.prefs.llmModel?.trim();
-    return { provider: vault.prefs.llmProvider, apiKey: k, model: m || undefined };
-  }
-
-  // ---- Tier 3: platform default (omniflow_llm_default) ----
   if (def && def.provider !== 'none' && def.api_key) {
-    const k = def.api_key;
-    const m = def.model?.trim();
-    return { provider: def.provider, apiKey: k, model: m || undefined };
+    return { provider: def.provider, apiKey: def.api_key, model: def.model?.trim() || undefined };
   }
-
-  // ---- Tier 4: free on-device rule engine ----
+  // No shared model set: null -> free on-device rule engine.
   return null;
 }

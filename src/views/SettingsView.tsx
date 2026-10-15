@@ -6,21 +6,15 @@ import { useEffect, useState } from 'react';
 import { useVaultStore } from '../store/store';
 import { useAuthStore } from '../auth/AuthProvider';
 import { CURRENCIES } from '../domain/enums';
-import { testLLMKey } from '../ai';
-import type { LLMConfig } from '../ai/categorize';
 import type { LLMProvider } from '../domain/types';
-import type { MemberRow, VaultSyncRow, PolicySummary } from '../services/admin';
+import type { MemberRow, VaultSyncRow } from '../services/admin';
 import { fingerprintSecret } from '../security/vault';
 
 /**
- * Client-facing model label. When an administrator locks a user's AI engine
- * to a specific LLM model, the target user's UI must NOT reveal the concrete
- * model name (it identifies the backend provider/vendor). We surface a neutral
- * generic label instead. Admins keep the raw model string.
- *
- * We intentionally do not map model -> name: any model the admin picks
- * renders as the same generic label for non-admin viewers, so no model
- * identity leaks to the locked account.
+ * Client-facing model label. There is exactly ONE AI config: the admin-set
+ * platform default. Every user — admin or not — uses it. No per-user BYOK,
+ * no per-user lock. Surface a neutral label so the backend provider/vendor
+ * is never revealed in the target user's UI.
  */
 function genericModelName(_model?: string): string {
   return 'AI Assistant';
@@ -32,12 +26,7 @@ export function SettingsView() {
   const { vault } = store;
   if (!vault) return null;
 
-  const [provider, setProvider] = useState<'none' | 'openai' | 'anthropic' | 'gemini' | 'adacode'>(vault.prefs.llmProvider);
-  const [key, setKey] = useState('');
-  const [model, setModel] = useState(vault.prefs.llmModel ?? '');
   const [msg, setMsg] = useState<string | null>(null);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; detail: string } | null>(null);
 
   // change-password form
   const [pwCurrent, setPwCurrent] = useState('');
@@ -56,18 +45,14 @@ export function SettingsView() {
     return () => window.clearTimeout(t);
   }, [eraseArmed]);
 
-  // ---- admin: LLM policy + member directory (only when the 0002 migration
-  // has been applied AND this user is signed in to the shared DB). ----
+  // ---- admin: single shared AI model + member directory. Only the 0003
+  // platform-default row matters; there is no per-user BYOK or per-user
+  // lock. ----
   const [members, setMembers] = useState<MemberRow[]>([]);
   const [vaultSync, setVaultSync] = useState<VaultSyncRow[]>([]);
   const [adminIds, setAdminIds] = useState<string[]>([]);
-  const [policies, setPolicies] = useState<Record<string, PolicySummary>>({});
-  const [lockBusy, setLockBusy] = useState(false);
-  const [lockKey, setLockKey] = useState('');
-  const [lockModel, setLockModel] = useState('');
-  const [lockProvider, setLockProvider] = useState<LLMProvider>('none');
   const [adminMsg, setAdminMsg] = useState<string | null>(null);
-  // Platform-default LLM (0003 migration) — single row, admin-managed.
+  // Platform-default LLM (0003 migration) — the one and only AI config.
   const [defProvider, setDefProvider] = useState<LLMProvider>(store.defaultLlm?.provider ?? 'none');
   const [defKey, setDefKey] = useState('');
   const [defModel, setDefModel] = useState('');
@@ -88,73 +73,24 @@ export function SettingsView() {
     setDefKeyMasked(def.provider !== 'none' && !!def.api_key);
   }, [store.defaultLlm]);
 
-  // Effective admin-assigned policy for the signed-in user. When present, the
-  // BYOK section above is read-only and the key/model come from the admin,
-  // not from this user's vault. 'none' + no key = admin forced on-device.
   const myUserId = auth.user?.id ?? '';
-  const myPolicy = myUserId ? store.llmPolicy : undefined;
-  const llmLocked = !!myPolicy;
 
   const refreshAdmin = async () => {
     if (!store.isAdminUser || !auth.cloudAvailable || !auth.user) return;
-    const [ms, vs, ids, ps] = await Promise.all([
+    const [ms, vs, ids] = await Promise.all([
       store.adminMembers(),
       store.adminVaultSync(),
       store.adminIds(),
-      store.adminPolicies(),
     ]);
     setMembers(ms);
     setVaultSync(vs);
     setAdminIds(ids);
-    const map: Record<string, PolicySummary> = {};
-    for (const p of ps) map[p.user_id] = p;
-    setPolicies(map);
   };
 
   useEffect(() => {
     void refreshAdmin();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store.isAdminUser, auth.cloudAvailable, auth.user?.id]);
-
-  const setLockFor = async (member: MemberRow, provider: LLMProvider) => {
-    setLockBusy(true);
-    setAdminMsg(null);
-    const k = lockKey.trim();
-    if (provider === 'none') {
-      // 'none' + no key = unlock (admin forces on-device rules / local BYOK).
-      const ok = await store.adminClearLlm(member.user_id);
-      setLockBusy(false);
-      if (ok) {
-        setAdminMsg(`${member.display_name || member.email}: LLM unlocked (use own key / on-device rules).`);
-        void refreshAdmin();
-      } else setAdminMsg('Could not update - you may not be an admin.');
-      return;
-    }
-    if (!k) {
-      setLockBusy(false);
-      setAdminMsg('An API key is required to lock a user to a cloud provider.');
-      return;
-    }
-    const finger = await fingerprintSecret(k);
-    const ok = await store.adminSetLlm(member.user_id, provider, k, lockModel.trim(), finger);
-    setLockBusy(false);
-    if (ok) {
-      setAdminMsg(`${member.display_name || member.email}: locked to ${provider}${lockModel.trim() ? ' (' + lockModel.trim() + ')' : ''}.`);
-      // Mask the key immediately: the fingerprint + provider badge on the row
-      // confirm the policy; there is no reason for the raw key to stay
-      // visible in the field (re-enter it if you lock the next user).
-      setLockKey('');
-      void refreshAdmin();
-    } else setAdminMsg('Could not update - you may not be an admin.');
-  };
-
-  const unlockUser = async (member: MemberRow) => {
-    setLockBusy(true);
-    const ok = await store.adminClearLlm(member.user_id);
-    setLockBusy(false);
-    setAdminMsg(ok ? `${member.display_name || member.email}: LLM policy cleared.` : 'Could not update.');
-    if (ok) void refreshAdmin();
-  };
 
   const saveDefaultLlm = async () => {
     setDefBusy(true);
@@ -164,7 +100,7 @@ export function SettingsView() {
       const ok = await store.adminSetLlmDefault('none', '', '', '');
       setDefBusy(false);
       if (ok) {
-        setAdminMsg('Platform default cleared - users fall back to their own BYOK key or on-device rules.');
+        setAdminMsg('AI model cleared - everyone now uses the free on-device rule engine.');
         void refreshAdmin();
       } else setAdminMsg('Could not update - you may not be an admin, or the 0003 migration has not been applied yet.');
       return;
@@ -175,7 +111,7 @@ export function SettingsView() {
       const existing = store.defaultLlm && store.defaultLlm.provider !== 'none' ? store.defaultLlm.api_key : '';
       if (!existing) {
         setDefBusy(false);
-        setAdminMsg('An API key is required to set the platform default.');
+        setAdminMsg('An API key is required to set the AI model.');
         return;
       }
       // Re-save with the existing key unchanged (fingerprint it, keep it verbatim).
@@ -184,8 +120,8 @@ export function SettingsView() {
       setDefBusy(false);
       if (okReuse) {
         setAdminMsg(
-          `Platform default saved (${defProvider}) - kept the existing stored key (key …${existingFinger}). ` +
-          'Users without their own key will use this; users with their own key keep using it.',
+          `AI model saved (${defProvider}) - kept the existing stored key (key …${existingFinger}). ` +
+          'Every user now runs on it.',
         );
         setDefKey('');
         setDefKeyMasked(false);
@@ -198,9 +134,8 @@ export function SettingsView() {
     setDefBusy(false);
     if (ok) {
       setAdminMsg(
-        `Platform default saved: ${defProvider}${defModel.trim() ? ' (' + defModel.trim() + ')' : ''} (key …${finger}). ` +
-        'It applies automatically to any user with no personal BYOK key and no admin lock. ' +
-        'Users who already have their own key keep using it - their key always wins over this default.',
+        `AI model saved: ${defProvider}${defModel.trim() ? ' (' + defModel.trim() + ')' : ''} (key …${finger}). ` +
+        'It applies to every user automatically - there is no per-user key or model override.',
       );
       setDefKey('');
       setDefKeyMasked(false); // the re-sync effect will re-set it to true once store.defaultLlm refreshes
@@ -208,57 +143,7 @@ export function SettingsView() {
     } else setAdminMsg('Could not update - you may not be an admin, or the 0003 migration has not been applied yet.');
   };
 
-  // True when a real (non-'none', key-bearing) platform default exists. The
-  // "Use default" button is a no-op without it, so gate + hint on this.
-  const hasPlatformDefault = !!(store.defaultLlm && store.defaultLlm.provider !== 'none' && store.defaultLlm.api_key);
-
-  const applyDefaultToMember = async (member: MemberRow) => {
-    if (!hasPlatformDefault) {
-      setAdminMsg('No platform default is set yet - save one above, then "Use default" will apply it to this user.');
-      return;
-    }
-    setDefBusy(true);
-    const ok = await store.adminApplyDefault(member.user_id);
-    setDefBusy(false);
-    setAdminMsg(ok
-      ? `${member.display_name || member.email}: platform default applied as their personal policy.`
-      : 'Could not apply the platform default - you may not be an admin, or the 0003 migration has not been applied.');
-    if (ok) void refreshAdmin();
-  };
-
   const prefs = vault.prefs;
-
-  const saveLlm = async () => {
-    const k = key.trim();
-    const ok = await store.setLlmKey(provider, provider === 'none' ? '' : k, model.trim() || undefined);
-    setTestResult(null);
-    if (!ok) {
-      setMsg('Could not save - the vault is not unlocked.');
-      return;
-    }
-    setKey('');
-    setMsg(provider === 'none' ? 'LLM key removed - categorization falls back to the on-device rule engine.' : `LLM key stored (${provider}). Categorization now uses the cloud tier.`);
-    // A cloud-sync failure must be explicit, not silent: check the store state
-    // a beat later (persist is asynchronous) and say so.
-    setTimeout(() => {
-      if (store.syncState === 'error') {
-        setMsg('Saved in memory, but cloud sync failed - your account could not be reached. Use Retry before closing the tab.');
-      }
-    }, 350);
-  };
-
-  const testKey = async () => {
-    setTesting(true);
-    setTestResult(null);
-    const cfg: LLMConfig = {
-      provider,
-      apiKey: key.trim() || store.llmConfig?.apiKey || '',
-      model: model.trim() || undefined,
-    };
-    const r = await testLLMKey(cfg);
-    setTestResult(r);
-    setTesting(false);
-  };
 
   const changePw = async () => {
     if (pwNext !== pwNext2) {
@@ -310,100 +195,43 @@ export function SettingsView() {
         </div>
       </div>
 
-      <h2 className="section-title">AI — bring-your-own key (optional)</h2>
+      <h2 className="section-title">AI assistant</h2>
       <div className="card">
-        {llmLocked && myPolicy ? (
-          <div className="notice" style={{ borderColor: 'var(--warn, #b8860b)' }}>
+        {store.llmConfig ? (
+          // A platform default LLM is set by the admin — every user is on it.
+          <div className="notice" style={{ borderColor: 'var(--ok, #2e7d32)' }}>
             <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>
-              Locked by your admin
+              {store.isAdminUser ? 'AI engine (admin-managed)' : 'AI engine'}
             </div>
             <p className="muted small" style={{ margin: 0, marginBottom: 10 }}>
-              An administrator has set the AI model for this account. It overrides
-              the personal key below until they clear it.
+              {store.isAdminUser
+                ? 'The AI model below is the single platform default you manage in the admin section. Every user — including you — runs on it. There is no per-user key or model override.'
+                : 'The AI model is set centrally by your administrator. You do not configure it - your expenses are categorized automatically.'}
             </p>
             <div className="list">
               {store.isAdminUser ? (
                 <>
-                  <div className="row"><span>Provider</span><span className="badge">{myPolicy.provider}</span></div>
-                  {myPolicy.model && (
-                    <div className="row"><span>Model</span><span className="muted small">{myPolicy.model}</span></div>
-                  )}
-                  {myPolicy.key_finger && (
-                    <div className="row"><span>Key</span><span className="muted small">…{myPolicy.key_finger}</span></div>
+                  <div className="row"><span>Provider</span><span className="badge">{store.llmConfig.provider}</span></div>
+                  {store.llmConfig.model && (
+                    <div className="row"><span>Model</span><span className="muted small">{store.llmConfig.model}</span></div>
                   )}
                 </>
               ) : (
                 <>
-                  {/* Non-admin: never reveal the admin's provider, model, or
-                      key fingerprint (they identify the backend vendor). Only
-                      a neutral "Managed" badge + the generic assistant name. */}
+                  {/* Non-admin: never reveal the provider/model identity. */}
                   <div className="row"><span>Provider</span><span className="badge">Managed</span></div>
-                  <div className="row"><span>Model</span><span className="muted small">{genericModelName(myPolicy.model)}</span></div>
+                  <div className="row"><span>Model</span><span className="muted small">{genericModelName()}</span></div>
                 </>
               )}
             </div>
           </div>
         ) : (
-          <>
-        <p className="muted small">
-          Without a key, OmniFlow categorizes with the free on-device rule engine.
-          Add a key to use the cloud LLM tier. The key is encrypted inside your
-          vault — it never leaves this device except to the provider API.
-        </p>
-        <label className="field"><span>Provider</span>
-          <select
-            value={provider}
-            onChange={(e) => {
-              // One key at a time: switching provider resets the draft form
-              // (different key format, different model names) so an old
-              // provider's key is never silently saved under a new provider.
-              setProvider(e.target.value as typeof provider);
-              setKey('');
-              setModel('');
-              setTestResult(null);
-            }}
-          >
-            <option value="none">None (on-device rules)</option>
-            <option value="openai">OpenAI</option>
-            <option value="anthropic">Anthropic</option>
-            <option value="gemini">Gemini</option>
-            <option value="adacode">adaCode</option>
-          </select>
-        </label>
-        {provider !== 'none' && (
-          <>
-            <label className="field">
-              <span>
-                {provider === prefs.llmProvider && prefs.llmKeyFinger
-                  ? 'Replace key (current: …' + prefs.llmKeyFinger + ')'
-                  : provider !== prefs.llmProvider && prefs.llmKeyFinger
-                    ? 'API key (replaces the ' + (prefs.llmProvider === 'none' ? '' : prefs.llmProvider + ' ') + 'key — one active key at a time)'
-                    : 'API key'}
-              </span>
-              <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-…" autoComplete="off" />
-            </label>
-            <label className="field"><span>Model override (optional - leave blank for the provider default)</span>
-              <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="e.g. adacode-3.0-flash, claude-haiku-4-5, gpt-4o-mini, gemini-3.8-flash" />
-            </label>
-            <div className="list" style={{ marginTop: 8 }}>
-              <button
-                className="btn ghost sm"
-                disabled={testing}
-                onClick={() => void testKey()}
-              >
-                {testing ? 'Testing…' : 'Test key'}
-              </button>
-            </div>
-            {testResult && (
-              <div className="small" style={{ marginTop: 6, color: testResult.ok ? 'var(--good)' : 'var(--bad)' }}>
-                {testResult.ok ? 'Key works — ' : 'Key failed — '}
-                {testResult.detail}
-              </div>
-            )}
-          </>
+          <p className="muted small">
+            No AI model is configured yet, so OmniFlow categorizes with the free
+            on-device rule engine. An administrator can set the shared model in the
+            admin section below - no per-user setup is needed.
+          </p>
         )}
-        <button className="btn sm" onClick={() => void saveLlm()}>Save</button>
-        {msg && <div className="small muted" style={{ marginTop: 8 }}>{msg}</div>}
         {store.error && (
           <div className="card" style={{ marginTop: 10, borderColor: 'var(--bad)' }}>
             <div className="small" style={{ color: 'var(--bad)' }}>{store.error}</div>
@@ -411,8 +239,6 @@ export function SettingsView() {
               Retry cloud save
             </button>
           </div>
-        )}
-          </>
         )}
       </div>
 
@@ -516,53 +342,21 @@ export function SettingsView() {
 
       {store.isAdminUser && auth.cloudAvailable && auth.user && (
         <>
-          <h2 className="section-title">Admin — AI model control</h2>
+          <h2 className="section-title">Admin - AI model control</h2>
           <div className="card">
             <p className="muted small">
-              You are an administrator ({auth.user.email}). Choose which model each
-              registered user's AI engine uses. Setting a key here locks that user's
-              AI section to your choice — it overrides their personal BYOK key until
-              you clear it. Users without a policy keep using their own key or the
-              free on-device rules.
+              You are an administrator ({auth.user.email}). This is the ONE AI
+              model for the whole app. Every user - including you - runs on it.
+              There is no per-user key or model override; set it once here and
+              it applies to everyone. Clearing it sends everyone back to the
+              free on-device rule engine.
             </p>
 
-            {/* ---- Lock controls (shared by the member list below) ---- */}
-            <div className="list" style={{ marginBottom: 12 }}>
-              <label className="field"><span>Provider</span>
-                <select value={lockProvider} onChange={(e) => setLockProvider(e.target.value as LLMProvider)}>
-                  <option value="none">None (force on-device rules)</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="anthropic">Anthropic</option>
-                  <option value="gemini">Gemini</option>
-                  <option value="adacode">adaCode</option>
-                </select>
-              </label>
-              {lockProvider !== 'none' && (
-                <>
-                  <label className="field"><span>API key (never displayed back to the target user)</span>
-                    <input type="password" value={lockKey} onChange={(e) => setLockKey(e.target.value)} placeholder="sk-…" autoComplete="off" />
-                  </label>
-                  <label className="field"><span>Model override (optional)</span>
-                    <input value={lockModel} onChange={(e) => setLockModel(e.target.value)} placeholder="leave blank for the provider default (adacode-3.0-flash)" />
-                  </label>
-                </>
-              )}
-            </div>
-
-            {/* ---- Platform-default LLM (0003) ---- */}
-            <h3 className="section-title" style={{ marginTop: 14 }}>
-              Platform default LLM
-            </h3>
-            <p className="muted small">
-              A single fallback LLM for any user who has no personal BYOK key and
-              no admin lock. It is the last tier before the free on-device rule
-              engine. Users with their own key are not affected - their BYOK key
-              always takes priority over the platform default.
-            </p>
+            {/* ---- Single platform-default LLM (the only AI config) ---- */}
             <div className="list" style={{ marginBottom: 10 }}>
               <label className="field"><span>Provider</span>
                 <select value={defProvider} onChange={(e) => setDefProvider(e.target.value as LLMProvider)}>
-                  <option value="none">None (clear default / on-device rules)</option>
+                  <option value="none">None (on-device rules)</option>
                   <option value="openai">OpenAI</option>
                   <option value="anthropic">Anthropic</option>
                   <option value="gemini">Gemini</option>
@@ -593,7 +387,7 @@ export function SettingsView() {
                   disabled={defBusy || (defProvider !== 'none' && !defKey.trim() && !defKeyMasked)}
                   onClick={() => void saveDefaultLlm()}
                 >
-                  {defBusy ? 'Saving…' : defProvider === 'none' ? 'Clear platform default' : 'Save platform default'}
+                  {defBusy ? 'Saving…' : defProvider === 'none' ? 'Clear AI model' : 'Save AI model'}
                 </button>
                 {defProvider !== 'none' && !defKey.trim() && defKeyMasked && (
                   <span className="muted small">Key stays as-is (use the field above to rotate it).</span>
@@ -603,55 +397,27 @@ export function SettingsView() {
             <p className="muted small">
               Currently: {store.defaultLlm && store.defaultLlm.provider !== 'none'
                 ? store.defaultLlm.provider + (store.defaultLlm.model ? ' (' + store.defaultLlm.model + ')' : '') + ' · key …' + store.defaultLlm.key_finger
-                : 'no platform default - users use their own key or on-device rules'}
+                : 'no AI model - everyone uses the free on-device rule engine'}
             </p>
 
-            {/* ---- Member directory ---- */}
+            {/* ---- Member directory (read-only) ---- */}
             <div className="list">
               <div className="row" style={{ fontWeight: 600 }}>
                 <span className="grow">Registered users</span>
                 <span className="muted small">{members.length}</span>
               </div>
               {members.map((m) => {
-                const pol = policies[m.user_id];
                 const isThisAdmin = adminIds.includes(m.user_id);
                 const isSelf = m.user_id === myUserId;
                 return (
-                  <div key={m.user_id} className="row" style={{ flexWrap: 'wrap', columnGap: 8 }}>
+                  <div key={m.user_id} className="row">
                     <div className="grow">
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <span>{m.display_name || m.email}</span>
                         {isThisAdmin && <span className="badge">admin</span>}
                         {isSelf && <span className="badge">you</span>}
-                        {pol && pol.provider !== 'none' && (
-                          <span className="badge" style={{ background: 'var(--warn, #b8860b)', color: '#fff' }}>{pol.provider}</span>
-                        )}
                       </div>
-                      <div className="muted small">
-                        {m.email}
-                        {pol && pol.provider !== 'none' && (
-                          <> · {pol.model ? pol.model + ' · ' : ''}key …{pol.key_finger}</>
-                        )}
-                        {pol?.provider === 'none' && ' · locked to on-device rules'}
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      <button
-                        className="btn sm"
-                        disabled={lockBusy || (lockProvider !== 'none' && !lockKey.trim())}
-                        onClick={() => void setLockFor(m, lockProvider)}
-                      >
-                        {lockBusy ? 'Saving…' : 'Apply'}
-                      </button>
-                      <button className="btn ghost sm" onClick={() => void unlockUser(m)}>Clear</button>
-                      <button
-                        className="btn ghost sm"
-                        disabled={defBusy || !hasPlatformDefault}
-                        title={hasPlatformDefault
-                          ? 'Apply the platform default to this user'
-                          : 'Save a platform default first (section above), then this becomes available'}
-                        onClick={() => void applyDefaultToMember(m)}
-                      >Use default</button>
+                      <div className="muted small">{m.email} · on the shared AI model</div>
                     </div>
                   </div>
                 );
