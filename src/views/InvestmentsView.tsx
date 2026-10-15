@@ -12,6 +12,7 @@ import { DelButton } from '../components/DelButton';
 import { Disclosure } from '../components/Disclosure';
 import { EmergencyPanel } from './EmergencyPanel';
 import { SavingsGoalsPanel } from './SavingsGoalsPanel';
+import { AllocationBar } from '../components/AllocationBar';
 import { fxService } from '../services';
 import { valueInBase } from '../ai/portfolio';
 import type { AccountLine } from '../ai/portfolio';
@@ -248,6 +249,21 @@ export function InvestmentsView() {
             <div className="lbl">Holdings</div>
           </div>
         </div>
+
+        {/* Allocation by asset class — stacked bar + legend. One chart for
+            the whole portfolio, driven by the same byAssetClass aggregate
+            the KPI panel uses (NaN-safe, uncounted excluded). */}
+        {live.portfolio && live.portfolio.byAssetClass.length > 0 ? (
+          <div style={{ marginTop: 14 }}>
+            <div className="small muted" style={{ marginBottom: 6 }}>Allocation by class</div>
+            <AllocationBar
+              items={live.portfolio.byAssetClass}
+              total={live.portfolio.totalValueBase}
+              base={base}
+            />
+          </div>
+        ) : null}
+
         {(() => {
           const withDep = live.portfolio?.byAccount.filter((a) => a.depositBase != null && a.valueBase > 0) ?? [];
           if (withDep.length === 0) return null;
@@ -353,6 +369,19 @@ export function InvestmentsView() {
                       </span>
                     )}
                   </div>
+                  {/* Per-account share of the total portfolio value. */}
+                  {line && live.portfolio && live.portfolio.totalValueBase > 0 ? (
+                    <div style={{ marginTop: 8 }}>
+                      <div className="bar" style={{ height: 5 }}>
+                        <i style={{
+                          width: `${Math.min(100, (line.valueBase / live.portfolio.totalValueBase) * 100)}%`,
+                        }} />
+                      </div>
+                      <div className="muted small" style={{ marginTop: 2 }}>
+                        {((line.valueBase / live.portfolio.totalValueBase) * 100).toFixed(1)}% of portfolio
+                      </div>
+                    </div>
+                  ) : null}
                   <div className="acc-foot">
                     <span className="muted small">{a.accountType} · {holdings} holding{holdings === 1 ? '' : 's'}</span>
                     <DepositEdit
