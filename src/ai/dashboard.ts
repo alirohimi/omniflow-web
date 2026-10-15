@@ -32,6 +32,7 @@ export async function summarizeDashboard(
   portfolio: PortfolioSummary | null,
   llm: LLMConfig | null,
   transport: (cfg: LLMConfig, sys: string, user: string) => Promise<string> = callLLM,
+  fullNetWorth?: { investments: number; assets: number; liabilities: number; net: number },
 ): Promise<DashboardSummary> {
   const ctx: CoachContext = {
     expenses: input.expenses,
@@ -46,6 +47,13 @@ export async function summarizeDashboard(
     categories: [],
   };
   const brief = buildBrief(ctx);
+  // Override the brief's net worth with the full figure (investments + manual
+  // assets − liabilities) so the AI narrative matches the hero card. The
+  // brief only knows about the investment portfolio, which is what caused the
+  // "AI shows RM82k but hero shows RM94k" mismatch.
+  if (fullNetWorth) {
+    brief.netWorthBase = Math.round(fullNetWorth.net * 100) / 100;
+  }
   const rules = runRules(input);
 
   // -- Tier 1: BYOK LLM -----------------------------------------------------

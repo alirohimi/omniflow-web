@@ -188,6 +188,8 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
       },
       live.portfolio,
       store.llmConfig,
+      undefined,
+      nw,
     )
       .then((s) => { if (!cancelled) setAiSummary(s); })
       .catch(() => { if (!cancelled) setAiSummary(null); })
