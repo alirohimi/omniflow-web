@@ -43,6 +43,7 @@ export function ExpensesView() {
   const [cat, setCat] = useState('');
   const [aiMsg, setAiMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [isIncome, setIsIncome] = useState(false);
 
   // ---- OCR form state
   const fileRef = useRef<HTMLInputElement>(null);
@@ -64,25 +65,30 @@ export function ExpensesView() {
       .reduce((s, e) => s + e.baseAmount, 0);
   }, [vault.expenses]);
 
-  // AI auto-categorize when merchant changes (mirrors AIManager Tier routing).
-  const categorizeMerchant = async (m: string) => {
+  // ---- AI auto-categorize debounce (fired per keystroke; 300 ms debounce
+  //      so rapid typing doesn't spam the BYOK LLM).
+  const catTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const categorizeMerchant = (m: string) => {
     setMerchant(m);
     if (!m.trim()) { setCat(''); setAiMsg(null); return; }
-    setBusy(true);
-    try {
-      const r = await categorize(
-        { merchant: m, currency: cur, amount: parseFloat(amount) || undefined },
-        vault.categories,
-        store.llmConfig ?? undefined,
-      );
-      setCat(r.category);
-      setAiMsg(`AI: ${r.tier} · ${Math.round(r.confidence * 100)}% · "${r.category}"`);
-    } catch {
-      setCat('');
-      setAiMsg('AI categorize failed; pick manually.');
-    } finally {
-      setBusy(false);
-    }
+    if (catTimerRef.current) clearTimeout(catTimerRef.current);
+    catTimerRef.current = setTimeout(async () => {
+      setBusy(true);
+      try {
+        const r = await categorize(
+          { merchant: m, currency: cur, amount: parseFloat(amount) || undefined },
+          vault.categories,
+          store.llmConfig ?? undefined,
+        );
+        setCat(r.category);
+        setAiMsg(`AI: ${r.tier} · ${Math.round(r.confidence * 100)}% · "${r.category}"`);
+      } catch {
+        setCat('');
+        setAiMsg('AI categorize failed; pick manually.');
+      } finally {
+        setBusy(false);
+      }
+    }, 300);
   };
 
   const saveManual = async () => {
@@ -97,19 +103,25 @@ export function ExpensesView() {
         rate = 1; // offline: keep original amount as a rough base
       }
     }
+    const finalCategory = isIncome ? 'Income' : (cat || 'Other');
     store.addExpense({
       originalAmount: a,
       originalCurrency: cur,
       fxRate: rate,
-      category: cat || 'Other',
-      aiTier: (aiMsg?.startsWith('AI: llm-byok') ? 'llm-byok' : 'dictionary') as Expense['aiTier'],
+      category: finalCategory,
+      aiTier: isIncome ? 'dictionary' : ((aiMsg?.startsWith('AI: llm-byok') ? 'llm-byok' : 'dictionary') as Expense['aiTier']),
       merchant: merchant.trim(),
-      paymentMethod: pm,
+      paymentMethod: isIncome ? 'bank' : pm,
       source: 'manual',
       note: note.trim() || undefined,
     });
-    toast(`Saved ${merchant.trim()} · ${formatMoney(a, cur)}${cur !== base ? ` → ${base}` : ''}`);
+    toast(
+      isIncome
+        ? `Income saved · ${merchant.trim()} · ${formatMoney(a, cur)}`
+        : `Saved ${merchant.trim()} · ${formatMoney(a, cur)}${cur !== base ? ` → ${base}` : ''}`,
+    );
     setAmount(''); setMerchant(''); setNote(''); setCat(''); setAiMsg(null);
+    setIsIncome(false);
   };
 
   const runOcr = async (file: File) => {
@@ -402,12 +414,22 @@ export function ExpensesView() {
     <>
       <h2 className="section-title">Capture</h2>
       <div className="card">
-        <div className="row">
-          <span className="chip sm"><IReceipt size={14} /> Manual / Apple Pay</span>
-          <span className="chip sm"><IScan size={14} /> QR / e-wallet OCR</span>
+        <div className="row" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
+          <div className="row" style={{ gap: 8 }}>
+            <span className="chip sm"><IReceipt size={14} /> Manual / Apple Pay</span>
+            <span className="chip sm"><IScan size={14} /> QR / e-wallet OCR</span>
+          </div>
+          <button
+            className={`btn ghost sm ${isIncome ? '' : 'off'}`}
+            onClick={() => { setIsIncome((v) => !v); if (!isIncome) setCat(''); }}
+            aria-pressed={isIncome}
+            style={{ flex: 'none' }}
+          >
+            {isIncome ? 'Income' : 'Expense'}
+          </button>
         </div>
 
-        <label className="field"><span>Amount</span>
+        <label className="field"><span>{isIncome ? 'Income source' : 'Amount'}</span>
           <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />
         </label>
         <div className="cols">
@@ -416,27 +438,46 @@ export function ExpensesView() {
               {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.code} ({c.name})</option>)}
             </select>
           </label>
-          <label className="field"><span>Payment</span>
-            <select value={pm} onChange={(e) => setPm(e.target.value as typeof pm)}>
-              {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+          {!isIncome && (
+            <label className="field"><span>Payment</span>
+              <select value={pm} onChange={(e) => setPm(e.target.value as typeof pm)}>
+                {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </label>
+          )}
+        </div>
+        <label className="field"><span>{isIncome ? 'Source (e.g. salary, freelance)' : 'Merchant (auto-categorized by AI)'}</span>
+          <input value={merchant} onChange={(e) => void categorizeMerchant(e.target.value)} placeholder={isIncome ? 'e.g. salary, freelance, rental' : 'e.g. 7-Eleven, Luno, Grab'} />
+        </label>
+        {isIncome ? (
+          <div className="small muted">Income is tracked separately from spend and excluded from all budget / pace calculations.</div>
+        ) : aiMsg ? <div className="small muted">{aiMsg}</div> : null}
+        {!isIncome && (
+          <label className="field"><span>Category</span>
+            <select value={cat} onChange={(e) => setCat(e.target.value)}>
+              {vault.categories.filter((c) => c.name !== 'Income').map((c) => <option key={c.id} value={c.name}>{c.icon} {c.name}</option>)}
             </select>
           </label>
-        </div>
-        <label className="field"><span>Merchant (auto-categorized by AI)</span>
-          <input value={merchant} onChange={(e) => void categorizeMerchant(e.target.value)} placeholder="e.g. 7-Eleven, Luno, Grab" />
-        </label>
-        {aiMsg && <div className="small muted">{aiMsg}</div>}
-        <label className="field"><span>Category</span>
-          <select value={cat} onChange={(e) => setCat(e.target.value)}>
-            {vault.categories.map((c) => <option key={c.id} value={c.name}>{c.icon} {c.name}</option>)}
-          </select>
-        </label>
+        )}
         <label className="field"><span>Note (optional)</span>
           <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="receipt text, reference…" />
         </label>
-        <button className="btn" style={{ width: '100%' }} disabled={busy} onClick={() => void saveManual()}>
-          {busy ? 'Working…' : `Save expense ${cur !== base ? `(${cur}→${base})` : ''}`}
-        </button>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn" style={{ flex: 1 }} disabled={busy} onClick={() => void saveManual()}>
+            {busy ? 'Working…' : isIncome
+              ? 'Save income'
+              : `Save expense ${cur !== base ? `(${cur}→${base})` : ''}`}
+          </button>
+          {!isIncome && (
+            <button
+              className="btn ghost sm"
+              style={{ flex: 'none' }}
+              onClick={() => { setIsIncome(true); setCat(''); setAiMsg(null); }}
+            >
+              Add income
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="card">

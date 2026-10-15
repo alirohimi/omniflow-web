@@ -35,23 +35,46 @@ export interface AdvisorInput {
   prefs: UserPreferences;
 }
 
-/** Approximate value of all holdings in base currency. */
-export function portfolioBaseValue(input: AdvisorInput): number {
+/** Approximate value of all holdings in base currency, FX-aware.
+ *  `rates` is a (currencyCode) => (units of base per 1 of that code) table
+ *  (base -> 1). Omit it and every holding is valued at face value in its own
+ *  currency — the pre-FX bug where a USD holding polluted a MYR total. */
+export function portfolioBaseValue(
+  input: AdvisorInput,
+  rates?: (code: string) => number,
+): number {
   let total = 0;
+  const base = input.prefs.baseCurrency;
   for (const h of input.holdings) {
     const q = input.quotes[h.symbol];
-    const priceBase = q ? q.price : h.currentPriceBase;
+    const priceLocal = q ? q.price : h.currentPriceBase;
+    const priceBase =
+      rates && h.holdingCurrency !== base
+        ? priceLocal * rates(h.holdingCurrency)
+        : priceLocal;
     total += priceBase * h.units;
   }
   return total;
 }
 
-/** Spend over the trailing `days` days, in base currency. */
+/** Spend over the trailing `days` days, in base currency.
+ *  `baseAmount` is snapshotted at capture time in whatever base was active
+ *  then; when the user has since switched base we re-convert via the stored
+ *  FX rate instead of assuming the snapshot is still in the active base. */
 export function spendOverLastDays(expenses: Expense[], days: number, baseCurrency: string): number {
   const cutoff = Date.now() - days * 86_400_000;
   return expenses
     .filter((e) => e.timestamp >= cutoff && e.category !== 'Income')
-    .reduce((sum, e) => (e.baseCurrency === baseCurrency ? sum + e.baseAmount : sum + e.baseAmount), 0);
+    .reduce((sum, e) => {
+      // If the snapshot was taken in the active base, use it directly.
+      // Otherwise re-convert originalAmount through the stored fxRate so a
+      // base-currency switch doesn't silently mix two currencies.
+      const val =
+        e.baseCurrency === baseCurrency
+          ? e.baseAmount
+          : e.originalAmount * (Number.isFinite(e.fxRate) ? e.fxRate : 1);
+      return sum + val;
+    }, 0);
 }
 
 /** Pure rule evaluation — always runs, $0. */

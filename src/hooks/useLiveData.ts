@@ -32,6 +32,17 @@ export function useLiveData(): LiveData {
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0); // manual refresh trigger
 
+  // Content hash: editing a holding (units/price) keeps the array length
+  // the same, so keying the effect on `holdings.length` (the old dep) left
+  // stale quotes in place until a manual refresh. Hash the relevant fields
+  // so any edit triggers a re-fetch.
+  const holdingsHash = useMemo(() => {
+    if (holdings.length === 0) return '0';
+    return holdings
+      .map((h) => `${h.symbol}:${h.assetClass}:${h.holdingCurrency}:${h.units}:${h.averageEntryPrice}`)
+      .join('|');
+  }, [holdings]);
+
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -56,7 +67,7 @@ export function useLiveData(): LiveData {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base, holdings.length, tick]);
+  }, [base, holdingsHash, tick]);
 
   const portfolio = useMemo<PortfolioSummary | null>(() => {
     if (!store.vault || !fx || !base) return null;

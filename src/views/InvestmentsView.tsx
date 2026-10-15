@@ -11,6 +11,7 @@ import { useToast } from '../components/Toast';
 import { DelButton } from '../components/DelButton';
 import { Disclosure } from '../components/Disclosure';
 import { EmergencyPanel } from './EmergencyPanel';
+import { SavingsGoalsPanel } from './SavingsGoalsPanel';
 import { fxService } from '../services';
 import { valueInBase } from '../ai/portfolio';
 import type { AccountLine } from '../ai/portfolio';
@@ -373,6 +374,9 @@ export function InvestmentsView() {
 
       <h2 className="section-title">Emergency reserve</h2>
       <EmergencyPanel />
+
+      <h2 className="section-title">Savings goals</h2>
+      <SavingsGoalsPanel />
 
       <Disclosure id="add-holding" title={editingId ? 'Edit holding' : 'Add holding'} defaultOpen={editingId != null || accountId !== ''}>
       <div className="card" ref={addHoldFormRef}>

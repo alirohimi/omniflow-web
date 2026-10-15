@@ -70,6 +70,9 @@ export function CoachView() {
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const hasLLM = store.llmConfig != null;
+  // Pro-gated: the LLM tier of the coach is a paid feature. When the user is
+  // on the free tier, fall through to the on-device rule engine (no network).
+  const llmAllowed = store.entitlements.has('llm-coach');
 
   // When an admin pinned this (non-admin) user to a cloud provider, the vendor
   // name must not leak to the target user — show a neutral chip instead of the
@@ -128,10 +131,13 @@ export function CoachView() {
     store.pushCoachMessage({ role: 'user', text: q, image: img ?? undefined, at: Date.now() });
     setPending(true);
     try {
+      // Pro-gate: only use the LLM when the user's tier allows it. Free-tier
+      // users fall through to the on-device rule engine (no network, no cost).
+      const activeLlm = llmAllowed ? store.llmConfig : null;
       const ans = await coachAsk(
         q,
         ctx,
-        store.llmConfig,
+        activeLlm,
         coachLog,
         img ? [img] : [],
       );
@@ -214,12 +220,14 @@ export function CoachView() {
           <span className="chip ok sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <ICoach size={13} /> Coach
           </span>
-          <span className={`chip sm ${hasLLM ? 'ok' : ''}`}>
-            {hasLLM
+          <span className={`chip sm ${hasLLM && llmAllowed ? 'ok' : ''}`}>
+            {hasLLM && llmAllowed
               ? adminLocked
                 ? 'LIVE · Managed'
                 : `LIVE · ${store.llmConfig!.provider}`
-              : 'ON-DEVICE RULES (free)'}
+              : hasLLM && !llmAllowed
+                ? 'LLM requires Pro — using on-device rules'
+                : 'ON-DEVICE RULES (free)'}
           </span>
         </div>
         {hasMessages && (

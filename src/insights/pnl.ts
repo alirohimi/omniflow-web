@@ -10,7 +10,7 @@
 import type { Disposal } from '../domain/types';
 
 /** (amount, currency) => base-currency amount. Callers pass a NaN-proof converter. */
-type ToBase = (amount: number, from: string) => number;
+export type ToBase = (amount: number, from: string) => number;
 
 export interface DisposalRealised {
   id: string;

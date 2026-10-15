@@ -110,8 +110,19 @@ export function buildPortfolio(
   const byAssetMap = new Map<AssetClass, number>();
   for (const l of lines) byAssetMap.set(l.holding.assetClass, (byAssetMap.get(l.holding.assetClass) ?? 0) + l.valueBase);
 
+  // O(n) per-account grouping: one pass into a Map keyed by accountId,
+  // instead of a per-account `.filter()` over all lines (was O(accounts ×
+  // holdings) — stalling at 50 accounts × 500 holdings).
+  const linesByAccount = new Map<string, HoldingLine[]>();
+  for (const l of lines) {
+    const key = l.holding.accountId;
+    const bucket = linesByAccount.get(key);
+    if (bucket) bucket.push(l);
+    else linesByAccount.set(key, [l]);
+  }
+
   const byAccount: AccountLine[] = accounts.map((acc) => {
-    const accLines = lines.filter((l) => l.holding.accountId === acc.id);
+    const accLines = linesByAccount.get(acc.id) ?? [];
     const valueBase = accLines.reduce((s, l) => s + l.valueBase, 0);
     const valueLocal = accLines.reduce((s, l) => s + l.valueLocal, 0);
     const costBase = accLines.reduce((s, l) => s + l.costBase, 0);

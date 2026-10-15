@@ -205,7 +205,6 @@ export class MarketDataService {
   }
 }
 
-export const marketData = new MarketDataService(undefined as unknown as CurrencyExchangeService);
-
-// Note: `marketData` is a module-level convenience export; the app wires it
-// with the real fxService at bootstrap (services/index.ts).
+// Note: the app wires a single MarketDataService instance to fxService in
+// services/index.ts (`marketDataService`). Do NOT import the class here
+// and construct a second instance — that is the bug this file used to ship.

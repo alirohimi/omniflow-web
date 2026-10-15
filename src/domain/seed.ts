@@ -30,6 +30,8 @@ export function emptyVault(prefs?: Partial<UserPreferences>): VaultBlob {
     dividends: [],
     disposals: [],
     emergency: { ...EMERGENCY_DEFAULT, items: [] },
+    netWorthHistory: [],
+    savingsGoals: [],
     pendingImport: null,
   };
 }
@@ -136,6 +138,8 @@ export function healVault(blob: VaultBlob): { blob: VaultBlob; changed: boolean 
   if (!Array.isArray(blob.assets)) blob.assets = [];
   if (!Array.isArray(blob.dividends)) blob.dividends = [];
   if (!Array.isArray(blob.disposals)) blob.disposals = [];
+  if (!Array.isArray(blob.netWorthHistory)) blob.netWorthHistory = [];
+  if (!Array.isArray(blob.savingsGoals)) blob.savingsGoals = [];
   // Emergency module: prefill from the default on old blobs so the
   // dashboard + coach always see a well-shaped module, then per-row guards
   // (best-effort; never drop user data).
@@ -145,6 +149,8 @@ export function healVault(blob: VaultBlob): { blob: VaultBlob; changed: boolean 
     blob.emergency.targetMonths = EMERGENCY_DEFAULT.targetMonths;
   }
   blob.emergency = { ...blob.emergency, targetMonths: Math.round(blob.emergency.targetMonths) };
+  // Net-worth history: normalize to an array (old blobs may lack it).
+  if (!Array.isArray(blob.netWorthHistory)) blob.netWorthHistory = [];
   // Per-row shape guards (best-effort; never drop user data).
   blob.recurring = blob.recurring.map((r) =>
     r && typeof r === 'object'

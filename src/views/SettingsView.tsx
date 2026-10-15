@@ -4,10 +4,14 @@
 
 import { useEffect, useState } from 'react';
 import { useVaultStore } from '../store/store';
+import { useLiveData } from '../hooks/useLiveData';
 import { useAuthStore } from '../auth/AuthProvider';
 import { CURRENCIES } from '../domain/enums';
 import type { LLMProvider } from '../domain/types';
 import type { MemberRow, VaultSyncRow } from '../services/admin';
+import { downloadCsv, expensesToCsv, holdingsToCsv } from '../services/exportCsv';
+import { pnlToCsv, type ToBase } from '../insights';
+import { fxService } from '../services';
 import { fingerprintSecret } from '../security/vault';
 
 /**
@@ -23,6 +27,7 @@ function genericModelName(_model?: string): string {
 export function SettingsView() {
   const store = useVaultStore();
   const auth = useAuthStore();
+  const live = useLiveData();
   const { vault } = store;
   if (!vault) return null;
 
@@ -247,9 +252,61 @@ export function SettingsView() {
         <div className="list">
           <button className="btn ghost sm" onClick={() => store.lock()}>Lock vault now</button>
         </div>
+        <div className="list" style={{ marginTop: 10 }}>
+          <button
+            className="btn ghost sm"
+            onClick={() => downloadCsv('omniflow-expenses.csv', expensesToCsv(vault.expenses))}
+          >
+            Export expenses CSV
+          </button>
+          <button
+            className="btn ghost sm"
+            onClick={() => downloadCsv('omniflow-investments.csv', holdingsToCsv(vault.holdings, vault.accounts))}
+          >
+            Export investments CSV
+          </button>
+          {vault.disposals && vault.disposals.length > 0 && store.entitlements.has('csv-export-pnl') && (
+            <button
+              className="btn ghost sm"
+              onClick={() => {
+                const base = vault.prefs.baseCurrency;
+                const disposals = vault.disposals ?? [];
+                const toBase: ToBase = (amt, from) => {
+                  if (from === base) return amt;
+                  if (!live.fx) return amt;
+                  try { return fxService.toBase(amt, from, live.fx); }
+                  catch { return amt; }
+                };
+                downloadCsv('omniflow-pnl.csv', pnlToCsv(disposals, toBase, base));
+              }}
+            >
+              Export P&L CSV
+            </button>
+          )}
+        </div>
         <p className="muted small" style={{ marginTop: 8 }}>
           {vault.expenses.length} expenses · {vault.holdings.length} holdings · {vault.accounts.length} accounts · updated {new Date(vault.updatedAt).toLocaleString()}
         </p>
+      </div>
+
+      <h2 className="section-title">Plan</h2>
+      <div className="card">
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div className="title">
+              {store.tier === 'pro' ? 'Pro' : 'Free'}
+              {store.tier === 'pro' ? <span className="chip sm ok" style={{ marginLeft: 8 }}>Active</span> : null}
+            </div>
+            <div className="meta muted small">
+              {store.tier === 'pro'
+                ? 'All Pro features unlocked.'
+                : 'Upgrade for LLM coach, P&L export, rebalance alerts, and more.'}
+            </div>
+          </div>
+          {store.tier !== 'pro' ? (
+            <button className="btn sm">Upgrade to Pro</button>
+          ) : null}
+        </div>
       </div>
 
       <h2 className="section-title">Account &amp; Sync</h2>

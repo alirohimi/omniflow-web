@@ -139,6 +139,29 @@ export interface ManualAsset {
   kind: 'bank' | 'cash' | 'property' | 'other';
 }
 
+/** A single captured net-worth snapshot. Appended automatically by the
+ *  dashboard on each visit (capped at the most recent 365 points so the
+ *  encrypted vault blob stays small). */
+export interface NetWorthPoint {
+  at: number;            // epoch ms
+  net: number;           // base currency
+  investments: number;
+  assets: number;
+  liabilities: number;
+}
+
+/** A savings goal: a named target amount in the base currency, with an
+ *  optional deadline. `funded` is the amount currently allocated toward it
+ *  (base currency), so the UI can render a progress bar. */
+export interface SavingsGoal {
+  id: string;
+  name: string;
+  target: number;        // base currency
+  funded: number;        // base currency, currently allocated
+  deadline?: number;     // epoch ms, optional
+  createdAt: number;
+}
+
 /** A dividend event on a holding. `reinvested` records "reinvested vs paid". */
 export interface Dividend {
   id: string;
@@ -306,6 +329,12 @@ export interface VaultBlob {
   disposals?: Disposal[];
   /** Emergency reserve module (separate from the investment portfolio). */
   emergency?: EmergencyFund;
+  /** Net-worth history (one point per day, most recent last). Optional so
+   *  old encrypted blobs keep decrypting; readers normalize with ?? []. */
+  netWorthHistory?: NetWorthPoint[];
+  /** Savings goals: target amounts with optional deadline. Optional so old
+   *  encrypted blobs keep decrypting; readers normalize with ?? []. */
+  savingsGoals?: SavingsGoal[];
   /** In-progress PDF statement import (upload/parse/review). Persisted so a
    *  refresh or close mid-import survives; cleared when the user commits it
    *  to expenses or discards it. Optional so old encrypted blobs heal. */

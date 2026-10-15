@@ -118,8 +118,14 @@ export async function categorizeByLLM(
   } catch {
     // The LLM returned prose; best-effort regex extraction.
     const m = raw.match(/\{[\s\S]*\}/);
-    parsed = m ? JSON.parse(m[0]) : { category: 'Other', confidence: 0.1 };
+    try {
+      parsed = m ? JSON.parse(m[0]) : { category: 'Other', confidence: 0.1 };
+    } catch {
+      parsed = { category: 'Other', confidence: 0.1 };
+    }
   }
+  // A provider can return a bare string/number/null — guard before property access.
+  if (!parsed || typeof parsed !== 'object') parsed = { category: 'Other', confidence: 0.1 };
   const valid = catNames.includes(parsed.category) ? parsed.category : 'Other';
   return {
     category: valid,

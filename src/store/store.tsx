@@ -46,12 +46,15 @@ import type {
   EmergencyFund,
   EmergencyFundItem,
   PendingImport,
+  NetWorthPoint,
+  SavingsGoal,
 } from '../domain/types';
 import { emptyVault, healVault, withoutUndefined } from '../domain/seed';
 import { encryptVault, decryptVault, fingerprintSecret, type VaultCipher } from '../security/vault';
 import { getSupabase } from '../services/supabase';
 import { LLMConfig } from '../ai/categorize';
 import { resolveLlmConfig } from '../ai/resolveLlm';
+import { makeEntitlements, DEFAULT_TIER, type Tier } from '../entitlements';
 import { useAuthStore } from '../auth/AuthProvider';
 import { fetchCloudVaultStrict, saveCloudVault, deleteCloudVault, flushVaultKeepalive } from '../services/cloudVault';
 import {
@@ -146,6 +149,13 @@ export interface VaultStore {
   vault: VaultBlob | null;
   llmConfig: LLMConfig | null;
 
+  /** Current billing tier ('free' | 'pro'). Defaults to 'free' until
+   *  Lemon Squeezy / DB wiring flips it. Source of truth: admin-settable
+   *  prefs.tier (set via the admin console / DB migration). */
+  tier: Tier;
+  /** Entitlements derived from `tier`. Call `has('feature')` to gate UI. */
+  entitlements: ReturnType<typeof makeEntitlements>;
+
   addExpense: (input: NewExpenseInput) => string;
   /** Batch insert (PDF/CSV statement import). One persist per batch. */
   addExpenses: (inputs: NewExpenseInput[]) => string[];
@@ -182,12 +192,19 @@ export interface VaultStore {
   deleteDividend: (id: string) => void;
   addDisposal: (input: Omit<Disposal, 'id'>) => string;
   deleteDisposal: (id: string) => void;
+  // ---- savings goals (Pro feature) ----
+  addSavingsGoal: (input: Omit<SavingsGoal, 'id'>) => string;
+  deleteSavingsGoal: (id: string) => void;
+  updateSavingsGoal: (id: string, patch: Partial<Omit<SavingsGoal, 'id' | 'createdAt'>>) => void;
   // ---- emergency reserve (separate line from the portfolio) ----
   addEmergencyItem: (input: Omit<EmergencyFundItem, 'id'>) => string;
   deleteEmergencyItem: (id: string) => void;
   /** Patch the module-level scalars (targetMonths / targetOverrideBase /
    *  note). Items are managed via add/deleteEmergencyItem. */
   setEmergency: (patch: Partial<Omit<EmergencyFund, 'items'>>) => void;
+
+  /** Append a daily net-worth snapshot (deduped by day, capped at 365 points). */
+  captureNetWorth: (point: Omit<NetWorthPoint, 'at'> & { at?: number }) => void;
 
   // ---- in-flight PDF statement import checkpoint (survives a refresh) ----
   /** Persist an in-progress PDF import into the encrypted vault blob. Passing
@@ -985,8 +1002,8 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   // Generic factories keep the 12 near-identical mutators DRY. Arrays are
   // optional on old encrypted blobs, so every read normalizes with ?? [].
 
-  type EntKey = 'budgets' | 'recurring' | 'liabilities' | 'assets' | 'dividends' | 'disposals';
-  type Prefix = 'b' | 'r' | 'l' | 'a' | 'd' | 's' | 'e';
+  type EntKey = 'budgets' | 'recurring' | 'liabilities' | 'assets' | 'dividends' | 'disposals' | 'savingsGoals';
+  type Prefix = 'b' | 'r' | 'l' | 'a' | 'd' | 's' | 'e' | 'g';
   const entId = (p: Prefix) =>
     `${p}-${crypto.randomUUID()}`; // 128-bit id; prefix keeps it sortable & entity-typed
   const setEnt = (key: EntKey, fn: (arr: unknown[]) => unknown[]) => {
@@ -1070,6 +1087,21 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   );
   const deleteDisposal = useCallback((id: string) => setEnt('disposals', (a) => a.filter((x) => (x as Disposal).id !== id)), []);
 
+  const addSavingsGoal = useCallback(
+    (input: Omit<SavingsGoal, 'id'>): string => {
+      const id = entId('g');
+      setEnt('savingsGoals', (arr) => [...(arr as SavingsGoal[]), { ...withoutUndefined(input), id }]);
+      return id;
+    },
+    [],
+  );
+  const deleteSavingsGoal = useCallback((id: string) => setEnt('savingsGoals', (a) => a.filter((x) => (x as SavingsGoal).id !== id)), []);
+  const updateSavingsGoal = useCallback(
+    (id: string, patch: Partial<Omit<SavingsGoal, 'id' | 'createdAt'>>) =>
+      setEnt('savingsGoals', (a) => (a as SavingsGoal[]).map((g) => (g.id === id ? { ...g, ...withoutUndefined(patch) } : g))),
+    [],
+  );
+
   // ---- Emergency reserve (nested module, not an array key) ----
   const addEmergencyItem = useCallback(
     (input: Omit<EmergencyFundItem, 'id'>): string => {
@@ -1103,6 +1135,37 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       const next = { ...prev, pendingImport: p, updatedAt: Date.now() };
       void persist(next);
       return next;
+    });
+  }, [persist]);
+
+  /** Append a net-worth snapshot, one point per day (most-recent-wins for
+   *  today), capped at the last 365 points so the encrypted blob stays small.
+   *  No-op when a point for today already exists. */
+  const captureNetWorth = useCallback((point: Omit<NetWorthPoint, 'at'> & { at?: number }) => {
+    const at = point.at ?? Date.now();
+    const dayStart = new Date(at);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayKey = dayStart.getTime();
+    setVault((prev) => {
+      if (!prev) return prev;
+      const hist = prev.netWorthHistory ?? [];
+      // Already captured today (same calendar day): refresh, don't duplicate.
+      const todayIdx = hist.findIndex((p) => {
+        const d = new Date(p.at);
+        d.setHours(0, 0, 0, 0);
+        return d.getTime() === dayKey;
+      });
+      let next: NetWorthPoint[];
+      if (todayIdx >= 0) {
+        next = hist.map((p, i) => (i === todayIdx ? { ...p, ...point, at: p.at } : p));
+      } else {
+        next = [...hist, { ...point, at }].sort((a, b) => a.at - b.at);
+      }
+      // Keep only the most recent 365 points.
+      if (next.length > 365) next = next.slice(next.length - 365);
+      const out = { ...prev, netWorthHistory: next, updatedAt: Date.now() };
+      void persist(out);
+      return out;
     });
   }, [persist]);
 
@@ -1289,6 +1352,12 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     return resolveLlmConfig({ vault, llmPolicy, defaultLlm });
   }, [vault, llmPolicy, defaultLlm]);
 
+  // Billing tier: sourced from prefs.tier when set (admin / DB migration),
+  // otherwise defaults to 'free'. Entitlements are derived from it — the
+  // switch Lemon Squeezy / Supabase will flip on upgrade.
+  const tier: Tier = (vault?.prefs as { tier?: Tier } | undefined)?.tier ?? DEFAULT_TIER;
+  const entitlements = useMemo(() => makeEntitlements(tier), [tier]);
+
   const store: VaultStore = {
     status,
     error,
@@ -1302,6 +1371,8 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     eraseAll,
     vault,
     llmConfig,
+    tier,
+    entitlements,
     addExpense,
     addExpenses,
     deleteExpense,
@@ -1326,9 +1397,13 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     deleteDividend,
     addDisposal,
     deleteDisposal,
+    addSavingsGoal,
+    deleteSavingsGoal,
+    updateSavingsGoal,
     addEmergencyItem,
     deleteEmergencyItem,
     setEmergency,
+    captureNetWorth,
     setPendingImport,
     setPrefs,
     setLlmKey,
