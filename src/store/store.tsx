@@ -49,6 +49,7 @@ import type {
 } from '../domain/types';
 import { emptyVault, healVault, withoutUndefined } from '../domain/seed';
 import { encryptVault, decryptVault, fingerprintSecret, type VaultCipher } from '../security/vault';
+import { getSupabase } from '../services/supabase';
 import { LLMConfig } from '../ai/categorize';
 import { resolveLlmConfig } from '../ai/resolveLlm';
 import { useAuthStore } from '../auth/AuthProvider';
@@ -677,8 +678,19 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         const blob: VaultBlob = { ...vault, updatedAt: Date.now() };
         const c2 = await encryptVault(blob, next);
         cipherRef.current = c2;
-        const ok = cloudOn ? await saveCloudVault(scope, c2) : true;
-        if (!ok) throw new Error('Cloud save failed — could not re-encrypt the vault row.');
+        // After updateUser the client's access token may still be the
+        // pre-change JWT. A stale token makes the upsert 401, leaving the
+        // DB row encrypted under the OLD key — the next unlock then fails
+        // with "wrong password". Refresh the session so the write uses a
+        // valid token, then upsert with one retry to absorb a transient
+        // 401 from a just-rotated token.
+        if (cloudOn) {
+          const sb = getSupabase();
+          if (sb) await sb.auth.refreshSession().catch(() => {});
+          let ok = await saveCloudVault(scope, c2);
+          if (!ok) ok = await saveCloudVault(scope, c2); // retry once
+          if (!ok) throw new Error('Cloud save failed — could not re-encrypt the vault row.');
+        }
         setSyncState('synced');
         setError(null);
       } catch (e) {
