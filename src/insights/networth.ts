@@ -24,7 +24,9 @@ export interface NetWorthNow {
   hasData: boolean;
 }
 
-/** Current investment value (base currency) — NaN-proof. */
+/** Current investment value (base currency) — NaN-proof.
+ *  Par rows (cash / MMF) default to par=1 when no stored price exists,
+ *  matching ai/portfolio.ts valueInBase so this never undercounts cash. */
 export function investmentValueNow(
   holdings: InvestmentHolding[],
   quotes: Record<string, QuoteSnapshot>,
@@ -33,9 +35,17 @@ export function investmentValueNow(
   let total = 0;
   for (const h of holdings) {
     const q = quotes[h.symbol];
-    const priceBase = q ? toBase(q.price, q.currency) : (h.currentPriceBase ?? 0);
-    if (!Number.isFinite(priceBase) || !Number.isFinite(h.units)) continue;
-    total += priceBase * h.units;
+    const isPar = h.assetClass === 'cash' || h.assetClass === 'mmf';
+    const rawPrice = q?.price ?? h.currentPriceLocal;
+    const priceLocal = Number.isFinite(rawPrice) ? rawPrice : isPar ? 1 : 0;
+    if (!Number.isFinite(priceLocal) || !Number.isFinite(h.units) || priceLocal <= 0) continue;
+    const cur = isPar ? h.holdingCurrency : (q?.currency ?? h.holdingCurrency);
+    // Convert 1 unit of `cur` to base (FX table), applied to the LOCAL price
+    // so the same math holds whether the price came from a live quote or the
+    // stored fallback. Same convention as valueInBase in ai/portfolio.ts.
+    const rate = toBase(1, cur);
+    const r = Number.isFinite(rate) ? rate : (cur === 'USD' ? 0 : 1);
+    total += priceLocal * h.units * r;
   }
   return Number.isFinite(total) ? total : 0;
 }

@@ -15,25 +15,13 @@ import {
   budgetReport,
   upcomingBills,
   bestStrategy,
-  netWorthNow,
 } from '../insights';
 import { IPlus, IRefresh, IChevron } from '../icons';
-import { fxService, type RatesForBase } from '../services';
+import { fxService } from '../services';
+import { valueInBase } from '../ai/portfolio';
 import Markdown from '../components/Markdown';
 
 type Tab = 'dashboard' | 'expenses' | 'investments' | 'settings';
-
-/** Units of base per 1 of `code` — 1 when equal, falls back to 1 (no conversion)
- *  when no rate table is available, so the hero never shows NaN. */
-function fromBaseRate(code: string, base: string, fx: RatesForBase | null): number {
-  if (code === base) return 1;
-  if (!fx) return 1;
-  try {
-    return fxService.toBase(1, code, fx);
-  } catch {
-    return 1;
-  }
-}
 
 export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
   const store = useVaultStore();
@@ -48,17 +36,48 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
   const recurring = vault.recurring ?? [];
   const liabilities = vault.liabilities ?? [];
 
-  // Net-worth hero: full assets − liabilities (was portfolio-only before).
+  // Net-worth hero: full assets − liabilities.
+  //
+  // The investments term uses the SAME valueInBase() math the Portfolio page
+  // uses (ai/portfolio.ts), so the Home "invest" figure and the Portfolio
+  // "Value" figure always reconcile. The old `investmentValueNow` in
+  // insights/networth.ts treated par rows (cash/MMF) with no stored price as
+  // 0, while valueInBase treats them as par (=1) — that was the source of the
+  // Home-vs-Portfolio duplication the user saw.
   const nw = useMemo(
-    () =>
-      netWorthNow(
-        vault.holdings,
-        live.quotes,
-        vault.assets ?? [],
-        liabilities,
-        (amt, from) => (from === base ? amt : fromBaseRate(from, base, live.fx) * amt),
-      ),
-    [vault, live, base],
+    () => {
+      const rateToBase = (code: string): number => {
+        if (code === base) return 1;
+        if (!live.fx) return 0;
+        try {
+          return fxService.toBase(1, code, live.fx);
+        } catch {
+          return 0;
+        }
+      };
+      let investments = 0;
+      for (const h of vault.holdings) {
+        const q = live.quotes[h.symbol];
+        const { valueBase, ok } = valueInBase(h, q, base, rateToBase);
+        if (ok) investments += valueBase;
+      }
+      const assetsSum = (vault.assets ?? []).reduce(
+        (s, a) => s + (Number.isFinite(a.value) ? a.value : 0),
+        0,
+      );
+      const liabilitiesSum = liabilities.reduce(
+        (s, l) => s + (Number.isFinite(l.balance) ? l.balance : 0),
+        0,
+      );
+      return {
+        investments,
+        assets: assetsSum,
+        liabilities: liabilitiesSum,
+        net: investments + assetsSum - liabilitiesSum,
+        hasData: vault.holdings.length > 0 || (vault.assets?.length ?? 0) > 0 || liabilities.length > 0,
+      };
+    },
+    [vault, live.quotes, live.fx, base, liabilities],
   );
 
   // K1 — cashflow forecast: months-until-broke + 6-month projected balances.
