@@ -13,6 +13,8 @@ import { Disclosure } from '../components/Disclosure';
 import { EmergencyPanel } from './EmergencyPanel';
 import { SavingsGoalsPanel } from './SavingsGoalsPanel';
 import { AllocationBar } from '../components/AllocationBar';
+import { AllocationPie, type PieSlice } from '../components/AllocationPie';
+import { colorForClass } from '../components/AllocationPie';
 import { fxService } from '../services';
 import { valueInBase } from '../ai/portfolio';
 import type { AccountLine } from '../ai/portfolio';
@@ -90,6 +92,53 @@ export function InvestmentsView() {
     setAssetClass(c);
     if (isParClass(c)) setSymbol(parSymbolFor(c));
   };
+
+  const [activePie, setActivePie] = useState<'class' | 'holding'>('class');
+
+  // Pie slices: one per asset class (or per holding), each carrying the
+  // individual holdings inside it for the drill-down. Reuses valueInBase so
+  // the chart reconciles with the per-row list below (same NaN-safe math).
+  const pieSlices = useMemo<PieSlice[]>(() => {
+    if (!live.portfolio) return [];
+    const rateToBaseLocal = (code: string): number =>
+      live.fx ? fxService.toBase(1, code, live.fx) : code === base ? 1 : 0;
+    if (activePie === 'holding') {
+      return vault.holdings
+        .map((h) => {
+          const q = live.quotes[h.symbol];
+          const { valueBase, ok } = valueInBase(h, q, base, rateToBaseLocal);
+          return {
+            key: h.id,
+            label: h.symbol,
+            valueBase: ok ? valueBase : 0,
+            color: colorForClass(h.assetClass, 0),
+          };
+        })
+        .filter((s) => s.valueBase > 0);
+    }
+    // Per class: group holdings, sum their base values, attach sub-breakdown.
+    const byClass = new Map<string, { valueBase: number; sub: { label: string; valueBase: number }[] }>();
+    for (const h of vault.holdings) {
+      const q = live.quotes[h.symbol];
+      const { valueBase, ok } = valueInBase(h, q, base, rateToBaseLocal);
+      const v = ok ? valueBase : 0;
+      const row = byClass.get(h.assetClass) ?? { valueBase: 0, sub: [] };
+      row.valueBase += v;
+      row.sub.push({ label: h.symbol, valueBase: v });
+      byClass.set(h.assetClass, row);
+    }
+    return [...byClass.entries()]
+      .filter(([, v]) => v.valueBase > 0)
+      .map(([cls, v]) => ({
+        key: cls,
+        label: cls,
+        valueBase: v.valueBase,
+        color: colorForClass(cls, 0),
+        sub: v.sub,
+      }));
+  }, [activePie, vault.holdings, live.quotes, live.fx, base]);
+
+  const totalPieValue = useMemo(() => pieSlices.reduce((s, x) => s + x.valueBase, 0), [pieSlices]);
 
   const grouped = useMemo(() => {
     const byPlat = new Map<string, InvestmentHolding[]>();
@@ -260,6 +309,38 @@ export function InvestmentsView() {
               items={live.portfolio.byAssetClass}
               total={live.portfolio.totalValueBase}
               base={base}
+            />
+          </div>
+        ) : null}
+
+        {/* Detail pie: donut with drill-down. Toggle between per-class and
+            per-holding slices; tap a class slice to see its holdings. */}
+        {pieSlices.length > 0 ? (
+          <div style={{ marginTop: 14 }}>
+            <div className="row" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
+              <div className="small muted">Detail breakdown</div>
+              <div className="row" style={{ gap: 4 }}>
+                <button
+                  className={`chip sm${activePie === 'class' ? ' on' : ''}`}
+                  aria-pressed={activePie === 'class'}
+                  onClick={() => setActivePie('class')}
+                >
+                  By class
+                </button>
+                <button
+                  className={`chip sm${activePie === 'holding' ? ' on' : ''}`}
+                  aria-pressed={activePie === 'holding'}
+                  onClick={() => setActivePie('holding')}
+                >
+                  By holding
+                </button>
+              </div>
+            </div>
+            <AllocationPie
+              slices={pieSlices}
+              total={totalPieValue}
+              base={base}
+              title={activePie === 'class' ? 'portfolio' : 'holdings'}
             />
           </div>
         ) : null}
