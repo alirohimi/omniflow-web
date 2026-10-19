@@ -935,3 +935,51 @@ body { overflow-x: hidden; }
 .ai-summary-text .md code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12.5px; background: var(--card-2); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
 .ai-summary-text .md pre { margin: 6px 0; padding: 10px 12px; background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius-sm); overflow-x: auto; }
 .ai-summary-text .md pre code { background: none; border: none; padding: 0; }
+
+/* ============================ Modal (bottom sheet) ============================
+   Themed pop-up used by edit flows. One instance at a time app-wide.
+   Phone: fixed overlay, full-width bottom sheet that slides up.
+   Desktop (fine pointer): a centered card instead. Backdrop tap or Escape
+   closes (both handled in the Modal component). */
+.modal-wrap {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(8, 9, 20, 0.62);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  display: flex; align-items: flex-end; justify-content: center;
+  animation: modal-fade .16s ease;
+}
+@keyframes modal-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.modal {
+  width: 100%; max-width: 780px;
+  max-height: 86dvh; overflow-y: auto;
+  background: linear-gradient(165deg, var(--card) 0%, var(--card-2) 100%);
+  border: 1px solid var(--card-border); border-bottom: 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: 0 -12px 48px rgba(0, 0, 0, 0.5);
+  padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
+  animation: modal-rise .22s cubic-bezier(.2, .9, .3, 1);
+}
+@keyframes modal-rise { from { transform: translateY(24px); opacity: .4; } to { transform: none; opacity: 1; } }
+
+.modal-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 2px 12px;
+}
+.modal-head h3 {
+  margin: 0; font-size: 15.5px; font-weight: 700; letter-spacing: .2px;
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.modal-x { min-width: 44px; min-height: 44px; flex-shrink: 0; }
+
+@media (pointer: fine) {
+  .modal-wrap { align-items: center; padding: 24px; }
+  .modal {
+    border-radius: var(--radius-lg); border-bottom: 1px solid var(--card-border);
+    max-height: 82dvh; padding: 18px 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-wrap, .modal { animation: none; }
+}

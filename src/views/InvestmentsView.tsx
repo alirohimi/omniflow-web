@@ -10,6 +10,7 @@ import { useLiveData } from '../hooks/useLiveData';
 import { useToast } from '../components/Toast';
 import { DelButton } from '../components/DelButton';
 import { Disclosure } from '../components/Disclosure';
+import { Modal } from '../components/Sheet';
 import { EmergencyPanel } from './EmergencyPanel';
 import { SavingsGoalsPanel } from './SavingsGoalsPanel';
 import { AutoInvestPanel } from './AutoInvestPanel';
@@ -27,7 +28,7 @@ import {
 import { valueInBase } from '../ai/portfolio';
 import type { AccountLine } from '../ai/portfolio';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
-import { IRefresh, IPlus, IPencil, IX, IDots, ICheck } from '../icons';
+import { IRefresh, IPlus, IPencil, IDots, ICheck } from '../icons';
 import type { InvestmentAccount, InvestmentHolding } from '../domain/types';
 
 const ASSET_CLASSES = ['equity-us', 'equity-local', 'etf', 'crypto', 'cash', 'mmf'] as const;
@@ -61,43 +62,12 @@ export function InvestmentsView() {
   /** Cash/MMF rows: a single "amount in holding currency" input (price pinned
    *  to par=1, symbol pinned to the class). Non-par rows ignore this. */
   const [amount, setAmount] = useState('');
-  /** id of the holding being edited, or null when adding a new one. */
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const addHoldFormRef = useRef<HTMLHeadingElement>(null);
-  /** Bumps on each startEdit so the (possibly collapsed) disclosure
-   *  containing the form is forced open and the form is revealed. */
-  const [editReveal, setEditReveal] = useState(0);
+  /** The holding (with its current values) being edited in the modal pop-up. */
+  const [editHolding, setEditHolding] = useState<InvestmentHolding | null>(null);
   const parMode = isParClass(assetClass);
 
   const startEdit = (h: InvestmentHolding) => {
-    setAccountId(h.accountId);
-    setSymbol(h.symbol);
-    setAssetClass(h.assetClass);
-    setHoldCur(h.holdingCurrency);
-    if (isParClass(h.assetClass)) {
-      // Units ARE the amount at par=1.
-      setAmount(String(h.units || ''));
-      setUnits('');
-      setEntry('');
-      setSymbol(parSymbolFor(h.assetClass));
-    } else {
-      setUnits(String(h.units));
-      setEntry(String(h.averageEntryPrice || ''));
-      setAmount('');
-    }
-    setEditingId(h.id);
-    setEditReveal((n) => n + 1); // force the add-holding disclosure open
-    window.setTimeout(() => {
-      addHoldFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 30);
-    toast(`Editing ${h.symbol} — update the form, then press "Save changes"`);
-  };
-
-  const cancelEdit = () => {
-    setEditingId(null);
-    setSymbol(''); setUnits(''); setEntry(''); setAmount('');
-    setAssetClass('equity-us');
-    setEditReveal(0);
+    openEdit(h);
   };
 
   /** Keep symbol pinned for par classes; clear it back to free entry otherwise. */
@@ -278,19 +248,83 @@ export function InvestmentsView() {
       currentPriceLocal: local || undefined,
       currentPriceBase: priceBase || undefined,
     };
-    if (editingId) {
-      store.updateHolding(editingId, payload);
-      // Clear back to add mode — otherwise the leftover values could
-      // accidentally duplicate the holding on the next "Add holding" tap.
-      setEditingId(null);
-      setSymbol(''); setUnits(''); setEntry(''); setAmount('');
-      setAssetClass('equity-us'); setHoldCur(base);
-      toast(`Updated ${finalSymbol}`);
-      return;
-    }
     store.addHolding(payload);
     setSymbol(''); setUnits(''); setEntry(''); setAmount('');
     toast(`Added ${finalSymbol} to target account`);
+  };
+
+  // ---- Edit-holding modal (pop-up) state + save -----------------------------
+  const [mSymbol, setMSymbol] = useState('');
+  const [mClass, setMClass] = useState<InvestmentHolding['assetClass']>('equity-us');
+  const [mCur, setMCur] = useState(base);
+  const [mUnits, setMUnits] = useState('');
+  const [mEntry, setMEntry] = useState('');
+  const [mAmount, setMAmount] = useState('');
+  const mPar = isParClass(mClass);
+
+  /** Prefill the modal from the holding being edited; close it (and reset
+   *  the old inline edit state) on mount of the modal. */
+  const openEdit = (h: InvestmentHolding) => {
+    setMSymbol(h.symbol);
+    setMClass(h.assetClass);
+    setMCur(h.holdingCurrency);
+    if (isParClass(h.assetClass)) {
+      setMAmount(String(h.units || ''));
+      setMUnits(''); setMEntry('');
+      setMSymbol(parSymbolFor(h.assetClass));
+    } else {
+      setMUnits(String(h.units));
+      setMEntry(String(h.averageEntryPrice || ''));
+      setMAmount('');
+    }
+    setEditHolding(h);
+  };
+
+  const closeEdit = () => {
+    setEditHolding(null);
+  };
+
+  /** Persist the modal edits back to the holding via updateHolding. */
+  const saveHoldingEdit = async () => {
+    const h = editHolding;
+    if (!h) return;
+    const par = isParClass(mClass);
+    const am = parseFloat(mAmount);
+    const u = parseFloat(mUnits);
+    const e = parseFloat(mEntry);
+    if (par && (!isFinite(am) || am <= 0)) {
+      toast('Amount must be a positive number.', 'err');
+      return;
+    }
+    if (!par && (!mSymbol.trim() || !isFinite(u) || u <= 0)) {
+      toast('Symbol and positive units are required.', 'err');
+      return;
+    }
+    const finalUnits = par ? am : u;
+    const finalEntry = par ? 1 : e;
+    const finalSymbol = (par ? parSymbolFor(mClass) : mSymbol.trim()).toUpperCase();
+    // Seed a live quote best-effort (same as addHolding).
+    let local = par ? 1 : e || 0;
+    let priceBase = local;
+    try {
+      const rates = await fxService.latest(base);
+      if (mCur !== base) {
+        const r = fxService.toBase(1, mCur, rates);
+        priceBase = Number.isFinite(r) ? local * r : 0;
+      }
+    } catch { /* offline */ }
+    store.updateHolding(h.id, {
+      accountId: h.accountId,
+      symbol: finalSymbol,
+      assetClass: mClass,
+      holdingCurrency: mCur,
+      units: finalUnits,
+      averageEntryPrice: finalEntry,
+      currentPriceLocal: local || undefined,
+      currentPriceBase: priceBase || undefined,
+    });
+    closeEdit();
+    toast(`Updated ${finalSymbol}`);
   };
 
   const removeAccount = (id: string) => {
@@ -538,17 +572,11 @@ export function InvestmentsView() {
       <h2 className="section-title">Auto-invest &amp; contributions</h2>
       <AutoInvestPanel fx={live.fx} />
 
-      <Disclosure id="add-holding" title={editingId ? 'Edit holding' : 'Add holding'} defaultOpen={editingId != null || accountId !== ''} forceOpen={editReveal}>
-      <div className="card" ref={addHoldFormRef}>
-        {!accountId && !editingId && (
+      <Disclosure id="add-holding" title="Add holding" defaultOpen={accountId !== ''}>
+      <div className="card">
+        {!accountId && (
           <div className="small muted" style={{ marginBottom: 8 }}>
             Set a target account above, then add holdings to it.
-          </div>
-        )}
-        {editingId && (
-          <div className="row" style={{ marginBottom: 10 }}>
-            <span className="chip sm">Editing existing holding</span>
-            <button className="btn ghost sm" onClick={cancelEdit}><IX size={14} /> Cancel</button>
           </div>
         )}
         <div className="cols">
@@ -586,10 +614,58 @@ export function InvestmentsView() {
           </label>
         </div>
         <button className={`btn sm${accountId ? '' : ' ghost'}`} style={{ width: '100%' }} disabled={!accountId} onClick={() => void addHolding()}>
-          {accountId ? (editingId ? 'Save changes' : 'Add holding') : 'Set a target account first'}
+          {accountId ? 'Add holding' : 'Set a target account first'}
         </button>
       </div>
       </Disclosure>
+
+      {/* Edit holding — pop-up (bottom sheet on phones, centered card on desktop). */}
+      {editHolding && (
+        <Modal title={`Edit ${editHolding.symbol} holding`} onClose={closeEdit}>
+          <div className="cols">
+            <label className="field"><span>Symbol</span>
+              <input
+                value={mSymbol}
+                onChange={(e) => setMSymbol(e.target.value)}
+                disabled={mPar}
+                placeholder={mPar ? 'auto (par)' : 'AAPL / CSPX.L / BTC / 1155.KL'}
+              />
+            </label>
+            <label className="field"><span>Asset class</span>
+              <select value={mClass} onChange={(e) => {
+                const c = e.target.value as InvestmentHolding['assetClass'];
+                setMClass(c);
+                if (isParClass(c)) setMSymbol(parSymbolFor(c));
+              }}>
+                {ASSET_CLASSES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+            {mPar ? (
+              <label className="field"><span>Amount ({mCur})</span>
+                <input type="number" inputMode="decimal" value={mAmount} onChange={(e) => setMAmount(e.target.value)} placeholder="1500" />
+              </label>
+            ) : (
+              <>
+                <label className="field"><span>Units</span>
+                  <input type="number" inputMode="decimal" value={mUnits} onChange={(e) => setMUnits(e.target.value)} placeholder="10" />
+                </label>
+                <label className="field"><span>Avg entry</span>
+                  <input type="number" inputMode="decimal" value={mEntry} onChange={(e) => setMEntry(e.target.value)} placeholder="12.40" />
+                </label>
+              </>
+            )}
+            <label className="field"><span>Holding cur</span>
+              <select value={mCur} onChange={(e) => setMCur(e.target.value)}>
+                {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
+              </select>
+            </label>
+          </div>
+          <div className="row" style={{ marginTop: 14, gap: 10 }}>
+            <button className="btn ghost sm" style={{ flex: 1 }} onClick={closeEdit}>Cancel</button>
+            <button className="btn sm" style={{ flex: 1 }} onClick={() => void saveHoldingEdit()}>Save changes</button>
+          </div>
+        </Modal>
+      )}
 
       {[...grouped.entries()].map(([plat, holds]) => (
         <div key={plat}>
@@ -638,7 +714,7 @@ export function InvestmentsView() {
                     label={`Delete ${h.symbol} holding`}
                     onConfirm={() => {
                       store.deleteHolding(h.id);
-                      if (editingId === h.id) cancelEdit();
+                      if (editHolding?.id === h.id) closeEdit();
                       toast(`Deleted ${h.symbol} holding`);
                     }}
                   />
