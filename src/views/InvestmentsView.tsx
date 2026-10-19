@@ -64,6 +64,9 @@ export function InvestmentsView() {
   /** id of the holding being edited, or null when adding a new one. */
   const [editingId, setEditingId] = useState<string | null>(null);
   const addHoldFormRef = useRef<HTMLHeadingElement>(null);
+  /** Bumps on each startEdit so the (possibly collapsed) disclosure
+   *  containing the form is forced open and the form is revealed. */
+  const [editReveal, setEditReveal] = useState(0);
   const parMode = isParClass(assetClass);
 
   const startEdit = (h: InvestmentHolding) => {
@@ -83,6 +86,7 @@ export function InvestmentsView() {
       setAmount('');
     }
     setEditingId(h.id);
+    setEditReveal((n) => n + 1); // force the add-holding disclosure open
     window.setTimeout(() => {
       addHoldFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 30);
@@ -93,6 +97,7 @@ export function InvestmentsView() {
     setEditingId(null);
     setSymbol(''); setUnits(''); setEntry(''); setAmount('');
     setAssetClass('equity-us');
+    setEditReveal(0);
   };
 
   /** Keep symbol pinned for par classes; clear it back to free entry otherwise. */
@@ -533,7 +538,7 @@ export function InvestmentsView() {
       <h2 className="section-title">Auto-invest &amp; contributions</h2>
       <AutoInvestPanel fx={live.fx} />
 
-      <Disclosure id="add-holding" title={editingId ? 'Edit holding' : 'Add holding'} defaultOpen={editingId != null || accountId !== ''}>
+      <Disclosure id="add-holding" title={editingId ? 'Edit holding' : 'Add holding'} defaultOpen={editingId != null || accountId !== ''} forceOpen={editReveal}>
       <div className="card" ref={addHoldFormRef}>
         {!accountId && !editingId && (
           <div className="small muted" style={{ marginBottom: 8 }}>
