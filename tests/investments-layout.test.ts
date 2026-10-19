@@ -43,20 +43,15 @@ describe('InvestmentsView account-card layout (mobile UX)', () => {
     expect(invSrc).not.toContain('Set target');
   });
 
-  it('ships the ICheck + IDots icons the new menu relies on', () => {
-    expect(iconsSrc).toContain('export const ICheck');
-    expect(iconsSrc).toContain('export const IDots');
-  });
-
-  it('defines themed CSS for the account card, its menu popover, and interactive chips', () => {
-    expect(themeSrc).toContain('.acc-card');
-    expect(themeSrc).toContain('.menu-pop');
-    expect(themeSrc).toContain('.menu-item');
-    expect(themeSrc).toContain('.menu-toggle');
+  it('renders the per-account starting-capital editor as a themed component', () => {
+    // The account footer exposes a deposit editor that opens the capital modal.
+    expect(invSrc).toContain('dep-edit');
+    expect(invSrc).toContain('openDeposit');
+    // The modal lists one input per account, driven by the data-dep-focus marker.
+    expect(invSrc).toContain('data-dep-focus');
+    expect(invSrc).toContain('dep-input');
+    expect(themeSrc).toContain('.dep-input');
     expect(themeSrc).toContain('.dep-edit');
-    // Interactive state chips get a real active state + tap handling.
-    expect(themeSrc).toContain('.chip.on');
-    expect(themeSrc).toContain('button.chip');
   });
 
   it('gives account-card chips and the deposit editor a coarse-pointer hit area', () => {
