@@ -126,8 +126,25 @@ describe('healVault (white-screen regression)', () => {
   });
 
   it('is a no-op (changed=false) on a clean vault', () => {
-    const { changed } = healVault(emptyVault());
+    // A truly clean vault (as emptyVault produces) is idempotent through
+    // healVault: every normalization is a no-op, so changed stays false.
+    // (An *old* encrypted blob — missing the new optional collections —
+    // WILL report changed=true, which is the desired repair-and-resave
+    // behavior; see the "normalizes missing collections" test below.)
+    const { blob, changed } = healVault(emptyVault());
     expect(changed).toBe(false);
+    expect(blob.autoInvests).toEqual([]);
+    expect(blob.contributions).toEqual([]);
+  });
+
+  it('reports changed=true for an old blob that lacks the new collections', () => {
+    const blob = emptyVault();
+    delete (blob as Partial<VaultBlob>).autoInvests;
+    delete (blob as Partial<VaultBlob>).contributions;
+    const { blob: out, changed } = healVault(blob);
+    expect(changed).toBe(true);
+    expect(out.autoInvests).toEqual([]);
+    expect(out.contributions).toEqual([]);
   });
 
   it('normalizes missing collections and optional fields', () => {

@@ -1,4 +1,5 @@
 import type {
+  AutoInvestPeriod,
   BudgetPeriod,
   Category,
   EmergencyFundItem,
@@ -8,7 +9,7 @@ import type {
   UserPreferences,
   VaultBlob,
 } from './types';
-import { DEFAULT_PREFS, CATEGORIES, BUDGET_PERIODS, ASSET_KINDS, EMERGENCY_DEFAULT } from './enums';
+import { DEFAULT_PREFS, CATEGORIES, BUDGET_PERIODS, ASSET_KINDS, EMERGENCY_DEFAULT, AUTO_INVEST_PERIODS } from './enums';
 
 /** Fresh, empty vault (used on first launch before any data is entered). */
 export function emptyVault(prefs?: Partial<UserPreferences>): VaultBlob {
@@ -32,6 +33,8 @@ export function emptyVault(prefs?: Partial<UserPreferences>): VaultBlob {
     emergency: { ...EMERGENCY_DEFAULT, items: [] },
     netWorthHistory: [],
     savingsGoals: [],
+    autoInvests: [],
+    contributions: [],
     pendingImport: null,
   };
 }
@@ -149,6 +152,41 @@ export function healVault(blob: VaultBlob): { blob: VaultBlob; changed: boolean 
     blob.emergency.targetMonths = EMERGENCY_DEFAULT.targetMonths;
   }
   blob.emergency = { ...blob.emergency, targetMonths: Math.round(blob.emergency.targetMonths) };
+  if (!Array.isArray(blob.autoInvests)) blob.autoInvests = [];
+  if (!Array.isArray(blob.contributions)) blob.contributions = [];
+  // Per-row shape guards for the auto-invest plans + contribution ledger.
+  blob.autoInvests = blob.autoInvests.map((p) =>
+    p && typeof p === 'object'
+      ? {
+          ...p,
+          accountId: typeof p.accountId === 'string' ? p.accountId : '',
+          name: typeof p.name === 'string' ? p.name : '',
+          amount: num(p.amount, 0),
+          currency: typeof p.currency === 'string' ? p.currency : '',
+          baseAmount: num(p.baseAmount, 0),
+          fxRate: p.fxRate === undefined ? 1 : num(p.fxRate, 1),
+          period: AUTO_INVEST_PERIODS.includes((p as { period: AutoInvestPeriod }).period)
+            ? (p as { period: AutoInvestPeriod }).period
+            : 'monthly',
+          nextDue: num(p.nextDue, Date.now()),
+          active: typeof p.active === 'boolean' ? p.active : true,
+          createdAt: num(p.createdAt, Date.now()),
+        }
+      : p,
+  );
+  blob.contributions = blob.contributions.map((c) =>
+    c && typeof c === 'object'
+      ? {
+          ...c,
+          accountId: typeof c.accountId === 'string' ? c.accountId : '',
+          amount: num(c.amount, 0),
+          currency: typeof c.currency === 'string' ? c.currency : '',
+          amountBase: num(c.amountBase, 0),
+          fxRate: c.fxRate === undefined ? 1 : num(c.fxRate, 1),
+          date: num(c.date, Date.now()),
+        }
+      : c,
+  );
   // Net-worth history: normalize to an array (old blobs may lack it).
   if (!Array.isArray(blob.netWorthHistory)) blob.netWorthHistory = [];
   // Per-row shape guards (best-effort; never drop user data).

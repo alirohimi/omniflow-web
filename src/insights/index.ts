@@ -10,6 +10,7 @@ export * from './debt';
 export * from './networth';
 export * from './forecast';
 export * from './recurring';
+export * from './autoinvest';
 export * from './rebalance';
 export * from './dividends';
 export * from './pnl';

@@ -12,10 +12,18 @@ import { DelButton } from '../components/DelButton';
 import { Disclosure } from '../components/Disclosure';
 import { EmergencyPanel } from './EmergencyPanel';
 import { SavingsGoalsPanel } from './SavingsGoalsPanel';
+import { AutoInvestPanel } from './AutoInvestPanel';
 import { AllocationBar } from '../components/AllocationBar';
 import { AllocationPie, type PieSlice } from '../components/AllocationPie';
 import { colorForClass } from '../components/AllocationPie';
 import { fxService } from '../services';
+import {
+  portfolioPnl,
+  dueAutoInvests,
+  advanceNextDue,
+  periodsBetween,
+  autoInvestMonthlyTotal,
+} from '../insights';
 import { valueInBase } from '../ai/portfolio';
 import type { AccountLine } from '../ai/portfolio';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
@@ -178,6 +186,18 @@ export function InvestmentsView() {
     return m;
   }, [live.portfolio]);
 
+  // Contribution-aware portfolio P&L: live value vs total invested capital
+  // (manual initial balances + every settled contribution). `null` when no
+  // account has a recorded capital yet — the UI then prompts the user.
+  const pnl = useMemo(() => {
+    if (!live.portfolio) return null;
+    return portfolioPnl(
+      live.portfolio,
+      vault.accounts,
+      vault.contributions ?? [],
+    );
+  }, [live.portfolio, vault.accounts, vault.contributions]);
+
   /** Accounts already designated as emergency-reserve lines. */
   const reservedIds = useMemo(
     () => new Set((vault.emergency?.items ?? []).filter((i) => i.kind === 'account').map((i) => i.accountId)),
@@ -287,17 +307,39 @@ export function InvestmentsView() {
           </div>
           <div className="cell">
             <div className="num">
-              <span className={live.portfolio?.totalReturnPct && live.portfolio.totalReturnPct >= 0 ? 'pos' : 'neg'}>
-                {live.portfolio?.totalReturnPct != null ? `${live.portfolio.totalReturnPct >= 0 ? '+' : ''}${live.portfolio.totalReturnPct.toFixed(1)}%` : '—'}
-              </span>
+              {pnl && pnl.totalPnlBase != null ? (
+                <span className={pnl.totalPnlBase >= 0 ? 'pos' : 'neg'}>
+                  {pnl.totalPnlBase >= 0 ? '+' : ''}{formatMoney(pnl.totalPnlBase, base)}
+                </span>
+              ) : (
+                <span className="muted">—</span>
+              )}
             </div>
-            <div className="lbl">Return vs cost</div>
+            <div className="lbl">
+              P&L on capital{pnl?.totalReturnPct != null ? ` (${pnl.totalReturnPct >= 0 ? '+' : ''}${pnl.totalReturnPct.toFixed(1)}%)` : ''}
+            </div>
           </div>
           <div className="cell">
             <div className="num">{vault.holdings.length}</div>
             <div className="lbl">Holdings</div>
           </div>
         </div>
+
+        {/* P&L is undefined until at least one account has a recorded
+            invested capital. Surface that as an actionable prompt so the
+            user knows exactly what to do, and show it whenever some but not
+            all accounts are covered. */}
+        {pnl && pnl.totalCapitalBase === 0 && vault.accounts.length > 0 && (
+          <div className="row small" style={{ marginBottom: 8, gap: 8, alignItems: 'center' }}>
+            <span className="chip sm">No capital recorded yet</span>
+            <span className="muted grow">Set a starting balance per account, or log a contribution — P&L then measures against what you've actually invested.</span>
+          </div>
+        )}
+        {pnl && pnl.missingCapitalCount > 0 && pnl.totalCapitalBase > 0 && (
+          <div className="row small muted" style={{ marginBottom: 8 }}>
+            P&L covers {pnl.accounts.length - pnl.missingCapitalCount} of {pnl.accounts.length} accounts · {pnl.missingCapitalCount} without a recorded balance
+          </div>
+        )}
 
         {/* Allocation by asset class — stacked bar + legend. One chart for
             the whole portfolio, driven by the same byAssetClass aggregate
@@ -487,6 +529,9 @@ export function InvestmentsView() {
 
       <h2 className="section-title">Savings goals</h2>
       <SavingsGoalsPanel />
+
+      <h2 className="section-title">Auto-invest &amp; contributions</h2>
+      <AutoInvestPanel fx={live.fx} />
 
       <Disclosure id="add-holding" title={editingId ? 'Edit holding' : 'Add holding'} defaultOpen={editingId != null || accountId !== ''}>
       <div className="card" ref={addHoldFormRef}>

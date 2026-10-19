@@ -4,6 +4,7 @@ import type {
   EmergencyFund,
   ManualAsset,
   UserPreferences,
+  AutoInvestPeriod,
 } from './types';
 
 export const DEFAULT_PREFS: UserPreferences = {
@@ -20,6 +21,7 @@ export const DEFAULT_PREFS: UserPreferences = {
 /** Budget / recurring / liability billing cadences. */
 export const BUDGET_PERIODS: BudgetPeriod[] = ['daily', 'weekly', 'monthly', 'yearly'];
 export const ASSET_KINDS: ManualAsset['kind'][] = ['bank', 'cash', 'property', 'other'];
+export const AUTO_INVEST_PERIODS: AutoInvestPeriod[] = ['weekly', 'monthly', 'quarterly', 'yearly'];
 
 /** Fresh emergency-fund module. `targetMonths` defaults to 3 (the classic
  *  YNAB starter cushion; the 3–6 range is the user's to widen). No

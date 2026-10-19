@@ -48,6 +48,8 @@ import type {
   PendingImport,
   NetWorthPoint,
   SavingsGoal,
+  AutoInvest,
+  Contribution,
 } from '../domain/types';
 import { emptyVault, healVault, withoutUndefined } from '../domain/seed';
 import { encryptVault, decryptVault, fingerprintSecret, type VaultCipher } from '../security/vault';
@@ -198,6 +200,14 @@ export interface VaultStore {
   addSavingsGoal: (input: Omit<SavingsGoal, 'id'>) => string;
   deleteSavingsGoal: (id: string) => void;
   updateSavingsGoal: (id: string, patch: Partial<Omit<SavingsGoal, 'id' | 'createdAt'>>) => void;
+  // ---- auto-invest plans + contribution ledger ----
+  addAutoInvest: (input: Omit<AutoInvest, 'id'>) => string;
+  updateAutoInvest: (id: string, patch: Partial<Omit<AutoInvest, 'id' | 'createdAt'>>) => void;
+  deleteAutoInvest: (id: string) => void;
+  /** Log one contribution: appends to the ledger AND grows the account's
+   *  invested capital (initialDepositBase += amountBase). One persist. */
+  addContribution: (input: Omit<Contribution, 'id'>) => string;
+  deleteContribution: (id: string) => void;
   // ---- emergency reserve (separate line from the portfolio) ----
   addEmergencyItem: (input: Omit<EmergencyFundItem, 'id'>) => string;
   deleteEmergencyItem: (id: string) => void;
@@ -1024,8 +1034,8 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   // Generic factories keep the 12 near-identical mutators DRY. Arrays are
   // optional on old encrypted blobs, so every read normalizes with ?? [].
 
-  type EntKey = 'budgets' | 'recurring' | 'liabilities' | 'assets' | 'dividends' | 'disposals' | 'savingsGoals';
-  type Prefix = 'b' | 'r' | 'l' | 'a' | 'd' | 's' | 'e' | 'g';
+  type EntKey = 'budgets' | 'recurring' | 'liabilities' | 'assets' | 'dividends' | 'disposals' | 'savingsGoals' | 'autoInvests' | 'contributions';
+  type Prefix = 'b' | 'r' | 'l' | 'a' | 'd' | 's' | 'e' | 'g' | 'pi' | 'ci';
   const entId = (p: Prefix) =>
     `${p}-${crypto.randomUUID()}`; // 128-bit id; prefix keeps it sortable & entity-typed
   const setEnt = (key: EntKey, fn: (arr: unknown[]) => unknown[]) => {
@@ -1123,6 +1133,57 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       setEnt('savingsGoals', (a) => (a as SavingsGoal[]).map((g) => (g.id === id ? { ...g, ...withoutUndefined(patch) } : g))),
     [],
   );
+
+  // ---- Auto-invest plans + contribution ledger ----
+  const addAutoInvest = useCallback(
+    (input: Omit<AutoInvest, 'id'>): string => {
+      const id = entId('pi');
+      setEnt('autoInvests', (arr) => [...(arr as AutoInvest[]), { ...withoutUndefined(input), id }]);
+      return id;
+    },
+    [],
+  );
+  const updateAutoInvest = useCallback(
+    (id: string, patch: Partial<Omit<AutoInvest, 'id' | 'createdAt'>>) =>
+      setEnt('autoInvests', (a) => (a as AutoInvest[]).map((p) => (p.id === id ? { ...p, ...withoutUndefined(patch) } : p))),
+    [],
+  );
+  const deleteAutoInvest = useCallback((id: string) => setEnt('autoInvests', (a) => a.filter((x) => (x as AutoInvest).id !== id)), []);
+
+  /** One contribution = one ledger row + a bump to the account's invested
+   *  capital (initialDepositBase) so P&L always measures against the total
+   *  money the user has actually put in. A single setVault + persist. */
+  const addContribution = useCallback(
+    (input: Omit<Contribution, 'id'>): string => {
+      const id = entId('ci');
+      setVault((prev) => {
+        if (!prev) return prev;
+        const c: Contribution = { ...withoutUndefined(input), id };
+        const contribs = [...(prev.contributions ?? []), c];
+        const cap =
+          typeof c.amountBase === 'number' && Number.isFinite(c.amountBase) && c.amountBase > 0
+            ? c.amountBase
+            : 0;
+        const accounts = prev.accounts.map((a) =>
+          a.id === c.accountId
+            ? {
+                ...a,
+                // Grow the invested capital by this contribution so the
+                // account's P&L (value − capital) stays honest.
+                initialDepositBase: (a.initialDepositBase ?? 0) + cap,
+                lastUpdated: Date.now(),
+              }
+            : a,
+        );
+        const next = { ...prev, contributions: contribs, accounts, updatedAt: Date.now() };
+        void persist(next);
+        return next;
+      });
+      return id;
+    },
+    [persist],
+  );
+  const deleteContribution = useCallback((id: string) => setEnt('contributions', (a) => a.filter((x) => (x as Contribution).id !== id)), []);
 
   // ---- Emergency reserve (nested module, not an array key) ----
   const addEmergencyItem = useCallback(
@@ -1423,6 +1484,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     addSavingsGoal,
     deleteSavingsGoal,
     updateSavingsGoal,
+    addAutoInvest,
+    updateAutoInvest,
+    deleteAutoInvest,
+    addContribution,
+    deleteContribution,
     addEmergencyItem,
     deleteEmergencyItem,
     setEmergency,

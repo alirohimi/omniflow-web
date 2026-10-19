@@ -150,6 +150,42 @@ export interface NetWorthPoint {
   liabilities: number;
 }
 
+export type AutoInvestPeriod = 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+
+/** A standing auto-invest plan: "invest X per period into this account".
+ *  `nextDue` is the next cycle the plan owes a contribution. `active` plans
+ *  are surfaced in the panel with a "Log now" action; the panel also
+ *  auto-settles due cycles on mount (one contribution per load, capped). */
+export interface AutoInvest {
+  id: string;
+  accountId: string;      // -> InvestmentAccount.id (the target portfolio)
+  name: string;           // e.g. "Monthly Luno top-up"
+  amount: number;         // per-cycle amount, in `currency`
+  currency: string;       // ISO-4217
+  baseAmount: number;     // snapshot in base currency at create/refresh time
+  fxRate: number;         // units of base per 1 `currency`
+  period: AutoInvestPeriod;
+  nextDue: number;        // epoch ms — the upcoming cycle to be settled
+  active: boolean;
+  createdAt: number;
+}
+
+/** One settled auto-invest cycle, or a manual "log a contribution now".
+ *  Appended to the ledger; the account's invested capital grows by
+ *  `amountBase` (its `initialDepositBase`), which is what P&L measures
+ *  against. */
+export interface Contribution {
+  id: string;
+  accountId: string;      // -> InvestmentAccount.id
+  planId?: string;        // -> AutoInvest.id when settled from a plan
+  amount: number;         // in `currency`
+  currency: string;       // ISO-4217
+  amountBase: number;     // base currency
+  fxRate: number;
+  date: number;           // epoch ms
+  note?: string;
+}
+
 /** A savings goal: a named target amount in the base currency, with an
  *  optional deadline. `funded` is the amount currently allocated toward it
  *  (base currency), so the UI can render a progress bar. */
@@ -339,6 +375,15 @@ export interface VaultBlob {
    *  refresh or close mid-import survives; cleared when the user commits it
    *  to expenses or discards it. Optional so old encrypted blobs heal. */
   pendingImport?: PendingImport | null;
+  /** Standing auto-invest plans (monthly/weekly top-ups into a portfolio).
+   *  Optional so old encrypted blobs keep decrypting; readers normalize
+   *  with ?? []. */
+  autoInvests?: AutoInvest[];
+  /** Contribution ledger (settled auto-invest cycles + manual top-ups).
+   *  Grows each account's invested capital; P&L measures against it.
+   *  Optional so old encrypted blobs keep decrypting; readers normalize
+   *  with ?? []. */
+  contributions?: Contribution[];
 }
 
 /** One coach chat turn, persisted (encrypted) with the vault. Compact by
