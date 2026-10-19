@@ -20,7 +20,7 @@ import {
 } from '../services';
 import { categorize } from '../ai';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
-import { IReceipt, IScan, IImage } from '../icons';
+import { IReceipt, IScan, IImage, ICheck } from '../icons';
 import { SpendingBreakdown } from '../components/SpendingBreakdown';
 import type { Expense, PendingImport } from '../domain/types';
 
@@ -84,8 +84,17 @@ export function ExpensesView() {
   };
 
   const selectAll = () => {
-    if (selected.size === sorted.length) return; // "select all" acts as clear
-    setSelected(new Set(sorted.map((e) => e.id)));
+    // Toggle: if every visible row is already picked, tapping clears the
+    // whole selection; otherwise select everything. (The previous "early
+    // return when all selected" meant the button read as broken.)
+    const allPicked = sorted.length > 0 && sorted.every((e) => selected.has(e.id));
+    setSelected(allPicked ? new Set() : new Set(sorted.map((e) => e.id)));
+  };
+
+  const clearSelection = () => {
+    if (selected.size === 0) return;
+    setSelected(new Set());
+    setBulkArmed(false);
   };
 
   const bulkDelete = () => {
@@ -109,6 +118,10 @@ export function ExpensesView() {
     () => [...vault.expenses].sort((a, b) => b.timestamp - a.timestamp),
     [vault.expenses],
   );
+
+  // Drives the "Select all" toolbar button state (check + "All selected").
+  const allPicked =
+    sorted.length > 0 && sorted.every((e) => selected.has(e.id));
 
   const totalMonth = useMemo(() => {
     const start = new Date();
@@ -726,62 +739,75 @@ export function ExpensesView() {
         <span>{sym}{totalMonth.toFixed(0)} this month</span>
       </div>
 
-      {/* Multi-select control. Select rows with their checkboxes, then use
-          "Select all" to pick the entire history and the armed bulk-delete to
-          remove them in one shot. Selection persists across the 60-row cap. */}
-      <div className="row" style={{ gap: 8, marginBottom: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <button
-          type="button"
-          className={`btn ghost sm ${selected.size === sorted.length && sorted.length > 0 ? 'active' : ''}`}
-          style={{ flex: 'none' }}
-          onClick={selectAll}
-          disabled={sorted.length === 0}
-        >
-          {selected.size === sorted.length && sorted.length > 0 ? 'Clear selection' : 'Select all'}
-        </button>
-        {selected.size > 0 && (
-          <>
-            <span className="chip sm" style={{ flex: 'none' }}>{selected.size} selected · {sym}{selectedTotal.toFixed(0)}</span>
+      {/* Multi-select. "Select all" toggles the whole list; "Clear" wipes the
+          selection. The bulk delete is the armed two-tap destructive action.
+          The row control below is a themed check-chip, not a native checkbox. */}
+      {sorted.length > 0 && (
+        <div className="selbar">
+          <div className="selbar-l">
             <button
               type="button"
-              className={`btn danger sm bulk${bulkArmed ? ' armed' : ''}`}
-              style={{ flex: 'none' }}
-              onClick={() => { if (bulkArmed) bulkDelete(); else setBulkArmed(true); }}
-              aria-label={bulkArmed ? 'Confirm: delete selected expenses' : `Delete ${selected.size} selected expense(s)`}
+              className={`selbar-toggle${allPicked ? ' on' : ''}`}
+              onClick={selectAll}
+              aria-pressed={allPicked}
             >
-              {bulkArmed ? `Confirm delete ${selected.size}` : `Delete ${selected.size}`}
+              <span className="selbar-box">{allPicked ? <ICheck size={13} /> : null}</span>
+              {allPicked ? 'All selected' : 'Select all'}
             </button>
-          </>
-        )}
-      </div>
+            {selected.size > 0 && (
+              <button type="button" className="selbar-clear" onClick={clearSelection}>
+                Clear
+              </button>
+            )}
+          </div>
+          {selected.size > 0 && (
+            <div className="selbar-r">
+              <span className="selbar-count">{selected.size} · {sym}{selectedTotal.toFixed(0)}</span>
+              <button
+                type="button"
+                className={`selbar-del${bulkArmed ? ' armed' : ''}`}
+                onClick={() => { if (bulkArmed) bulkDelete(); else setBulkArmed(true); }}
+                aria-label={bulkArmed ? 'Confirm: delete selected expenses' : `Delete ${selected.size} selected expense(s)`}
+              >
+                {bulkArmed ? 'Confirm' : `Delete ${selected.size}`}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="list">
-        {sorted.slice(0, 60).map((e) => (
-          <div className="item" key={e.id}>
-            <input
-              type="checkbox"
-              checked={selected.has(e.id)}
-              onChange={() => toggleSelect(e.id)}
-              style={{ width: 18, height: 18, flex: 'none', marginTop: 2, accentColor: 'var(--accent, #3b82f6)' }}
-              aria-label={`Select ${e.merchant}`}
-            />
-            <div className="grow">
-              <div className="title">{e.merchant}</div>
-              <div className="meta">
-                {e.category} · {e.paymentMethod} · {new Date(e.timestamp).toLocaleDateString()}
-                {e.originalCurrency !== base ? ` · ${formatMoney(e.originalAmount, e.originalCurrency)}` : ''}
+        {sorted.slice(0, 60).map((e) => {
+          const picked = selected.has(e.id);
+          return (
+            <div className={`item sel-row${picked ? ' picked' : ''}`} key={e.id}>
+              <button
+                type="button"
+                className={`selchip${picked ? ' on' : ''}`}
+                onClick={() => toggleSelect(e.id)}
+                aria-pressed={picked}
+                aria-label={`${picked ? 'Deselect' : 'Select'} ${e.merchant}`}
+              >
+                {picked ? <ICheck size={15} /> : null}
+              </button>
+              <div className="grow">
+                <div className="title">{e.merchant}</div>
+                <div className="meta">
+                  {e.category} · {e.paymentMethod} · {new Date(e.timestamp).toLocaleDateString()}
+                  {e.originalCurrency !== base ? ` · ${formatMoney(e.originalAmount, e.originalCurrency)}` : ''}
+                </div>
               </div>
+              <div className="amt">{sym}{e.baseAmount.toFixed(2)}</div>
+              <DelButton
+                label={`Delete ${e.merchant}`}
+                onConfirm={() => {
+                  store.deleteExpense(e.id);
+                  toast(`Deleted ${e.merchant}`);
+                }}
+              />
             </div>
-            <div className="amt">{sym}{e.baseAmount.toFixed(2)}</div>
-            <DelButton
-              label={`Delete ${e.merchant}`}
-              onConfirm={() => {
-                store.deleteExpense(e.id);
-                toast(`Deleted ${e.merchant}`);
-              }}
-            />
-          </div>
-        ))}
+          );
+        })}
         {sorted.length === 0 && <div className="empty">No expenses yet. Add one above, or ask the Coach to log one for you.</div>}
       </div>
     </>
