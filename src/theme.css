@@ -983,3 +983,37 @@ body { overflow-x: hidden; }
 @media (prefers-reduced-motion: reduce) {
   .modal-wrap, .modal { animation: none; }
 }
+
+/* Starting-capital input inside the Set starting capital modal. */
+.dep-input {
+  width: 110px; flex-shrink: 0;
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 14px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  transition: border-color .15s, box-shadow .15s;
+}
+.dep-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.dep-input.focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* Empty (no capital yet) CTA styling on the account footer. */
+.dep-edit.empty {
+  border: 1px dashed var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.dep-edit { min-width: 44px; min-height: 44px; }
+@media (pointer: fine) {
+  .dep-edit { min-height: 0; }
+}

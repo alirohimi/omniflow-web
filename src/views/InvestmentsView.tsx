@@ -204,16 +204,6 @@ export function InvestmentsView() {
     toast(`Removed "${vault.accounts.find((a) => a.id === id)?.platformName ?? 'account'}" from the reserve.`);
   };
 
-  const saveDeposit = (id: string, raw: string) => {
-    const v = raw.trim() === '' ? undefined : parseFloat(raw);
-    if (raw.trim() !== '' && (!Number.isFinite(v!) || (v as number) <= 0)) {
-      toast('Deposit must be a positive amount in ' + base + '.', 'err');
-      return;
-    }
-    store.updateAccount(id, { initialDepositBase: v });
-    toast(v ? 'Starting capital saved — P&L now measures against it.' : 'Starting capital cleared.');
-  };
-
   const addHolding = async () => {
     // Par rows (cash/MMF): a single amount input, price pinned to 1, symbol
     // pinned to the class. value = amount · FX(1 holding cur -> base).
@@ -283,6 +273,23 @@ export function InvestmentsView() {
   const closeEdit = () => {
     setEditHolding(null);
   };
+
+  // ---- Set starting capital modal ------------------------------------------
+  const [depOpen, setDepOpen] = useState(false);
+  const [depFocusId, setDepFocusId] = useState<string | null>(null);
+  const openDeposit = (focusAccountId?: string) => {
+    setDepFocusId(focusAccountId ?? null);
+    setDepOpen(true);
+  };
+  // When opened focused on a specific account, scroll it into view + focus it.
+  useEffect(() => {
+    if (!depOpen || !depFocusId) return;
+    const el = document.querySelector(`[data-dep-focus="1"] .dep-input`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      (el as HTMLElement).focus();
+    }
+  }, [depOpen, depFocusId]);
 
   /** Persist the modal edits back to the holding via updateHolding. */
   const saveHoldingEdit = async () => {
@@ -369,9 +376,10 @@ export function InvestmentsView() {
             user knows exactly what to do, and show it whenever some but not
             all accounts are covered. */}
         {pnl && pnl.totalCapitalBase === 0 && vault.accounts.length > 0 && (
-          <div className="row small" style={{ marginBottom: 8, gap: 8, alignItems: 'center' }}>
+          <div className="row small" style={{ marginBottom: 8, gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <span className="chip sm">No capital recorded yet</span>
             <span className="muted grow">Set a starting balance per account, or log a contribution — P&L then measures against what you've actually invested.</span>
+            <button className="btn sm" onClick={() => openDeposit()}>Set starting capital</button>
           </div>
         )}
         {pnl && pnl.missingCapitalCount > 0 && pnl.totalCapitalBase > 0 && (
@@ -515,6 +523,11 @@ export function InvestmentsView() {
                           hide: isTarget,
                           onClick: () => setAccountId(a.id),
                         },
+                      {
+                          label: 'Edit starting capital',
+                          icon: IPlus,
+                          onClick: () => openDeposit(a.id),
+                        },
                         { label: 'Delete account', danger: true, onClick: () => removeAccount(a.id) },
                       ]}
                     />
@@ -546,11 +559,23 @@ export function InvestmentsView() {
                   ) : null}
                   <div className="acc-foot">
                     <span className="muted small">{a.accountType} · {holdings} holding{holdings === 1 ? '' : 's'}</span>
-                    <DepositEdit
-                      initial={hasDeposit ? String(a.initialDepositBase) : ''}
-                      display={hasDeposit ? formatMoney(a.initialDepositBase!, base) : 'none'}
-                      onDone={(v) => saveDeposit(a.id, v)}
-                    />
+                    <button
+                      className={`dep-edit${hasDeposit ? '' : ' empty'}`}
+                      onClick={() => openDeposit(a.id)}
+                      title="Edit starting capital"
+                    >
+                      {hasDeposit ? (
+                        <>
+                          <span className="val">{formatMoney(a.initialDepositBase!, base)}</span>
+                          <IPencil size={13} />
+                        </>
+                      ) : (
+                        <>
+                          Set starting capital
+                          <IPlus size={13} />
+                        </>
+                      )}
+                    </button>
                   </div>
                 </div>
               );
@@ -667,6 +692,48 @@ export function InvestmentsView() {
         </Modal>
       )}
 
+      {/* Set starting capital — one input per account, drives the P&L KPI. */}
+      {depOpen && (
+        <Modal title="Set starting capital" onClose={() => setDepOpen(false)}>
+          <p className="small muted" style={{ marginTop: 0 }}>
+            The amount you initially invested in each account. P&amp;L on capital compares your live
+            value against this. Leave a field blank to clear it.
+          </p>
+          {vault.accounts.length === 0 && (
+            <div className="row small muted" style={{ marginBottom: 8 }}>
+              Create an account above first — starting capital is set per account.
+            </div>
+          )}
+          <div className="list" style={{ marginTop: 8 }}>
+            {vault.accounts.map((a) => (
+              <div className="item" key={a.id} data-dep-focus={a.id === depFocusId ? '1' : undefined}>
+                <div className="grow">
+                  <div className="title">{a.platformName}</div>
+                  <div className="meta muted small">{a.accountType} · {formatMoney(a.baseCurrencyValue || 0, base)}</div>
+                </div>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  className={`dep-input${a.id === depFocusId ? ' focus' : ''}`}
+                  value={typeof a.initialDepositBase === 'number' ? String(a.initialDepositBase) : ''}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    store.updateAccount(a.id, {
+                      initialDepositBase: v.trim() === '' ? undefined : parseFloat(v),
+                    });
+                  }}
+                  placeholder={base}
+                  aria-label={`Starting capital for ${a.platformName}`}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="row" style={{ marginTop: 14 }}>
+            <button className="btn sm" style={{ flex: 1 }} onClick={() => setDepOpen(false)}>Done</button>
+          </div>
+        </Modal>
+      )}
+
       {[...grouped.entries()].map(([plat, holds]) => (
         <div key={plat}>
           <h2 className="section-title">{plat}</h2>
@@ -727,62 +794,6 @@ export function InvestmentsView() {
 
       {vault.holdings.length === 0 && <div className="empty">No holdings yet. Create an account, then add a holding above.</div>}
     </>
-  );
-}
-
-/** Compact inline editor for an account's starting-capital (deposit) value.
- *  Renders a small input + save that expands in place; keeps the accounts
- *  list tidy without a separate modal. */
-function DepositEdit({
-  initial,
-  display,
-  onDone,
-}: {
-  initial: string;
-  display?: string;
-  onDone: (value: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [val, setVal] = useState(initial);
-  const start = () => {
-    setVal(initial);
-    setEditing(true);
-  };
-  const commit = () => {
-    onDone(val);
-    setEditing(false);
-  };
-  if (!editing) {
-    return (
-      <button className="dep-edit" onClick={start} title="Edit starting capital">
-        {display ? (
-          <>
-            <span className="val">{display}</span>
-            <IPencil size={13} />
-          </>
-        ) : (
-          <>
-            Set starting capital
-            <IPlus size={13} />
-          </>
-        )}
-      </button>
-    );
-  }
-  return (
-    <div className="row" style={{ gap: 6 }}>
-      <input
-        type="number"
-        inputMode="decimal"
-        value={val}
-        onChange={(e) => setVal(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => { if (e.key === 'Enter') commit(); }}
-        style={{ width: 100 }}
-        aria-label="Starting capital"
-      />
-      <button className="btn ghost sm" onClick={commit}>Save</button>
-    </div>
   );
 }
 
