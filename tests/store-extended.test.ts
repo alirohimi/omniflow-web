@@ -290,6 +290,55 @@ describe('extended-entity CRUD (budgets/recurring/liabilities/assets/dividends/d
     await unmount();
   });
 
+  it('deleteExpenses removes exactly the targeted ids in one batch', async () => {
+    const { storeRef, unmount } = await unlockFreshVault('user-bulk-delete');
+    // Add 5 expenses through the batch insert path.
+    const ids = await act(async () => {
+      const s = storeRef.current!;
+      const out = s.addExpenses(
+        [1, 2, 3, 4, 5].map((n) => ({
+          originalAmount: n,
+          originalCurrency: 'MYR',
+          fxRate: 1,
+          category: 'Other',
+          aiTier: 'dictionary' as const,
+          merchant: `Store ${n}`,
+          paymentMethod: 'card' as const,
+          source: 'manual' as const,
+          timestamp: Date.now() + n,
+        })),
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      return out;
+    });
+    expect(ids).toHaveLength(5);
+    expect(storeRef.current!.vault!.expenses).toHaveLength(5);
+
+    // Bulk-delete three of them at once.
+    const toDelete = [ids[0], ids[2], ids[4]];
+    await act(async () => {
+      storeRef.current!.deleteExpenses(toDelete);
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    const remaining = storeRef.current!.vault!.expenses;
+    expect(remaining).toHaveLength(2);
+    const remainingIds = new Set(remaining.map((e) => e.id));
+    expect(remainingIds.has(ids[1])).toBe(true);
+    expect(remainingIds.has(ids[3])).toBe(true);
+    expect(remainingIds.has(ids[0])).toBe(false);
+    expect(remainingIds.has(ids[2])).toBe(false);
+    expect(remainingIds.has(ids[4])).toBe(false);
+
+    // Empty batch is a safe no-op; deleting missing ids is too.
+    await act(async () => {
+      storeRef.current!.deleteExpenses([]);
+      storeRef.current!.deleteExpenses(['nope-1', 'nope-2']);
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(storeRef.current!.vault!.expenses).toHaveLength(2);
+    await unmount();
+  });
+
   it('deleting an account prunes emergency lines that mirror it', async () => {
     const { storeRef, unmount } = await unlockFreshVault('user-acc-prune');
     const store = storeRef.current!;

@@ -644,6 +644,12 @@ button.chip { -webkit-tap-highlight-color: transparent; }
   min-width: 44px; min-height: 44px;
   animation: del-pulse 0.5s ease-in-out infinite alternate;
 }
+/* Bulk-delete armed state (Expenses History). Reuses the destructive
+   pulse so a "Select all → Delete" is unambiguously a confirm step. */
+.btn.bulk.armed {
+  background: var(--bad); border-color: var(--bad); color: #fff;
+  animation: del-pulse 0.5s ease-in-out infinite alternate;
+}
 @keyframes del-pulse { from { filter: brightness(1); } to { filter: brightness(1.25); } }
 
 /* ---------- Progress ---------- */

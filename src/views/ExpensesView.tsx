@@ -51,6 +51,60 @@ export function ExpensesView() {
   const [ocrProgress, setOcrProgress] = useState<number | null>(null);
   const [ocrResult, setOcrResult] = useState<{ amount: number | null; currency: string; merchant: string } | null>(null);
 
+  // ---- multi-select delete state (History). Two-tap armed delete reuses the
+  //      same pattern as single-row DelButton so a mass delete is never
+  //      accidental. Selection is a Set of ids so it survives the list
+  //      scrolling to the first 60 rows.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkArmed, setBulkArmed] = useState(false);
+  const bulkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!bulkArmed) return;
+    bulkTimer.current = setTimeout(() => setBulkArmed(false), 2500);
+    return () => { if (bulkTimer.current) clearTimeout(bulkTimer.current); };
+  }, [bulkArmed]);
+
+  // Drop any selected ids that no longer exist (a row was deleted out-of-band).
+  useEffect(() => {
+    setSelected((prev) => {
+      const ids = new Set(vault.expenses.map((e) => e.id));
+      const next = new Set([...prev].filter((id) => ids.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [vault.expenses]);
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    if (selected.size === sorted.length) return; // "select all" acts as clear
+    setSelected(new Set(sorted.map((e) => e.id)));
+  };
+
+  const bulkDelete = () => {
+    const count = selected.size;
+    if (count === 0) return;
+    store.deleteExpenses([...selected]);
+    setSelected(new Set());
+    setBulkArmed(false);
+    toast(`Deleted ${count} expense${count === 1 ? '' : 's'}.`);
+  };
+
+  const selectedTotal = useMemo(
+    () => [...selected].reduce((sum, id) => {
+      const e = vault.expenses.find((x) => x.id === id);
+      return sum + (e ? e.baseAmount : 0);
+    }, 0),
+    [selected, vault.expenses],
+  );
+
   const sorted = useMemo(
     () => [...vault.expenses].sort((a, b) => b.timestamp - a.timestamp),
     [vault.expenses],
@@ -667,13 +721,50 @@ export function ExpensesView() {
       />
 
       <h2 className="section-title">History</h2>
-      <div className="row muted small" style={{ marginBottom: 6 }}>
+      <div className="row muted small" style={{ marginBottom: 6, justifyContent: 'space-between', alignItems: 'center' }}>
         <span>{sorted.length} total</span>
         <span>{sym}{totalMonth.toFixed(0)} this month</span>
       </div>
+
+      {/* Multi-select control. Select rows with their checkboxes, then use
+          "Select all" to pick the entire history and the armed bulk-delete to
+          remove them in one shot. Selection persists across the 60-row cap. */}
+      <div className="row" style={{ gap: 8, marginBottom: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <button
+          type="button"
+          className={`btn ghost sm ${selected.size === sorted.length && sorted.length > 0 ? 'active' : ''}`}
+          style={{ flex: 'none' }}
+          onClick={selectAll}
+          disabled={sorted.length === 0}
+        >
+          {selected.size === sorted.length && sorted.length > 0 ? 'Clear selection' : 'Select all'}
+        </button>
+        {selected.size > 0 && (
+          <>
+            <span className="chip sm" style={{ flex: 'none' }}>{selected.size} selected · {sym}{selectedTotal.toFixed(0)}</span>
+            <button
+              type="button"
+              className={`btn danger sm bulk${bulkArmed ? ' armed' : ''}`}
+              style={{ flex: 'none' }}
+              onClick={() => { if (bulkArmed) bulkDelete(); else setBulkArmed(true); }}
+              aria-label={bulkArmed ? 'Confirm: delete selected expenses' : `Delete ${selected.size} selected expense(s)`}
+            >
+              {bulkArmed ? `Confirm delete ${selected.size}` : `Delete ${selected.size}`}
+            </button>
+          </>
+        )}
+      </div>
+
       <div className="list">
         {sorted.slice(0, 60).map((e) => (
           <div className="item" key={e.id}>
+            <input
+              type="checkbox"
+              checked={selected.has(e.id)}
+              onChange={() => toggleSelect(e.id)}
+              style={{ width: 18, height: 18, flex: 'none', marginTop: 2, accentColor: 'var(--accent, #3b82f6)' }}
+              aria-label={`Select ${e.merchant}`}
+            />
             <div className="grow">
               <div className="title">{e.merchant}</div>
               <div className="meta">

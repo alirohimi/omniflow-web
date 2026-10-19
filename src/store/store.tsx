@@ -160,6 +160,8 @@ export interface VaultStore {
   /** Batch insert (PDF/CSV statement import). One persist per batch. */
   addExpenses: (inputs: NewExpenseInput[]) => string[];
   deleteExpense: (id: string) => void;
+  /** Batch delete (multi-select). One persist for the whole set. */
+  deleteExpenses: (ids: string[]) => void;
   /** Patch fields on an existing expense (the coach's edit_expense action). */
   editExpense: (
     id: string,
@@ -796,6 +798,26 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     [persist],
   );
 
+  /** Batch delete: one vault write + one persist for the whole set, instead
+   *  of N separate setVault/persist cycles. */
+  const deleteExpenses = useCallback(
+    (ids: string[]) => {
+      if (ids.length === 0) return;
+      setVault((prev) => {
+        if (!prev) return prev;
+        const idSet = new Set(ids);
+        const next = {
+          ...prev,
+          expenses: prev.expenses.filter((e) => !idSet.has(e.id)),
+          updatedAt: Date.now(),
+        };
+        void persist(next);
+        return next;
+      });
+    },
+    [persist],
+  );
+
   const editExpense = useCallback(
     (
       id: string,
@@ -1376,6 +1398,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     addExpense,
     addExpenses,
     deleteExpense,
+    deleteExpenses,
     editExpense,
     addCategory,
     addAccount,
