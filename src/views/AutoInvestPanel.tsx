@@ -1,18 +1,19 @@
 // ============================================================================
 // AutoInvestPanel — standing "invest X every period into this account" plans.
 //
-// Each plan targets one investment account (the "selected portfolio"). When a
-// cycle falls due, the panel surfaces it with a "Log now" action (and settles
-// automatically on mount via settleDue). Settling writes ONE contribution row
-// to the ledger and grows the account's invested capital (initialDepositBase),
-// which is exactly what the portfolio P&L measures against — so monthly
-// savings keep the profit/loss number honest forever.
+// Each plan targets one investment account (the "selected portfolio"). The
+// panel surfaces due cycles with a "Log now" action. No auto-settle: the
+// client logs every cycle themselves when it happens (one contribution row
+// per log, dated), and each log grows the account's invested capital
+// (initialDepositBase) — which is exactly what the portfolio P&L measures
+// against — so periodic investing keeps the profit/loss number honest.
 //
-// A manual "Log a contribution" form covers ad-hoc top-ups (same ledger, no
-// plan needed). The ledger below shows every logged contribution per account.
+// The separate ContributionPanel (below) is the primary manual ledger: pick
+// your account, enter the amount and the investment date, log it. That's
+// the always-visible way to record money put in.
 // ============================================================================
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useVaultStore } from '../store/store';
 import { useToast } from '../components/Toast';
 import { DelButton } from '../components/DelButton';
@@ -43,10 +44,12 @@ export function AutoInvestPanel({ fx }: { fx: RatesForBase | null }) {
   const [planPeriod, setPlanPeriod] = useState<AutoInvestPeriod>('monthly');
   const [planStart, setPlanStart] = useState('');
 
-  // ---- manual contribution form state
+  // ---- manual contribution form state (date-aware)
   const [manAcc, setManAcc] = useState('');
   const [manAmt, setManAmt] = useState('');
   const [manCur, setManCur] = useState('');
+  const [manDate, setManDate] = useState('');
+  const [manNote, setManNote] = useState('');
 
   if (!vault) return null;
   const base = vault.prefs.baseCurrency;
@@ -61,39 +64,8 @@ export function AutoInvestPanel({ fx }: { fx: RatesForBase | null }) {
     return code === base ? 1 : NaN;
   };
 
-  // ---- auto-settle due plans once per mount (per plan: log ONE cycle and
-  //      advance nextDue; a long offline gap settles one cycle per load).
-  const settled = useRef(false);
-  useEffect(() => {
-    if (settled.current) return;
-    settled.current = true;
-    const now = Date.now();
-    const due = dueAutoInvests(plans, now);
-    for (const p of due) {
-      const acc = accounts.find((a) => a.id === p.accountId);
-      if (!acc) continue;
-      store.addContribution({
-        accountId: p.accountId,
-        planId: p.id,
-        amount: p.amount,
-        currency: p.currency,
-        amountBase: p.baseAmount,
-        fxRate: p.fxRate,
-        date: now,
-        note: `Auto-settled plan: ${p.name}`,
-      });
-      store.updateAutoInvest(p.id, { nextDue: advanceNextDue(p, now) });
-    }
-    if (due.length > 0) {
-      toast(
-        due.length === 1
-          ? `Auto-invest logged: ${formatMoney(due[0].baseAmount, base)} → ${accounts.find((a) => a.id === due[0].accountId)?.platformName ?? 'account'}`
-          : `${due.length} auto-invest cycles logged.`,
-      );
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
+  // No automatic settling: the client logs each due cycle themselves via
+  // "Log now" (manual, dated). Standing plans are a reminder/schedule only.
   const dueIds = useMemo(() => new Set(dueAutoInvests(plans, Date.now()).map((p) => p.id)), [plans]);
 
   const monthlyTotal = useMemo(() => autoInvestMonthlyTotal(plans), [plans]);
@@ -155,18 +127,22 @@ export function AutoInvestPanel({ fx }: { fx: RatesForBase | null }) {
     const cur = manCur || base;
     const rate = cur === base ? 1 : rateFor(cur);
     if (!Number.isFinite(rate)) { toast(`No FX rate for ${cur} yet — try again in a moment.`, 'err'); return; }
+    const dateMs = manDate.trim() ? new Date(manDate + 'T00:00:00').getTime() : Date.now();
+    const when = Number.isFinite(dateMs) ? dateMs : Date.now();
     store.addContribution({
       accountId: acc.id,
       amount: amt,
       currency: cur,
       amountBase: amt * rate,
       fxRate: rate,
-      date: Date.now(),
-      note: 'Manual contribution',
+      date: when,
+      note: manNote.trim() || 'Contribution',
     });
-    toast(`Logged ${formatMoney(amt, cur)} → ${acc.platformName}. P&L updated.`);
-    setManAmt('');
+    toast(`Logged ${formatMoney(amt, cur)} → ${acc.platformName} on ${new Date(when).toLocaleDateString()}. P&L updated.`);
+    setManAmt(''); setManNote('');
   };
+
+  const todayStr = () => new Date().toISOString().slice(0, 10);
 
   const periodLabel = (p: AutoInvestPeriod) => PERIODS.find((x) => x.v === p)?.label.toLowerCase() ?? p;
 
@@ -238,8 +214,9 @@ export function AutoInvestPanel({ fx }: { fx: RatesForBase | null }) {
       )}
       {plans.length === 0 ? (
         <div className="small muted" style={{ marginBottom: 10 }}>
-          No auto-invest plans yet. Create one — e.g. "{sym}500 monthly into Luno" — and every
-          cycle is logged as invested capital, so your P&L stays accurate automatically.
+          No auto-invest plans yet. Create a standing plan (e.g. "{sym}500 monthly into Luno")
+          and log each cycle yourself when it happens — every logged cycle grows your
+          invested capital, so P&L stays accurate.
         </div>
       ) : (
         <div className="list">{plans.map(planRow)}</div>
@@ -270,28 +247,122 @@ export function AutoInvestPanel({ fx }: { fx: RatesForBase | null }) {
           <IPlus size={16} /> Create plan
         </button>
       </Disclosure>
+    </div>
+  );
+}
 
-      <Disclosure id="ai-manual" title="Log a one-off contribution">
-        <div className="small muted" style={{ marginTop: 10 }}>
-          Already moved money in yourself? Log it here — invested capital grows and P&L
-          stays measured against what you actually put in.
+// ============================================================================
+// ContributionPanel — the primary manual ledger. Always visible on the
+// Investments tab. The client picks their account, enters the amount, the
+// currency and the investment date, and logs it. Each log writes ONE
+// contribution row (dated) and grows the account's invested capital, which
+// is exactly what the portfolio P&L measures against — so periodic investing
+// keeps the profit/loss number honest. Replaces the auto-settle flow: the
+// client logs each investment themselves.
+// ============================================================================
+export function ContributionPanel({ fx }: { fx: RatesForBase | null }) {
+  const store = useVaultStore();
+  const { toast } = useToast();
+  const { vault } = store;
+
+  const [manAcc, setManAcc] = useState('');
+  const [manAmt, setManAmt] = useState('');
+  const [manCur, setManCur] = useState('');
+  const [manDate, setManDate] = useState('');
+  const [manNote, setManNote] = useState('');
+
+  if (!vault) return null;
+  const base = vault.prefs.baseCurrency;
+  const sym = currencyInfo(base).symbol;
+  const ledger = vault.contributions ?? [];
+  const accounts = vault.accounts;
+
+  const rateFor = (code: string): number => {
+    if (fx) return fxService.toBase(1, code, fx);
+    return code === base ? 1 : NaN;
+  };
+
+  const addManual = () => {
+    const amt = parseFloat(manAmt);
+    const acc = accounts.find((a) => a.id === manAcc);
+    if (!acc) { toast('Pick the account you invested into.', 'err'); return; }
+    if (!Number.isFinite(amt) || amt <= 0) { toast('Enter a positive amount.', 'err'); return; }
+    const cur = manCur || base;
+    const rate = cur === base ? 1 : rateFor(cur);
+    if (!Number.isFinite(rate)) { toast(`No FX rate for ${cur} yet — try again in a moment.`, 'err'); return; }
+    const dateMs = manDate.trim() ? new Date(manDate + 'T00:00:00').getTime() : Date.now();
+    const when = Number.isFinite(dateMs) ? dateMs : Date.now();
+    store.addContribution({
+      accountId: acc.id,
+      amount: amt,
+      currency: cur,
+      amountBase: amt * rate,
+      fxRate: rate,
+      date: when,
+      note: manNote.trim() || 'Contribution',
+    });
+    toast(`Logged ${formatMoney(amt, cur)} → ${acc.platformName} on ${new Date(when).toLocaleDateString()}. P&L updated.`);
+    setManAmt(''); setManNote('');
+  };
+
+  const accSel = (value: string, onChange: (v: string) => void, label: string) => (
+    <label className="field"><span>{label}</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">Select account…</option>
+        {accounts.map((a) => <option key={a.id} value={a.id}>{a.platformName}</option>)}
+      </select>
+    </label>
+  );
+
+  const curSel = (value: string, onChange: (v: string) => void) => (
+    <select value={value} onChange={(e) => onChange(e.target.value)}>
+      {[...new Set([base, ...CURRENCIES.map((c) => c.code)])].map((c) => (
+        <option key={c} value={c}>{c}</option>
+      ))}
+    </select>
+  );
+
+  const ledgerFor = (accId: string): Contribution[] =>
+    ledger.filter((c) => c.accountId === accId).sort((a, b) => b.date - a.date);
+
+  // Total invested capital across all logged contributions (drives P&L).
+  const totalInvested = ledger.reduce((s, c) => s + (Number.isFinite(c.amountBase) ? c.amountBase : 0), 0);
+
+  return (
+    <div className="card">
+      {totalInvested > 0 && (
+        <div className="row small" style={{ marginBottom: 8, gap: 8 }}>
+          <span className="chip sm ok">{formatMoney(totalInvested, base)} invested total</span>
         </div>
-        <div className="cols">
-          {accSel(manAcc, setManAcc, 'Account')}
-          <label className="field"><span>Amount</span>
-            <input type="number" inputMode="decimal" value={manAmt} onChange={(e) => setManAmt(e.target.value)} placeholder="1000" />
-          </label>
-          <label className="field"><span>Currency</span>
-            {curSel(manCur || base, setManCur)}
-          </label>
-        </div>
-        <button className="btn sm" style={{ width: '100%', marginTop: 12 }} onClick={addManual}>
-          <IPlus size={16} /> Log contribution
-        </button>
-      </Disclosure>
+      )}
+
+      <div className="small muted" style={{ marginBottom: 10 }}>
+        Log the money you actually put into each portfolio — pick the account, amount,
+        currency and the date it was invested. Each entry grows invested capital, so
+        P&L always measures against what you really put in.
+      </div>
+
+      <div className="cols">
+        {accSel(manAcc, setManAcc, 'Account / portfolio')}
+        <label className="field"><span>Amount</span>
+          <input type="number" inputMode="decimal" value={manAmt} onChange={(e) => setManAmt(e.target.value)} placeholder="1000" />
+        </label>
+        <label className="field"><span>Currency</span>
+          {curSel(manCur || base, setManCur)}
+        </label>
+        <label className="field"><span>Investment date</span>
+          <input type="date" value={manDate} onChange={(e) => setManDate(e.target.value)} />
+        </label>
+        <label className="field"><span>Note (optional)</span>
+          <input value={manNote} onChange={(e) => setManNote(e.target.value)} placeholder="Q3 top-up" />
+        </label>
+      </div>
+      <button className="btn sm" style={{ width: '100%', marginTop: 12 }} onClick={addManual}>
+        <IPlus size={16} /> Log contribution
+      </button>
 
       {ledger.length > 0 && (
-        <Disclosure id="ai-ledger" title={`Contribution history (${ledger.length})`}>
+        <Disclosure id="ci-ledger" title={`Contribution history (${ledger.length})`}>
           <div className="list" style={{ marginTop: 10 }}>
             {accounts.map((a) => {
               const rows = ledgerFor(a.id);
@@ -313,8 +384,6 @@ export function AutoInvestPanel({ fx }: { fx: RatesForBase | null }) {
                       <DelButton
                         label={`Remove contribution ${c.id}`}
                         onConfirm={() => {
-                          // Removing a contribution also shrinks the account's
-                          // invested capital so P&L stays consistent.
                           const acc = accounts.find((x) => x.id === c.accountId);
                           if (acc && acc.initialDepositBase != null) {
                             store.updateAccount(c.accountId, {

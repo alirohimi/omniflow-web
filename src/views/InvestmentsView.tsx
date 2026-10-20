@@ -13,7 +13,7 @@ import { Disclosure } from '../components/Disclosure';
 import { Modal } from '../components/Sheet';
 import { EmergencyPanel } from './EmergencyPanel';
 import { SavingsGoalsPanel } from './SavingsGoalsPanel';
-import { AutoInvestPanel } from './AutoInvestPanel';
+import { AutoInvestPanel, ContributionPanel } from './AutoInvestPanel';
 import { AllocationBar } from '../components/AllocationBar';
 import { AllocationPie, type PieSlice } from '../components/AllocationPie';
 import { colorForClass } from '../components/AllocationPie';
@@ -594,8 +594,18 @@ export function InvestmentsView() {
       <h2 className="section-title">Savings goals</h2>
       <SavingsGoalsPanel />
 
-      <h2 className="section-title">Auto-invest &amp; contributions</h2>
-      <AutoInvestPanel fx={live.fx} />
+      {/* Contributions come first: this is how the client records money
+          actually invested (with a date) so P&L stays honest. Standing
+          auto-invest plans follow (the client's own scheduler, optional). */}
+      <h2 className="section-title">Contributions</h2>
+      <ContributionPanel fx={live.fx} />
+
+      {vault.autoInvests && vault.autoInvests.length > 0 && (
+        <>
+          <h2 className="section-title">Auto-invest plans</h2>
+          <AutoInvestPanel fx={live.fx} />
+        </>
+      )}
 
       <Disclosure id="add-holding" title="Add holding" defaultOpen={accountId !== ''}>
       <div className="card">
@@ -792,7 +802,12 @@ export function InvestmentsView() {
         </div>
       ))}
 
-      {vault.holdings.length === 0 && <div className="empty">No holdings yet. Create an account, then add a holding above.</div>}
+      {vault.holdings.length === 0 && (
+        <div className="empty">
+          No holdings yet. Create an account, then add a holding above — or log a
+          contribution below to start tracking invested capital.
+        </div>
+      )}
     </>
   );
 }
