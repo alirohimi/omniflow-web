@@ -16,10 +16,11 @@ import {
   upcomingBills,
   bestStrategy,
 } from '../insights';
-import { IPlus, IRefresh, IChevron } from '../icons';
+import { IPlus, IRefresh, IChevron, ITrend } from '../icons';
 import { fxService } from '../services';
 import { valueInBase } from '../ai/portfolio';
 import Markdown from '../components/Markdown';
+import { AreaChart } from '../components/AreaChart';
 
 type Tab = 'dashboard' | 'expenses' | 'investments' | 'settings';
 
@@ -194,6 +195,19 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
   }, []);
   const netWorthHistory = useMemo(() => vault.netWorthHistory ?? [], [vault.netWorthHistory]);
 
+  // Net-worth delta vs the previous capture (the hero "up/down" chip).
+  // The last point in the history IS the just-captured now value, so the
+  // previous point is the one before it; null when fewer than 2 points.
+  const nwDelta = useMemo(() => {
+    const h = netWorthHistory;
+    if (h.length < 2) return null;
+    const cur = h[h.length - 1].net;
+    const prev = h[h.length - 2].net;
+    const d = cur - prev;
+    const pct = prev !== 0 ? (d / Math.abs(prev)) * 100 : 0;
+    return { d, pct, up: d >= 0, from: prev };
+  }, [netWorthHistory]);
+
   useEffect(() => {
     let cancelled = false;
     setAiLoading(true);
@@ -219,19 +233,18 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
   return (
     <>
       <h2 className="section-title">Portfolio</h2>
-      <div className="card">
+      <div className="card hero-card">
         <div className="hero">
           <div>
             <div className="hero-lbl">Net worth · {base}</div>
             <div className="hero-num">{formatMoney(nw.net, base)}</div>
             <div className="hero-sub">
               {nw.hasData ? (
-                <>
-                  <span className="muted">invest {formatMoney(nw.investments, base)} · assets {formatMoney(nw.assets, base)}</span>
-                  {liabilities.length > 0 ? (
-                    <span className="muted"> · debt −{formatMoney(nw.liabilities, base)}</span>
-                  ) : null}
-                </>
+                <span className="muted">
+                  invest {formatMoney(nw.investments, base)}
+                  {nw.assets > 0 ? ` · assets ${formatMoney(nw.assets, base)}` : ''}
+                  {liabilities.length > 0 ? ` · debt −${formatMoney(nw.liabilities, base)}` : ''}
+                </span>
               ) : (
                 <button className="link" onClick={() => onOpenTab('investments')}>
                   No data yet — add your first portfolio or asset
@@ -239,47 +252,53 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
               )}
             </div>
           </div>
-          <button className="btn ghost sm" onClick={live.refresh} disabled={live.loading}>
-            <IRefresh size={16} /> {live.loading ? '…' : 'Refresh'}
-          </button>
+          <div className="hero-actions">
+            {ret != null && (
+              <span className={`hero-delta ${ret >= 0 ? 'up' : 'down'}`} title="Portfolio return vs cost">
+                <ITrend size={13} />
+                {ret >= 0 ? '+' : ''}
+                {ret.toFixed(1)}%
+              </span>
+            )}
+            <button className="btn ghost sm" onClick={live.refresh} disabled={live.loading}>
+              <IRefresh size={16} /> {live.loading ? '…' : 'Refresh'}
+            </button>
+          </div>
         </div>
+
+        {/* Net-worth trend: polished area chart with period tabs, a
+            gradient fill, and a tap-to-scrub tooltip. */}
+        {netWorthHistory.length >= 2 ? (
+          <div className="hero-chart">
+            <AreaChart
+              points={netWorthHistory.map((p) => ({ at: p.at, value: p.net }))}
+              fmt={(v) => formatMoney(v, base)}
+              fmtDate={(at) =>
+                new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+              }
+              height={148}
+            />
+            {nwDelta && (
+              <div className="hero-delta-row">
+                <span className={`hero-delta ${nwDelta.up ? 'up' : 'down'}`}>
+                  {nwDelta.up ? '▲' : '▼'} {formatMoney(Math.abs(nwDelta.d), base)}
+                  {Math.abs(nwDelta.pct) >= 0.05 ? ` (${nwDelta.up ? '+' : ''}${nwDelta.pct.toFixed(1)}%)` : ''}
+                </span>
+                <span className="muted small">vs previous day</span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="small muted" style={{ marginTop: 10 }}>
+            Trend appears after 2 days of visits — captured automatically on each Home load.
+          </div>
+        )}
+
         {metaLine ? (
           <div className="row small muted meta-row">
             <span>{metaLine}</span>
           </div>
         ) : null}
-        {netWorthHistory.length >= 2 && (
-          <div style={{ marginTop: 10 }}>
-            <div className="small muted" style={{ marginBottom: 4 }}>
-              Net worth · {netWorthHistory.length}d history
-            </div>
-            <div style={{ display: 'flex', gap: 2, height: 48, alignItems: 'flex-end' }}>
-              {netWorthHistory.map((p, i) => {
-                const maxN = Math.max(...netWorthHistory.map((x) => x.net), 1);
-                const minN = Math.min(...netWorthHistory.map((x) => x.net), 0);
-                const range = maxN - minN || 1;
-                const h = Math.max(3, ((p.net - minN) / range) * 44);
-                return (
-                  <div
-                    key={i}
-                    style={{
-                      flex: 1,
-                      height: h,
-                      background: p.net < 0 ? 'var(--bad, #e5484d)' : 'var(--ok, #30a46c)',
-                      opacity: 0.7,
-                      borderRadius: 1,
-                    }}
-                    title={`${new Date(p.at).toLocaleDateString()}: ${formatMoney(p.net, base)}`}
-                  />
-                );
-              })}
-            </div>
-            <div className="small muted" style={{ marginTop: 2, display: 'flex', justifyContent: 'space-between' }}>
-              <span>{new Date(netWorthHistory[0].at).toLocaleDateString()}</span>
-              <span>{new Date(netWorthHistory[netWorthHistory.length - 1].at).toLocaleDateString()}</span>
-            </div>
-          </div>
-        )}
       </div>
 
       {aiLoading ? (
@@ -334,24 +353,18 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
                 </div>
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 4, marginTop: 10 }}>
-              {forecast.points.map((p) => (
-                <div key={p.label} style={{ flex: 1, textAlign: 'center', fontSize: 10 }}>
-                  <div style={{
-                    height: 40,
-                    display: 'flex',
-                    alignItems: 'flex-end',
-                  }}>
-                    <div style={{
-                      width: '100%',
-                      height: `${Math.max(4, Math.min(100, (p.balance / Math.max(1, ...forecast.points.map((x) => Math.abs(x.balance)))) * 100))}%`,
-                      background: p.balance < 0 ? 'var(--bad, #e5484d)' : 'var(--ok, #30a46c)',
-                      borderRadius: 2,
-                    }} />
+            <div className="fc-bars">
+              {forecast.points.map((p) => {
+                const maxAbs = Math.max(1, ...forecast.points.map((x) => Math.abs(x.balance)));
+                const h = Math.max(6, (Math.abs(p.balance) / maxAbs) * 100);
+                const neg = p.balance < 0;
+                return (
+                  <div key={p.label} className="fc-col" title={`${p.label}: ${formatMoney(p.balance, base)}`}>
+                    <div className={`fc-bar${neg ? ' neg' : ''}`} style={{ height: `${h}%` }} />
+                    <div className="fc-lbl">{p.label.slice(5)}</div>
                   </div>
-                  <div className="muted" style={{ fontSize: 9, marginTop: 2 }}>{p.label.slice(5)}</div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </>
