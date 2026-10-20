@@ -278,6 +278,11 @@ export interface ParsedStatementLine {
   direction: Direction;
   /** Detected ISO-4217 code, or undefined to let the UI default to base. */
   currency?: string;
+  /** The running STATEMENT BALANCE that followed this row in a table-layout
+   *  statement (bank statements print the post-transaction balance). Kept for
+   *  the user's reference and to sanity-check the LLM-verification path — it is
+   *  NEVER the imported amount (that is `amount`). */
+  balance?: number;
   // Filled in after categorization:
   category?: string;
   aiTier?: AITier;

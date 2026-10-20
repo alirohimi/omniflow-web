@@ -22,6 +22,7 @@ import {
   type LLMConfig,
 } from '../ai/categorize';
 import { CATEGORIES } from '../domain/enums';
+import { looksLikeTableStatement, parseTableStatement, shouldVerify } from './tableStatement';
 import type {
   Category,
   Direction,
@@ -478,7 +479,37 @@ export async function parseStatementText(
   let parser: 'llm' | 'regex' = 'regex';
   let llmError: string | undefined;
   let llmSkipped = false;
-  if (opts.llm && opts.llm.apiKey) {
+
+  // ---- Deterministic table parser runs FIRST. ----
+  // Bank statements with a 4-column layout (M2U/Maybank/CIMB/RHB — date,
+  // description, signed TRANSACTION AMOUNT, trailing STATEMENT BALANCE) are
+  // parsed with pure rules, no LLM needed. This is the fix for "the import
+  // grabbed the balance instead of the amount": the table parser reads the
+  // signed amount column directly. Only when that finds nothing do we fall
+  // through to the LLM / generic-regex path.
+  if (looksLikeTableStatement(text)) {
+    const table = parseTableStatement(text);
+    if (table.length > 0) {
+      lines = table;
+      // Mark as a deterministic (rule) parse; the LLM is reserved for
+      // verifying/complex cases only (see verifyTableRows).
+      parser = 'regex';
+      opts.onProgress?.(0.15, 'Parsed table');
+    }
+  }
+
+  // When the deterministic table parser already produced rows, the LLM is
+  // used ONLY to verify/correct the weak ones (unknown / generic-merchant
+  // rows) — it is NOT re-run to re-extract, because the table parser already
+  // read the correct signed-amount column. This is the "AI just to verify /
+  // complex cases" path. When the table parser found nothing, we fall through
+  // to the full LLM extraction (the original Tier-1 path).
+  if (lines && opts.llm && opts.llm.apiKey) {
+    await verifyTableRows(lines, opts.llm, opts.signal, (p, ph) =>
+      opts.onProgress?.(0.3 + p * 0.3, ph),
+    );
+    // LLM verification never downgrades a good deterministic row.
+  } else if (!lines && opts.llm && opts.llm.apiKey) {
     if (opts.signal?.aborted) throw new Error('import cancelled');
     const res = await parseStatementWithLLM(text, opts.llm, opts.signal, (p, ph) =>
       opts.onProgress?.(p * 0.3, ph),
@@ -514,10 +545,86 @@ export async function parseStatementText(
   return { lines, parser, llmSkipped, llmError };
 }
 
+// ---------------------------------------------------------------------------
+// LLM verification of deterministic table rows (the "AI just to verify" path).
+// Only the weak rows (unknown / generic merchant) are sent; good rows are left
+// untouched so the LLM can never regress a correct deterministic parse.
+// ---------------------------------------------------------------------------
+
+/**
+ * Send the weak rows (shouldVerify) to the LLM in one batch, ask it to
+ * confirm/correct merchant + direction, and merge back only when it improves
+ * the row. Returns the number of rows corrected. Best-effort: any LLM failure
+ * leaves the rows as the deterministic parser produced them.
+ */
+async function verifyTableRows(
+  lines: ParsedStatementLine[],
+  llm: LLMConfig,
+  signal?: AbortSignal,
+  onProgress?: (p: number, phase: string) => void,
+): Promise<number> {
+  const weakIdx = lines
+    .map((l, i) => (shouldVerify(l) ? i : -1))
+    .filter((i) => i >= 0);
+  if (weakIdx.length === 0) return 0;
+  onProgress?.(0, 'Verifying with AI');
+
+  const sys =
+    'You are verifying bank-statement transactions already extracted by a ' +
+    'deterministic parser. For each, confirm or correct { merchant, direction ' +
+    '(in|out) } using the description and balance context. Amounts are already ' +
+    'correct — do NOT change them. Reply with ONLY a JSON array of ' +
+    '{"merchant":string,"direction":"in"|"out"} in the same order, no prose.';
+  const user = JSON.stringify(
+    weakIdx.map((i) => ({
+      description: lines[i].description ?? lines[i].merchant,
+      merchant: lines[i].merchant,
+      amount: lines[i].amount,
+      balance: lines[i].balance ?? null,
+      direction: lines[i].direction,
+    })),
+  );
+  let raw: string;
+  try {
+    raw = await callLLM(llm, sys, user, [], true, LLM_MAX_TOKENS.statementChunk);
+  } catch {
+    // Verification is best-effort: keep the deterministic rows.
+    onProgress?.(1, 'Verification skipped');
+    return 0;
+  }
+  const arr = extractJsonArray(raw);
+  if (!arr || !Array.isArray(arr)) return 0;
+
+  let corrected = 0;
+  weakIdx.forEach((rowIdx, k) => {
+    const o = arr[k];
+    if (!o) return;
+    const row = lines[rowIdx];
+    const newMerchant =
+      typeof o.merchant === 'string' && o.merchant.trim()
+        ? o.merchant.trim()
+        : row.merchant;
+    const newDir =
+      o.direction === 'in' || o.direction === 'out'
+        ? (o.direction as Direction)
+        : row.direction;
+    const changed = newMerchant !== row.merchant || newDir !== row.direction;
+    if (changed) {
+      row.merchant = newMerchant;
+      row.direction = newDir;
+      row.aiTier = 'llm-byok';
+      corrected++;
+    }
+  });
+  onProgress?.(1, 'Verified');
+  return corrected;
+}
+
 export const __test = {
   parseLine,
   dateFromParts,
   buildLLMPrompt,
   chunkStatementText,
   categorizeBatchLLM,
+  verifyTableRows,
 };

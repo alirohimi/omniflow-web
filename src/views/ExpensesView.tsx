@@ -20,7 +20,7 @@ import {
 } from '../services';
 import { categorize } from '../ai';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
-import { IReceipt, IScan, IImage, ICheck } from '../icons';
+import { IReceipt, IScan, ICheck } from '../icons';
 import { SpendingBreakdown } from '../components/SpendingBreakdown';
 import type { Expense, PendingImport } from '../domain/types';
 
@@ -565,9 +565,12 @@ export function ExpensesView() {
         <h3>Import a statement (PDF)</h3>
         <p className="small muted" style={{ marginTop: 0 }}>
           Monthly bank / card / e-wallet statement. The PDF is read on your
-          device (never uploaded); AI extracts every transaction and
-          auto-categorizes each merchant. Review and edit before importing.
-          {store.llmConfig ? ' Uses your AI key for extraction.' : ' Falls back to the built-in rules (no key needed).'}
+          device (never uploaded). Bank tables (Maybank/M2U, CIMB, RHB, card
+          statements) are parsed with built-in rules — the transaction amount is
+          read from the signed amount column, not the running balance; AI is
+          used only to verify/complete uncertain merchants. Auto-categorizes
+          each merchant. Review and edit before importing.
+          {store.llmConfig ? ' Uses your AI key for verification.' : ' No key needed.'}
         </p>
         <input ref={pdfRef} type="file" accept="application/pdf" style={{ display: 'none' }}
           onChange={(e) => {
@@ -576,7 +579,7 @@ export function ExpensesView() {
             if (f) void runPdfImport(f);
           }} />
         <button className="btn ghost sm" disabled={pdfBusy} onClick={() => pdfRef.current?.click()}>
-          <IImage size={15} />
+          <IReceipt size={15} />
           {pdfBusy ? pdfPhase ?? 'Working…' : 'Choose PDF statement'}
         </button>
         {pdfBusy && pdfPhase && (

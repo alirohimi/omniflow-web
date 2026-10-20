@@ -10,10 +10,87 @@ import {
   extractJsonArray,
   parseISODate,
   buildLLMPrompt,
+  parseStatementText,
   __test,
 } from '../src/services/statement';
+import {
+  looksLikeTableStatement,
+  parseTableStatement,
+  parseDDMY,
+} from '../src/services/tableStatement';
 
 const { parseLine, dateFromParts } = __test;
+
+// ---------------------------------------------------------------------------
+// Bank-table (M2U / Maybank / CIMB / RHB) deterministic parser
+// ---------------------------------------------------------------------------
+
+describe('parseTableStatement (4-column bank table)', () => {
+  // A realistic M2U/Maybank flat-text layout: each tx is a 4-column row
+  // (date | desc | amount± | balance) followed by 2-3 detail lines that carry
+  // the REAL merchant name.
+  const m2u = [
+    '03/09/26 SALE DEBIT 21.50- 595.61',
+    '   Puzzini Swedish Piz*',
+    '   840516591Q',
+    '03/09/26 FUND TRANSFER TO A/ 500.00+ 630.01',
+    '   ICHSAN ALI RACHIMI *',
+    '   00000001',
+    '03/09/26 IBK FUND TFR FR A/C 12.90- 617.11',
+    '   Nasi Kandar Penang *',
+    '   MBBQR111113786562795',
+    '   840516591Q',
+    '02/09/26 SALE DEBIT 102.41- 142.51',
+    '   SHOPEE - APPLEPAY-E*',
+    '   0327779222, MY',
+    'ENDING BALANCE :',
+    '1,832.02',
+  ].join('\n');
+
+  it('detects the table layout', () => {
+    expect(looksLikeTableStatement(m2u)).toBe(true);
+    // A plain text receipt with no signed-amount-then-balance shape is NOT a
+    // table statement.
+    expect(looksLikeTableStatement('7-Eleven 15.50\nShopee 89.90')).toBe(false);
+  });
+
+  it('reads the signed AMOUNT column, not the trailing STATEMENT BALANCE', () => {
+    const rows = parseTableStatement(m2u);
+    expect(rows).toHaveLength(4);
+    // The first tx is 21.50 (debit) with a running balance of 595.61. The old
+    // bug imported 595.61 as the amount; now the amount is 21.50 and the
+    // balance is kept separately.
+    const first = rows[0];
+    expect(first.amount).toBe(21.5);
+    expect(first.direction).toBe('out');
+    expect(first.balance).toBe(595.61);
+    // The credit row is marked direction 'in'.
+    const credit = rows.find((r) => r.amount === 500)!;
+    expect(credit.direction).toBe('in');
+  });
+
+  it('DD/MM/YY parses to the correct UTC date (day-month not swapped)', () => {
+    const d = parseDDMY('03/09/26');
+    expect(d).toBe(Date.UTC(2026, 8, 3)); // Sep 3 2026
+  });
+
+  it('promotes the real merchant from the detail lines, not "SALE DEBIT"', () => {
+    const rows = parseTableStatement(m2u);
+    expect(rows[0].merchant).toContain('Puzzini');
+    expect(rows[0].description).toBe('SALE DEBIT');
+    // The merchant token "Puzzini Swedish Piz*" gets its trailing * trimmed.
+    expect(rows[0].merchant).not.toContain('*');
+  });
+
+  it('runs before the generic regex in parseStatementText (deterministic win)', async () => {
+    // No LLM: the table parser must produce the rows; the generic regex would
+    // have grabbed the balance column.
+    const { lines, parser } = await parseStatementText(m2u, {});
+    expect(parser).toBe('regex'); // deterministic (rule) path
+    expect(lines).toHaveLength(4);
+    expect(lines[0].amount).toBe(21.5);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Regex statement parser
