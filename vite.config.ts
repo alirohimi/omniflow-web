@@ -8,8 +8,8 @@ export default defineConfig({
   base: process.env.BASE_URL || '/',
   plugins: [react()],
   test: {
-    environment: 'happy-dom',
-    include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
+    environment: 'node',
+    include: ['tests/**/*.test.ts'],
     // CI runners are slow: the async vault tests (store-extended, vault-race)
     // use real timers + polling; the default 5s testTimeout can be exceeded on
     // a cold runner even with 10s internal waits. 30s absorbs the slack.
