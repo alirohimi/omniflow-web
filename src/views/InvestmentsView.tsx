@@ -404,19 +404,24 @@ export function InvestmentsView() {
             a smooth segmented bar with an interactive per-class breakdown.
             (Replaces the old stacked bar + separate donut pair.) */}
         {pieSlices.length > 0 ? (
-          <div className="pf-breakdown" style={{ marginTop: 16 }}>
-            <div className="pf-breakdown-head">
-              <div className="small muted" style={{ marginBottom: 6 }}>Your mix</div>
-              <div className="row" style={{ gap: 4 }}>
+          <div className="pf-breakdown" style={{ marginTop: 18 }}>
+            <div className="pf-breakdown-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 10, flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 700, letterSpacing: '-0.2px' }}>Your mix</div>
+                <div className="small muted" style={{ margin: '2px 0 0' }}>
+                  Tap a slice to pin it — the donut and bar highlight it
+                </div>
+              </div>
+              <div className="seg" role="tablist" aria-label="Allocation view">
                 <button
-                  className={`chip sm${activePie === 'class' ? ' on' : ''}`}
+                  type="button"
                   aria-pressed={activePie === 'class'}
                   onClick={() => setActivePie('class')}
                 >
                   By class
                 </button>
                 <button
-                  className={`chip sm${activePie === 'holding' ? ' on' : ''}`}
+                  type="button"
                   aria-pressed={activePie === 'holding'}
                   onClick={() => setActivePie('holding')}
                 >

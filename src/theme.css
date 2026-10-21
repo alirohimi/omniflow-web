@@ -884,14 +884,27 @@ button.chip { -webkit-tap-highlight-color: transparent; }
   to { opacity: 1; transform: none; }
 }
 
-.seg { display: flex; gap: 6px; }
-.seg button {
-  flex: 1; background: var(--bg-2); border: 1px solid var(--line-2); color: var(--muted);
-  border-radius: 9px; padding: 9px; font: inherit; font-size: 13px; cursor: pointer;
-  transition: border-color .15s, background .15s, color .15s;
+/* Segmented control: a single frosted pill holding the segments, with a
+   luminous active state. */
+.seg {
+  display: inline-flex; gap: 3px;
+  background: var(--bg-2); border: 1px solid var(--line);
+  border-radius: 999px; padding: 3px;
 }
-.seg button:hover { color: var(--text); border-color: var(--line-2); }
-.seg button[aria-pressed='true'] { background: var(--accent); color: #fff; border-color: var(--accent); box-shadow: 0 2px 10px var(--accent-glow); }
+.seg button {
+  flex: 0 0 auto; background: transparent; border: 0; color: var(--muted);
+  border-radius: 999px; padding: 7px 14px; font: inherit; font-size: 12.5px; font-weight: 620;
+  cursor: pointer; transition: color .15s, background .15s, box-shadow .15s;
+  white-space: nowrap;
+}
+.seg button:hover { color: var(--text); }
+.seg button[aria-pressed='true'] {
+  background: linear-gradient(145deg, var(--accent) 0%, var(--accent-2) 100%);
+  color: #fff; box-shadow: 0 2px 12px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,.3);
+}
+@media (pointer: coarse) {
+  .seg button { min-height: 40px; padding: 8px 16px; }
+}
 
 .empty { text-align: center; color: var(--faint); padding: 28px 12px; font-size: 13.5px; }
 /* ---------- Gate (sign-in / vault / loading) ---------- */
@@ -1156,59 +1169,174 @@ body { overflow-x: hidden; }
   text-transform: uppercase; letter-spacing: .5px; margin-top: 4px;
 }
 
-/* ---------- Allocation chart (donut + bar + interactive rows) ---------- */
-.alloc { display: flex; flex-direction: column; gap: 14px; }
-.alloc-top { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
-.alloc-donut { flex-shrink: 0; }
+/* ---------- Allocation chart (luminous donut + capsule bar + rows) ---------- */
+.alloc { display: flex; flex-direction: column; gap: 16px; }
+.alloc-top { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
 
-/* Generous stacked bar — the primary at-a-glance read. Segments separated
-   by a hairline gap, with a soft top-down gradient for depth. */
+/* Ambient glow + frosted plate behind the donut. */
+.alloc-donut-wrap {
+  position: relative; flex-shrink: 0;
+  display: grid; place-items: center;
+  width: 132px; height: 132px;
+}
+.alloc-donut-wrap::before {
+  content: '';
+  position: absolute; inset: 6px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 42%, var(--card-glow) 0%, transparent 62%);
+  filter: blur(6px);
+  opacity: .8;
+  pointer-events: none;
+}
+.alloc-donut { position: relative; overflow: visible; }
+.alloc-arc { transition: opacity .2s ease, stroke-width .2s ease; cursor: pointer; }
+.alloc-hole {
+  fill: rgba(13, 13, 38, 0.72);
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.alloc-center-num { font-family: var(--font-display); letter-spacing: -0.4px; font-variant-numeric: tabular-nums; }
+.alloc-center-lbl {
+  fill: var(--muted); font-size: 8.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .6px;
+  font-family: var(--font-body);
+}
+
+/* Thick capsule stacked bar — the primary at-a-glance read. Segments
+   separated by a hairline gap, gradient for depth, staggered entrance. */
 .alloc-bar {
   flex: 1; min-width: 190px;
-  display: flex; gap: 3px;
-  height: 26px; align-items: stretch;
+  display: flex; gap: 4px;
+  height: 32px; align-items: stretch;
+  padding: 5px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 4px 14px rgba(6,6,24,.35);
 }
 .alloc-seg {
-  border-radius: 6px;
-  transition: opacity .18s, transform .12s, filter .18s;
+  border-radius: 999px;
+  transition: opacity .2s, filter .18s, box-shadow .18s;
   cursor: pointer;
-  min-width: 2px;
+  min-width: 3px;
+  animation: segIn .45s cubic-bezier(.2,.8,.3,1) both;
 }
-.alloc-seg:hover { filter: brightness(1.12); }
-.alloc-seg.on { transform: scaleY(1.08); box-shadow: 0 0 0 1.5px rgba(255,255,255,.35), 0 3px 10px rgba(0,0,0,.35); }
+@keyframes segIn {
+  from { opacity: 0; transform: scaleX(.7); transform-origin: left; }
+  to { opacity: 1; transform: scaleX(1); transform-origin: left; }
+}
+.alloc-seg:hover { filter: brightness(1.15); }
+.alloc-seg.on {
+  filter: brightness(1.12);
+  box-shadow: 0 0 0 1.5px rgba(255,255,255,.32), 0 4px 14px rgba(0,0,0,.4);
+}
+@media (prefers-reduced-motion: reduce) {
+  .alloc-seg { animation: none; }
+}
 
-/* Interactive breakdown rows: dot, name, % and value. Tap to pin a slice. */
-.alloc-list { display: flex; flex-direction: column; gap: 2px; }
-.alloc-row { border-radius: var(--radius-sm); transition: background .15s; }
-.alloc-row.on { background: var(--bg-2); }
+/* Interactive breakdown rows: colored tile, name + inline progress, %, value. */
+.alloc-list { display: flex; flex-direction: column; gap: 4px; }
+.alloc-row {
+  border-radius: var(--radius-sm);
+  transition: background .15s, box-shadow .15s;
+}
+.alloc-row.on {
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 1px var(--line-2);
+}
 .alloc-rowbtn {
-  width: 100%; display: flex; align-items: center; gap: 10px;
-  min-height: 44px; padding: 8px 10px;
+  width: 100%; display: flex; align-items: center; gap: 11px;
+  min-height: 46px; padding: 8px 10px;
   border: 0; background: none; font: inherit; color: var(--text);
   cursor: pointer; border-radius: var(--radius-sm);
   -webkit-tap-highlight-color: transparent;
+  text-align: left;
 }
 .alloc-rowbtn:active { background: var(--bg-3); }
-.alloc-dot { width: 12px; height: 12px; border-radius: 4px; flex: none; }
+
+/* Colored icon tile — percentage badge with a soft ring in the slice color. */
+.alloc-tile {
+  width: 34px; height: 34px; flex: none;
+  display: grid; place-items: center;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--tile) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tile) 45%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+}
+.alloc-tile-pct {
+  font-family: var(--font-display);
+  font-size: 11px; font-weight: 750; line-height: 1;
+  color: var(--tile);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Name with an inline progress rail underneath. */
 .alloc-name {
-  flex: 1; font-size: 13.5px; font-weight: 620; text-align: left;
+  flex: 1; display: flex; flex-direction: column; gap: 4px;
+  font-size: 13.5px; font-weight: 620; text-align: left;
+  min-width: 0;
+}
+.alloc-progress {
+  display: block; height: 3px; width: 100%;
+  background: var(--bg-3);
+  border-radius: 99px; overflow: hidden;
+}
+.alloc-progress i {
+  display: block; height: 100%;
+  border-radius: 99px;
+  transition: width .4s cubic-bezier(.2,.8,.3,1);
 }
 .alloc-pct {
-  font-size: 13px; font-weight: 700; color: var(--text-2);
-  min-width: 48px; text-align: right; font-variant-numeric: tabular-nums;
+  font-size: 13px; font-weight: 750; color: var(--text-2);
+  min-width: 44px; text-align: right; font-variant-numeric: tabular-nums;
 }
 .alloc-val {
   font-size: 13px; color: var(--muted); min-width: 84px; text-align: right;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: tabular-nums; font-weight: 550;
 }
+
 /* Drill-down sub-rows inside an active class row. */
-.alloc-sub { padding: 0 10px 10px 32px; display: flex; flex-direction: column; gap: 2px; }
+.alloc-sub {
+  padding: 0 10px 12px 55px;
+  display: flex; flex-direction: column; gap: 3px;
+  animation: subIn .28s cubic-bezier(.2,.8,.3,1);
+}
+@keyframes subIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
 .alloc-subrow {
-  display: flex; justify-content: space-between; gap: 10px;
-  font-size: 12px; padding: 3px 0; color: var(--text-2);
+  display: flex; align-items: center; gap: 10px;
+  font-size: 12px; padding: 4px 0; color: var(--text-2);
+}
+.alloc-sub-name { flex: none; width: 56px; font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.alloc-sub-bar {
+  flex: 1; height: 5px; border-radius: 99px;
+  background: var(--bg-3); overflow: hidden;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,.3);
+}
+.alloc-sub-bar i { display: block; height: 100%; border-radius: 99px; transition: width .4s ease; }
+.alloc-sub-val {
+  flex: none; min-width: 78px; text-align: right;
+  color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11.5px;
 }
 .alloc-foot {
   font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums;
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+}
+.alloc-empty {
+  padding: 18px 10px; text-align: center;
+  color: var(--faint); font-size: 13px;
+  background: var(--bg-2); border: 1px dashed var(--line-2);
+  border-radius: var(--radius-sm);
+}
+
+@media (max-width: 520px) {
+  .alloc-donut-wrap { width: 116px; height: 116px; }
+  .alloc-donut { width: 116px; height: 116px; }
+  .alloc-val { min-width: 72px; font-size: 12px; }
+  .alloc-sub { padding-left: 44px; }
+  .alloc-sub-name { width: 48px; }
 }
 
 @media (max-width: 520px) {

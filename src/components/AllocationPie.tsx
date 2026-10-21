@@ -1,22 +1,24 @@
 // ============================================================================
-// AllocationPie — the single hero allocation chart for the Portfolio page.
+// AllocationPie — the hero allocation chart for the Portfolio page.
 //
-// Redesigned for at-a-glance reading (simple, visual, novice-friendly):
-//   1. A compact SVG donut: one rounded arc per slice, with a soft glow on
-//      the active slice and the total (or active slice's %) in the hole.
-//   2. A generous stacked horizontal bar — the primary read. Each segment
-//      gets a subtle gradient + 1px gap so classes separate cleanly.
-//   3. An interactive breakdown list: tap a row to pin its slice (the donut
-//      highlights it and the hole shows its %). Tapping again unpins.
+// Design language: modern glassmorphic fintech card.
+//   1. A luminous SVG donut with a soft ambient glow, rounded caps, and a
+//      frosted center hole that shows the total (or the pinned slice's %).
+//      Active slice gets a wider stroke + a subtle drop-shadow.
+//   2. A thick rounded capsule stacked bar — the primary at-a-glance read —
+//      with staggered entrance animation, gradient segments, and hover lift.
+//   3. An interactive breakdown list: each row is a tappable card with a
+//      colored icon tile, an inline progress bar, % + value, and an
+//      animated drill-down for sub-holdings.
 //
 // Slices can be per-class (with a `sub` drill-down of individual holdings)
 // or per-holding (no sub). Colors come from colorForClass so everything
 // agrees with the rest of the app.
 //
-// Pure SVG (no chart lib): arcs are plain trig path A-commands; a full
-// 100% single slice renders as a ring (two concentric circles) to dodge the
-// degenerate zero-length arc. NaN-safe: zero/negative values are filtered
-// and a zero total renders an empty ring + hint instead of NaN angles.
+// Pure SVG (no chart lib): donut segments are stroke-circle dash arcs —
+// the reliable technique that dodges the degenerate zero-length-arc bug.
+// NaN-safe: zero/negative values are filtered and a zero total renders an
+// empty ring + hint instead of NaN angles.
 // ============================================================================
 
 import { useMemo, useState } from 'react';
@@ -24,16 +26,16 @@ import { formatMoney } from '../domain/enums';
 import type { AssetClass } from '../domain/types';
 
 /** Same palette as the app's allocation colors so bar + donut + legend
- *  always agree. */
+ *  always agree. Vivid modern hues tuned for the dark-glass canvas. */
 const CLASS_COLORS: Record<string, string> = {
   'equity-us': '#5b8def',
-  'equity-local': '#8b5cf6',
-  etf: '#30a46c',
-  crypto: '#f59e0b',
-  cash: '#3b82f6',
-  mmf: '#0ea5e9',
+  'equity-local': '#a78bfa',
+  etf: '#34d399',
+  crypto: '#fbbf24',
+  cash: '#38bdf8',
+  mmf: '#22d3ee',
 };
-const FALLBACK_COLORS = ['#e5484d', '#14b8a6', '#a855f7', '#f59e0b', '#64748b'];
+const FALLBACK_COLORS = ['#f472b6', '#2dd4bf', '#c084fc', '#fbbf24', '#94a3b8'];
 
 export function colorForClass(assetClass: string, index: number): string {
   return CLASS_COLORS[assetClass] ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length];
@@ -41,12 +43,12 @@ export function colorForClass(assetClass: string, index: number): string {
 
 /** Human-friendly label per asset class, used in the breakdown rows. */
 const CLASS_LABELS: Record<string, string> = {
-  'equity-us': 'US stocks',
-  'equity-local': 'Local stocks',
+  'equity-us': 'US Stocks',
+  'equity-local': 'Local Stocks',
   etf: 'ETFs',
   crypto: 'Crypto',
   cash: 'Cash',
-  mmf: 'Money market',
+  mmf: 'Money Market',
 };
 
 export interface PieSlice {
@@ -96,7 +98,7 @@ export function AllocationPie({ slices, total, base, title }: AllocationPieProps
 
   if (usable.length === 0 || sum <= 0) {
     return (
-      <div className="muted small" style={{ padding: '8px 0' }}>
+      <div className="alloc-empty">
         No allocation to chart yet — add holdings first.
       </div>
     );
@@ -113,66 +115,82 @@ export function AllocationPie({ slices, total, base, title }: AllocationPieProps
 
   const activeKey = hoverIdx != null ? usable[hoverIdx].key : pinned;
   const activeSlice = activeKey != null ? usable.find((s) => s.key === activeKey) : null;
+  const activePct = activeSlice ? (activeSlice.valueBase / sum) * 100 : null;
 
-  const cx = 60, cy = 60, R = 52, THICK = 15;
+  const cx = 60, cy = 60, R = 52, THICK = 14;
+  const centerLabel = activeSlice ? sliceLabel(activeSlice.key, activeSlice.label) : (title ?? 'total');
 
   return (
     <div className="alloc">
       {/* Donut + stacked bar, side by side on wide / stacked on narrow. */}
       <div className="alloc-top">
-        <svg
-          className="alloc-donut"
-          width={124}
-          height={124}
-          viewBox="0 0 120 120"
-          role="img"
-          aria-label={arcs
-            .map((a) => `${sliceLabel(a.slice.key, a.slice.label)} ${((a.f1 - a.f0) * 100).toFixed(1)}%`)
-            .join(', ')}
-        >
-          {/* Quiet base ring so the donut reads as a ring, not a pie. */}
-          <circle cx={cx} cy={cy} r={R} fill="none" stroke="var(--line)" strokeWidth={THICK} opacity={0.5} />
-
-          {arcs.map((a) => {
-            const isActive = activeKey === a.slice.key;
-            const dimmed = activeKey != null && !isActive;
-            const { dasharray, dashoffset } = donutDash(R, a.f0, a.f1);
-            return (
-              <circle
-                key={a.slice.key}
-                cx={cx} cy={cy} r={R}
-                fill="none"
-                stroke={a.slice.color}
-                strokeWidth={isActive ? THICK + 5 : THICK}
-                strokeDasharray={dasharray}
-                strokeDashoffset={dashoffset}
-                transform={`rotate(-90 ${cx} ${cy})`}
-                opacity={dimmed ? 0.25 : 1}
-                style={{ transition: 'opacity .18s, stroke-width .18s', cursor: 'pointer' }}
-                onClick={() => setPinned((p) => (p === a.slice.key ? null : a.slice.key))}
-              >
-                <title>{`${sliceLabel(a.slice.key, a.slice.label)}: ${formatMoney(a.slice.valueBase, base)} (${((a.f1 - a.f0) * 100).toFixed(1)}%)`}</title>
-              </circle>
-            );
-          })}
-
-          {/* Center hole + label. */}
-          <circle cx={cx} cy={cy} r={R - THICK / 2 - 2} fill="var(--card)" />
-          <text
-            x={cx} y={cy - 3} textAnchor="middle"
-            fill="var(--text)" fontSize={activeSlice ? 13 : 12.5} fontWeight={750}
-            style={{ fontVariantNumeric: 'tabular-nums' }}
+        <div className="alloc-donut-wrap">
+          <svg
+            className="alloc-donut"
+            width={132}
+            height={132}
+            viewBox="0 0 120 120"
+            role="img"
+            aria-label={arcs
+              .map((a) => `${sliceLabel(a.slice.key, a.slice.label)} ${((a.f1 - a.f0) * 100).toFixed(1)}%`)
+              .join(', ')}
           >
-            {activeSlice
-              ? `${((activeSlice.valueBase / sum) * 100).toFixed(activeSlice.valueBase / sum < 0.1 ? 1 : 0)}%`
-              : formatMoney(total > 0 ? total : sum, base)}
-          </text>
-          <text x={cx} y={cy + 11} textAnchor="middle" fill="var(--muted)" fontSize={8}>
-            {activeSlice ? sliceLabel(activeSlice.key, activeSlice.label) : (title ?? 'total')}
-          </text>
-        </svg>
+            <defs>
+              <filter id="alloc-glow" x="-40%" y="-40%" width="180%" height="180%">
+                <feDropShadow dx="0" dy="0" stdDeviation="3.5" floodColor={activeSlice?.color ?? '#8b7bff'} floodOpacity="0.55" />
+              </filter>
+            </defs>
+            {/* Quiet base ring so the donut reads as a ring, not a pie. */}
+            <circle cx={cx} cy={cy} r={R} fill="none" stroke="var(--line)" strokeWidth={THICK} opacity={0.45} />
 
-        {/* The generous stacked bar — the primary, at-a-glance read. */}
+            {arcs.map((a) => {
+              const isActive = activeKey === a.slice.key;
+              const dimmed = activeKey != null && !isActive;
+              const { dasharray, dashoffset } = donutDash(R, a.f0, a.f1);
+              // A hair of rounding via strokeLinecap only when a slice is
+              // big enough to survive the cap overlap.
+              const span = a.f1 - a.f0;
+              return (
+                <circle
+                  key={a.slice.key}
+                  cx={cx} cy={cy} r={R}
+                  fill="none"
+                  stroke={a.slice.color}
+                  strokeWidth={isActive ? THICK + 4 : THICK}
+                  strokeDasharray={dasharray}
+                  strokeDashoffset={dashoffset}
+                  strokeLinecap={span > 0.045 ? 'round' : 'butt'}
+                  transform={`rotate(-90 ${cx} ${cy})`}
+                  opacity={dimmed ? 0.22 : 1}
+                  filter={isActive ? 'url(#alloc-glow)' : undefined}
+                  className="alloc-arc"
+                  onClick={() => setPinned((p) => (p === a.slice.key ? null : a.slice.key))}
+                >
+                  <title>{`${sliceLabel(a.slice.key, a.slice.label)}: ${formatMoney(a.slice.valueBase, base)} (${((a.f1 - a.f0) * 100).toFixed(1)}%)`}</title>
+                </circle>
+              );
+            })}
+
+            {/* Frosted center hole + label. */}
+            <circle cx={cx} cy={cy} r={R - THICK / 2 - 4} className="alloc-hole" />
+            <text
+              x={cx} y={activeSlice ? cy - 4 : cy - 2} textAnchor="middle"
+              className="alloc-center-num"
+              fontSize={activeSlice ? 16 : 13.5}
+              fontWeight={800}
+              fill="var(--text)"
+            >
+              {activeSlice
+                ? `${activePct!.toFixed(activePct! < 10 ? 1 : 0)}%`
+                : formatMoney(total > 0 ? total : sum, base)}
+            </text>
+            <text x={cx} y={cy + 11} textAnchor="middle" className="alloc-center-lbl">
+              {centerLabel}
+            </text>
+          </svg>
+        </div>
+
+        {/* The thick capsule stacked bar — the primary, at-a-glance read. */}
         <div className="alloc-bar" role="img"
           aria-label={`Allocation: ${usable.map((s) => `${sliceLabel(s.key, s.label)} ${((s.valueBase / sum) * 100).toFixed(1)}%`).join(', ')}`}>
           {usable.map((s, i) => {
@@ -184,8 +202,9 @@ export function AllocationPie({ slices, total, base, title }: AllocationPieProps
                 className={`alloc-seg${activeKey === s.key ? ' on' : ''}`}
                 style={{
                   width: `${pct}%`,
-                  background: `linear-gradient(180deg, ${s.color} 0%, ${s.color}cc 100%)`,
-                  opacity: activeKey == null || activeKey === s.key ? 1 : 0.35,
+                  background: `linear-gradient(180deg, ${s.color} 0%, ${s.color}b3 100%)`,
+                  opacity: activeKey == null || activeKey === s.key ? 1 : 0.3,
+                  animationDelay: `${i * 45}ms`,
                 }}
                 title={`${sliceLabel(s.key, s.label)} · ${formatMoney(s.valueBase, base)} (${pct.toFixed(1)}%)`}
                 onClick={() => setPinned((p) => (p === s.key ? null : s.key))}
@@ -203,6 +222,7 @@ export function AllocationPie({ slices, total, base, title }: AllocationPieProps
           const pct = (s.valueBase / sum) * 100;
           const isOn = activeKey === s.key;
           const showSub = isOn && s.sub && s.sub.length > 0;
+          const subMax = s.sub?.reduce((m, h) => Math.max(m, h.valueBase), 0) ?? 1;
           return (
             <div key={s.key} className={`alloc-row${isOn ? ' on' : ''}`}>
               <button
@@ -212,20 +232,30 @@ export function AllocationPie({ slices, total, base, title }: AllocationPieProps
                 onMouseLeave={() => setHoverIdx(null)}
                 aria-pressed={pinned === s.key}
               >
-                <span className="alloc-dot" style={{ background: s.color }} />
-                <span className="alloc-name">{sliceLabel(s.key, s.label)}</span>
+                <span className="alloc-tile" style={{ ['--tile' as string]: s.color }}>
+                  <span className="alloc-tile-pct">{pct >= 10 ? Math.round(pct) : pct.toFixed(1)}</span>
+                </span>
+                <span className="alloc-name">
+                  {sliceLabel(s.key, s.label)}
+                  <span className="alloc-progress" aria-hidden="true">
+                    <i style={{ width: `${pct}%`, background: `linear-gradient(90deg, ${s.color}, ${s.color}b3)` }} />
+                  </span>
+                </span>
                 <span className="alloc-pct">{pct.toFixed(pct < 10 ? 1 : 0)}%</span>
                 <span className="alloc-val">{formatMoney(s.valueBase, base)}</span>
               </button>
 
               {/* Drill-down: individual holdings inside this class (class
-                  mode only). Collapsed unless this row is active. */}
+                  mode only). Animated collapse unless this row is active. */}
               {showSub ? (
                 <div className="alloc-sub">
                   {s.sub!.map((h) => (
                     <div key={h.label} className="alloc-subrow">
-                      <span>{h.label}</span>
-                      <span className="muted">{formatMoney(h.valueBase, base)}</span>
+                      <span className="alloc-sub-name">{h.label}</span>
+                      <span className="alloc-sub-bar" aria-hidden="true">
+                        <i style={{ width: `${(h.valueBase / Math.max(subMax, 1)) * 100}%`, background: s.color }} />
+                      </span>
+                      <span className="alloc-sub-val">{formatMoney(h.valueBase, base)}</span>
                     </div>
                   ))}
                 </div>
