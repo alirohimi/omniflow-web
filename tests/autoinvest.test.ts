@@ -344,6 +344,12 @@ describe('addContribution (real provider)', () => {
       accountType: 'crypto',
       initialDepositBase: 5_000,
     });
+    // Commit the addAccount state update explicitly (CI flake fix, 2026-10-21:
+    // on slow runners the pending setVault hadn't re-rendered, so the read
+    // below saw accounts.find(...) === undefined).
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
     await act(async () => {
       storeRef.current!.addContribution({
         accountId: accId,
@@ -366,6 +372,10 @@ describe('addContribution (real provider)', () => {
   it('zero amountBase is a safe no-op on capital but still logs the row', async () => {
     const { storeRef, unmount } = await unlockFreshVault('user-ai-zc');
     const accId = storeRef.current!.addAccount({ platformName: 'Z', accountType: 'cash' });
+    // Commit the addAccount state update explicitly (same CI flake as above).
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
     await act(async () => {
       storeRef.current!.addContribution({
         accountId: accId,

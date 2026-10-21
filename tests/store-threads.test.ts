@@ -530,12 +530,18 @@ describe('coach thread CRUD + migration (Task 002)', () => {
       const s = storeRef.current!;
       const tid = s.addCoachThread();
       await act(async () => {
-        await new Promise((r) => setTimeout(r, 10));
+        await new Promise((r) => setTimeout(r, 20));
       });
+      // The deprecated wrapper reads the CURRENT provider's
+      // activeCoachThread. After addCoachThread the provider has re-rendered
+      // and activeCoachThread === tid, so pushCoachMessage routes here.
+      // (If the provider hasn't re-rendered yet it's a no-op, and the
+      // assertion below would fail — hence the 20ms settle above.)
       await act(async () => {
         storeRef.current!.pushCoachMessage({ role: 'user', text: 'via deprecated wrapper', at: Date.now() });
       });
       const s2 = storeRef.current!;
+      expect(s2.activeCoachThread).toBe(tid);
       const t = s2.coachThreads!.find((x) => x.id === tid)!;
       expect(t.messages.length).toBe(1);
       expect(t.messages[0].text).toBe('via deprecated wrapper');
