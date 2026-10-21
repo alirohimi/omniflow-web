@@ -251,19 +251,28 @@ async function legacyCipherWithCoachLog(log: CoachMessage[]): Promise<VaultCiphe
 }
 
 describe('coach thread CRUD + migration (Task 002)', () => {
-  it('fresh vault auto-creates exactly one "New chat" thread', async () => {
+  it('fresh vault starts with no threads; first action lazily creates one', async () => {
     const { storeRef, unmount } = await unlockVault('user-thread-fresh');
     try {
-      const s = storeRef.current!;
+      let s = storeRef.current!;
       expect(s.status).toBe('unlocked');
-      // Migration ran on hydration: exactly one thread, titled "New chat".
-      expect(s.coachThreads).toHaveLength(1);
-      expect(s.coachThreads![0].title).toBe('New chat');
-      expect(s.coachThreads![0].messages).toHaveLength(0);
-      // activeCoachThread is the one thread's id.
-      expect(s.activeCoachThread).toBe(s.coachThreads![0].id);
-      // coachMessages is the active thread's (empty) message list.
+      // Lazy-creation invariant: a fresh vault (no legacy coachLog) has
+      // ZERO threads on hydration and NO empty-vault upsert. The first
+      // thread is created on user interaction. (See the vault-race
+      // "wipe guard" test — hydration must never persist an empty vault.)
+      expect(s.coachThreads).toHaveLength(0);
+      expect(s.activeCoachThread).toBe('');
       expect(s.coachMessages).toHaveLength(0);
+      // ...and addCoachThread creates + activates the first one.
+      const id = s.addCoachThread();
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 20));
+      });
+      s = storeRef.current!;
+      expect(s.coachThreads).toHaveLength(1);
+      expect(s.coachThreads![0].id).toBe(id);
+      expect(s.coachThreads![0].title).toBe('New chat');
+      expect(s.activeCoachThread).toBe(id);
     } finally {
       await unmount();
     }
@@ -296,10 +305,13 @@ describe('coach thread CRUD + migration (Task 002)', () => {
     const { storeRef, unmount } = await unlockVault('user-thread-rename');
     try {
       const s = storeRef.current!;
-      const tid = s.coachThreads![0].id;
-      const oldUpdated = s.coachThreads![0].updatedAt;
+      const tid = s.addCoachThread();
       await act(async () => {
-        s.renameCoachThread(tid, 'My portfolio review');
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      const oldUpdated = storeRef.current!.coachThreads!.find((x) => x.id === tid)!.updatedAt;
+      await act(async () => {
+        storeRef.current!.renameCoachThread(tid, 'My portfolio review');
       });
       const s2 = storeRef.current!;
       const t = s2.coachThreads!.find((x) => x.id === tid)!;
@@ -314,10 +326,13 @@ describe('coach thread CRUD + migration (Task 002)', () => {
     const { storeRef, unmount } = await unlockVault('user-thread-push');
     try {
       const s = storeRef.current!;
-      const tid = s.activeCoachThread;
+      const tid = s.addCoachThread();
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
       expect(tid).not.toBe('');
       await act(async () => {
-        s.pushCoachMessageTo(tid, {
+        storeRef.current!.pushCoachMessageTo(tid, {
           role: 'user',
           text: 'Where should I invest my next 10k?',
           at: Date.now(),
@@ -341,11 +356,14 @@ describe('coach thread CRUD + migration (Task 002)', () => {
     const { storeRef, unmount } = await unlockVault('user-thread-bound');
     try {
       const s = storeRef.current!;
-      const tid = s.activeCoachThread;
+      const tid = s.addCoachThread();
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
       // Push 201 messages; the oldest must be dropped.
       await act(async () => {
         for (let i = 0; i < 201; i++) {
-          s.pushCoachMessageTo(tid, { role: 'user', text: `msg ${i}`, at: Date.now() });
+          storeRef.current!.pushCoachMessageTo(tid, { role: 'user', text: `msg ${i}`, at: Date.now() });
         }
       });
       const s2 = storeRef.current!;
@@ -364,7 +382,8 @@ describe('coach thread CRUD + migration (Task 002)', () => {
     const { storeRef, unmount } = await unlockVault('user-thread-delete');
     try {
       const s = storeRef.current!;
-      // Create 2 extra threads so we have 3 total.
+      // Fresh vault has no threads (lazy creation): create 3.
+      const t1 = s.addCoachThread();
       const t2 = s.addCoachThread();
       const t3 = s.addCoachThread();
       await act(async () => {
@@ -372,6 +391,7 @@ describe('coach thread CRUD + migration (Task 002)', () => {
       });
       const s2 = storeRef.current!;
       expect(s2.coachThreads!.length).toBe(3);
+      expect([t1, t2, t3].every((x) => x)).toBe(true);
       const activeBefore = s2.activeCoachThread;
       expect(activeBefore).toBe(t3); // most recently added is active
       // Delete the active one -> provider must switch to another (or fresh).
@@ -393,9 +413,12 @@ describe('coach thread CRUD + migration (Task 002)', () => {
     const { storeRef, unmount } = await unlockVault('user-thread-clear');
     try {
       const s = storeRef.current!;
-      const tid = s.activeCoachThread;
+      const tid = s.addCoachThread();
       await act(async () => {
-        s.pushCoachMessageTo(tid, { role: 'user', text: 'hello', at: Date.now() });
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      await act(async () => {
+        storeRef.current!.pushCoachMessageTo(tid, { role: 'user', text: 'hello', at: Date.now() });
       });
       let s2 = storeRef.current!;
       expect(s2.coachMessages).toHaveLength(1);
@@ -505,9 +528,12 @@ describe('coach thread CRUD + migration (Task 002)', () => {
     const { storeRef, unmount } = await unlockVault('user-thread-depwrapper');
     try {
       const s = storeRef.current!;
-      const tid = s.activeCoachThread;
+      const tid = s.addCoachThread();
       await act(async () => {
-        s.pushCoachMessage({ role: 'user', text: 'via deprecated wrapper', at: Date.now() });
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      await act(async () => {
+        storeRef.current!.pushCoachMessage({ role: 'user', text: 'via deprecated wrapper', at: Date.now() });
       });
       const s2 = storeRef.current!;
       const t = s2.coachThreads!.find((x) => x.id === tid)!;

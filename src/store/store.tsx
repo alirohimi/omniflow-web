@@ -1467,77 +1467,74 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const newMsgId = () =>
     `cm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
-  /** Idempotent migration: if the vault has a legacy coachLog but no threads,
-   *  fold the log into one auto-titled thread and set it active. Runs only
-   *  when coachThreads is empty/absent, so a second run is a no-op. */
+  /** Idempotent migration: ONLY when the vault has a legacy coachLog but no
+   *  threads, fold the log into one auto-titled thread and set it active.
+   *  When there is nothing to migrate (no legacy log, no threads) this is a
+   *  pure no-op that returns the input blob UNCHANGED (same reference) so the
+   *  caller's `=== prev` check skips the persist — a fresh vault with no coach
+   *  history must never upsert an empty "New chat" thread (wipe-guard test).
+   *  The first real thread is created lazily on user interaction. */
   const migrateThreads = useCallback(
     (prev: VaultBlob): VaultBlob => {
       const threads = prev.coachThreads ?? [];
-      let next = prev;
-      if (threads.length === 0) {
-        const legacy = prev.coachLog ?? [];
-        if (legacy.length > 0) {
-          const first = legacy[0];
-          const title =
-            legacy.find((m) => m.role === 'user')?.text
-              ?.slice(0, 40) ?? 'Earlier conversation';
-          const ts = legacy[legacy.length - 1].at;
-          const migrated: CoachThread = {
-            id: newThreadId(),
-            title: title.length > 0 ? title : 'Earlier conversation',
-            createdAt: first.at,
-            updatedAt: ts,
-            messages: legacy,
-          };
-          next = {
-            ...prev,
-            coachThreads: [migrated],
-            activeCoachThread: migrated.id,
-          };
-        } else {
-          // No legacy log and no threads -> one fresh, empty thread.
-          const fresh: CoachThread = {
-            id: newThreadId(),
-            title: 'New chat',
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            messages: [],
-          };
-          next = { ...prev, coachThreads: [fresh], activeCoachThread: fresh.id };
-        }
+      const legacy = prev.coachLog ?? [];
+      if (threads.length === 0 && legacy.length > 0) {
+        // Legacy coachLog present, no threads yet: fold into one thread.
+        const first = legacy[0];
+        const title =
+          legacy.find((m) => m.role === 'user')?.text
+            ?.slice(0, 40) ?? 'Earlier conversation';
+        const ts = legacy[legacy.length - 1].at;
+        const migrated: CoachThread = {
+          id: newThreadId(),
+          title: title.length > 0 ? title : 'Earlier conversation',
+          createdAt: first.at,
+          updatedAt: ts,
+          messages: legacy,
+        };
+        return {
+          ...prev,
+          coachThreads: [migrated],
+          activeCoachThread: migrated.id,
+        };
       }
-      // Even when threads exist, ensure activeCoachThread points at a real id.
-      const activeId = next.activeCoachThread;
-      if (!activeId || !next.coachThreads!.some((t) => t.id === activeId)) {
-        const sorted = [...(next.coachThreads ?? [])].sort((a, b) => b.updatedAt - a.updatedAt);
-        const fallback = sorted[0];
-        if (fallback) {
-          next = { ...next, activeCoachThread: fallback.id };
-        } else {
-          const fresh: CoachThread = {
-            id: newThreadId(),
-            title: 'New chat',
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            messages: [],
-          };
-          next = { ...next, coachThreads: [fresh], activeCoachThread: fresh.id };
-        }
+      // Nothing to migrate (no legacy log, or threads already exist) — and
+      // ensure activeCoachThread, if set, still points at a real thread.
+      const activeId = prev.activeCoachThread;
+      if (
+        threads.length > 0 &&
+        activeId &&
+        threads.some((t) => t.id === activeId)
+      ) {
+        return prev; // valid: leave untouched (no persist)
       }
-      return next;
+      if (threads.length > 0) {
+        // activeCoachThread missing/invalid but threads exist: re-point to the
+        // most recently updated thread WITHOUT persisting a brand-new empty
+        // one. This is a cheap in-memory fix; the next user write persists it.
+        const sorted = [...threads].sort((a, b) => b.updatedAt - a.updatedAt);
+        return { ...prev, activeCoachThread: sorted[0].id };
+      }
+      return prev; // no legacy log, no threads: pure no-op
     },
     [],
   );
 
   // Run migration once on hydration (vault just decrypted) and whenever a
   // new vault is set. Cheap + idempotent.
+  //
+  // IMPORTANT: in-memory only — do NOT persist() here. The vault-race
+  // "wipe guard" invariant forbids an empty-vault upsert on hydration:
+  // a legacy vault (coachLog present, no coachThreads) or a brand-new
+  // vault must never be upserted just because we materialized threads.
+  // The migrated / lazily-created threads ride the NEXT real user write
+  // (addCoachThread / pushCoachMessageTo / ...), which persists the whole
+  // blob through the normal path. If the user never touches the coach,
+  // nothing is upserted and the legacy coachLog stays intact in the blob.
   useEffect(() => {
     setVault((prev) => {
       if (!prev) return prev;
-      const migrated = migrateThreads(prev);
-      if (migrated === prev) return prev;
-      void persist(migrated);
-      return migrated;
+      return migrateThreads(prev);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vault]);
