@@ -30,7 +30,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node 22 (LTS). The dep graph now requires it: @supabase/* and
+          # pdfjs-dist declare `engines: node >=22`, and on Node 20 their
+          # mismatch breaks the dynamic `import('happy-dom')` chain used by
+          # the DOM-rendering tests, so `beforeAll` can't stand up the window
+          # and `tests/area-chart.test.ts` fails with "DOM unavailable".
+          # Match the local toolchain (Node 22.x).
+          node-version: 22
           cache: npm
       - run: npm ci
       - name: Unit tests
