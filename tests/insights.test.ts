@@ -158,6 +158,21 @@ describe('cash-flow forecast', () => {
     expect(plan.firstNegativeMonth).toBeNull();
     expect(plan.points[5].balance).toBe(1000);
   });
+
+  it('start balance already negative -> firstNegativeMonth is null (already broke)', () => {
+    const plan = forecastCashFlow(-500, 6, [], [], 'MYR', NOW);
+    expect(plan.firstNegativeMonth).toBeNull();
+    // Balance just drifts further negative each month.
+    expect(plan.points[0].balance).toBe(-500);
+  });
+
+  it('start negative but recovering -> still null (never "first went" negative in-horizon)', () => {
+    // start -500, income 3000/mo -> net +3000/mo, recovers to positive by month 1.
+    const exps = [expense({ id: 'inc1', category: 'Income', baseAmount: 9000, timestamp: NOW - 30 * 86_400_000 })];
+    const plan = forecastCashFlow(-500, 6, exps, [], 'MYR', NOW);
+    expect(plan.firstNegativeMonth).toBeNull();
+    expect(plan.points[1].balance).toBeGreaterThan(0);
+  });
 });
 
 // ---- recurring detection --------------------------------------------------

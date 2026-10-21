@@ -1,12 +1,14 @@
 // ============================================================================
 // SpendingBreakdown — the "more breakdown detail for expenses" card.
 //
-// Renders an aggregated view of spend over a selectable window: total +
-// count, per-category distribution (bars + share %), payment-method split,
-// top merchants, a trailing 14-day trend strip, and (when set) per-category
-// budget-vs-cap performance. Purely presentational — all aggregation comes
-// from the `spendingBreakdown` engine so the math stays unit-testable here
-// and the component just draws it.
+// An expanded, at-a-glance expense analytics panel: period-over-period delta,
+// average-per-day, "biggest single cost" callout, an interactive category
+// donut, per-category drill-downs (the most recent transactions that make up
+// each category), payment-method split, top merchants, a trailing 14-day
+// trend strip, and (when set) per-category budget-vs-cap performance.
+//
+// All aggregation comes from the `spendingBreakdown` engine so the math
+// stays unit-testable; this component is pure presentation.
 // ============================================================================
 
 import { useMemo, useState } from 'react';
@@ -32,6 +34,27 @@ function windowFor(period: Period): SpendWindow {
 
 const catIcon = (name: string) => CATEGORIES.find((c) => c.name === name)?.icon ?? '🧾';
 
+/** Deterministic categorical palette for the donut + legend. Indexed by the
+ *  category's rank in the sorted `byCategory` list, so colors are stable
+ *  within a render pass. A 12-swatch wheel that stays legible on dark. */
+const PALETTE = [
+  '#6c8cff', '#4fd1c5', '#f5a97f', '#f78fb3', '#a78bfa',
+  '#7dd3fc', '#facc15', '#6ee7b7', '#f87171', '#c4b5fd',
+  '#fca5a5', '#5eead4',
+];
+const colorFor = (i: number) => PALETTE[i % PALETTE.length];
+
+const fmtDay = (t: number) =>
+  new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+/** One donut segment as a stroke-circle dash segment (the reliable technique
+ *  — no path trig, no degenerate-arc bug). See AllocationPie for rationale. */
+function donutDash(r: number, frac0: number, frac1: number) {
+  const C = 2 * Math.PI * r;
+  const len = (frac1 - frac0) * C;
+  return { dasharray: `${len} ${C - len}`, dashoffset: -frac0 * C };
+}
+
 export function SpendingBreakdown({
   expenses,
   budgets,
@@ -42,6 +65,7 @@ export function SpendingBreakdown({
   baseCurrency: string;
 }) {
   const [period, setPeriod] = useState<Period>('30d');
+  const [activeCat, setActiveCat] = useState<string | null>(null);
   const sym = currencyInfo(baseCurrency).symbol;
 
   const data = useMemo(
@@ -53,8 +77,32 @@ export function SpendingBreakdown({
     [expenses, budgets, period],
   );
 
+  // Reset the pinned category when the period changes (the slice set changes).
+  const selectPeriod = (p: Period) => {
+    setPeriod(p);
+    setActiveCat(null);
+  };
+
   const hasSpend = data.count > 0;
   const trendMax = Math.max(1, ...data.trend.map((d) => d.amount));
+
+  // Donut geometry + cumulative fractions over the (top-8) category buckets.
+  const R = 44;
+  const THICK = 16;
+  const cx = 60;
+  const cy = 60;
+  const donutCats = data.byCategory.slice(0, 8);
+  const donutTotal = donutCats.reduce((s, b) => s + b.amount, 0);
+  let cum = 0;
+  const segs = donutCats.map((b, i) => {
+    const f0 = donutTotal > 0 ? cum / donutTotal : 0;
+    cum += b.amount;
+    const f1 = donutTotal > 0 ? cum / donutTotal : 0;
+    return { bucket: b, i, f0, f1 };
+  });
+  const activeIdx = activeCat ? donutCats.findIndex((b) => b.key === activeCat) : -1;
+
+  const delta = data.deltaPct; // period-over-period change (null when no prior data)
 
   return (
     <div>
@@ -76,7 +124,7 @@ export function SpendingBreakdown({
             key={p.id}
             type="button"
             aria-pressed={period === p.id}
-            onClick={() => setPeriod(p.id)}
+            onClick={() => selectPeriod(p.id)}
           >
             {p.label}
           </button>
@@ -90,23 +138,151 @@ export function SpendingBreakdown({
         </div>
       ) : (
         <>
-          {/* ---- By category ---- */}
-          <div className="bd-h">By category</div>
-          {data.byCategory.map((b) => (
-            <div className="bd-cat" key={b.key}>
-              <div className="lbl">
-                <span className="ico">{catIcon(b.key)}</span>
-                <span className="nm">{b.key}</span>
-              </div>
-              <div className="amt">{sym}{b.amount.toFixed(0)}</div>
-              <div className="bd-track">
-                <i style={{ width: `${Math.round(b.share * 100)}%` }} />
-              </div>
-              <div className="bd-pct">
-                {Math.round(b.share * 100)}% · {b.count} {b.count === 1 ? 'item' : 'items'}
+          {/* ---- Hero: total + period-over-period delta + avg/day + biggest cost ---- */}
+          <div className="ex-hero">
+            <div className="ex-hero-main">
+              <div className="ex-lbl">Total spend</div>
+              <div className="ex-num">{sym}{data.total.toFixed(0)}</div>
+              <div className="ex-sub">
+                {delta != null ? (
+                  <span className={`ex-delta ${delta >= 0 ? 'up' : 'down'}`}>
+                    {delta >= 0 ? '▲' : '▼'} {Math.abs(delta * 100).toFixed(0)}% vs previous period
+                  </span>
+                ) : data.prevTotal == null ? (
+                  <span className="muted">no prior period to compare</span>
+                ) : (
+                  <span className="muted">new spending this period</span>
+                )}
               </div>
             </div>
-          ))}
+            <div className="ex-hero-stats">
+              <div className="ex-stat">
+                <div className="ex-stat-num">{sym}{data.avgPerDay.toFixed(0)}</div>
+                <div className="ex-stat-lbl">avg / day</div>
+              </div>
+              <div className="ex-stat">
+                <div className="ex-stat-num">{data.count}</div>
+                <div className="ex-stat-lbl">{data.count === 1 ? 'expense' : 'expenses'}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Biggest single cost callout — "what cost the most." */}
+          {data.largest && (
+            <div className="ex-callout" role="note">
+              <div className="ex-callout-ico">🔺</div>
+              <div className="ex-callout-body">
+                <div className="ex-callout-lbl">Largest single cost</div>
+                <div className="ex-callout-val">
+                  {data.largest.merchant || 'Unknown'}
+                  <span className="ex-callout-amt">{sym}{data.largest.amount.toFixed(0)}</span>
+                </div>
+                <div className="muted small">
+                  {data.largest.category} · {fmtDay(data.largest.timestamp)}
+                  {data.total > 0 ? ` · ${Math.round((data.largest.amount / data.total) * 100)}% of this window` : ''}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ---- By category: interactive donut + legend + drill-downs ---- */}
+          <div className="bd-h">By category</div>
+          <div className="ex-donut-wrap">
+            <div
+              className="ex-donut"
+              role="img"
+              aria-label={`Category spend: ${donutCats.map((b) => `${b.key} ${Math.round(b.share * 100)}%`).join(', ')}`}
+            >
+              <svg
+                width={120}
+                height={120}
+                viewBox="0 0 120 120"
+              >
+                {/* Quiet base ring so the donut reads as a ring, not a pie. */}
+                <circle cx={cx} cy={cy} r={R} fill="none" stroke="var(--line)" strokeWidth={THICK} opacity={0.5} />
+                {segs.map(({ bucket, i, f0, f1 }) => {
+                  const active = activeCat === bucket.key;
+                  const dimmed = activeCat != null && !active;
+                  const { dasharray, dashoffset } = donutDash(R, f0, f1);
+                  return (
+                    <circle
+                      key={bucket.key}
+                      cx={cx}
+                      cy={cy}
+                      r={R}
+                      fill="none"
+                      stroke={colorFor(i)}
+                      strokeWidth={active ? THICK + 4 : THICK}
+                      strokeDasharray={dasharray}
+                      strokeDashoffset={dashoffset}
+                      transform={`rotate(-90 ${cx} ${cy})`}
+                      opacity={dimmed ? 0.25 : 1}
+                      style={{ transition: 'opacity .18s, stroke-width .18s', cursor: 'pointer' }}
+                      onClick={() => setActiveCat((c) => (c === bucket.key ? null : bucket.key))}
+                    >
+                      <title>{`${bucket.key}: ${sym}${bucket.amount.toFixed(0)} (${Math.round(bucket.share * 100)}%)`}</title>
+                    </circle>
+                  );
+                })}
+                {/* Center hole + label. */}
+                <circle cx={cx} cy={cy} r={R - THICK / 2 - 2} fill="var(--card)" />
+                <text
+                  x={cx} y={cy - 2} textAnchor="middle"
+                  fill="var(--text)" fontWeight={750}
+                  style={{ fontSize: 13, fontVariantNumeric: 'tabular-nums' }}
+                >
+                  {activeIdx >= 0
+                    ? `${Math.round(donutCats[activeIdx].share * 100)}%`
+                    : `${sym}${data.total.toFixed(0)}`}
+                </text>
+                <text x={cx} y={cy + 12} textAnchor="middle" fill="var(--muted)" style={{ fontSize: 8 }}>
+                  {activeIdx >= 0 ? donutCats[activeIdx].key : 'total'}
+                </text>
+              </svg>
+            </div>
+
+            {/* Legend + expandable per-category drill-downs. */}
+            <div className="ex-drills">
+              {data.drills.map((d) => {
+                const rank = donutCats.findIndex((b) => b.key === d.category);
+                const color = rank >= 0 ? colorFor(rank) : colorFor(donutCats.length);
+                const isOpen = activeCat === d.category;
+                const showItems = isOpen ? d.items : [];
+                return (
+                  <div key={d.category} className={`ex-drill${isOpen ? ' on' : ''}`}>
+                    <button
+                      type="button"
+                      className="ex-drillbtn"
+                      aria-expanded={isOpen}
+                      onClick={() => setActiveCat((c) => (c === d.category ? null : d.category))}
+                    >
+                      <span className="ex-drill-dot" style={{ background: color }} />
+                      <span className="ex-drill-ico">{catIcon(d.category)}</span>
+                      <span className="ex-drill-name">{d.category}</span>
+                      <span className="ex-drill-pct">{Math.round(d.share * 100)}%</span>
+                      <span className="ex-drill-amt">{sym}{d.total.toFixed(0)}</span>
+                    </button>
+                    {isOpen && showItems.length > 0 && (
+                      <div className="ex-drill-items">
+                        {showItems.map((it) => (
+                          <div key={it.id} className="ex-drill-item">
+                            <span className="ex-drill-item-name">{it.merchant}</span>
+                            <span className="muted small" style={{ flex: 'none' }}>{fmtDay(it.timestamp)}</span>
+                            <span className="ex-drill-item-amt">{sym}{it.amount.toFixed(0)}</span>
+                          </div>
+                        ))}
+                        {d.items.length < 5 && (
+                          <div className="muted small" style={{ padding: '2px 0' }}>
+                            showing the {d.items.length} most recent in this category
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
 
           {/* ---- Trailing 14-day trend ---- */}
           <div className="bd-h">Last 14 days</div>

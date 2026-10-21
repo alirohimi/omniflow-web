@@ -83,10 +83,17 @@ export function forecastCashFlow(
   let balance = startBalance;
   let firstNegativeMonth: number | null = null;
   const monthMs = 30 * 86_400_000;
+  // `firstNegativeMonth` is only meaningful when the user STARTS solvent
+  // (startBalance >= 0) and then *crosses* into the red. If they start
+  // already negative, "months until broke" is undefined (they are already
+  // broke) so it stays null per the docstring contract.
+  const wasSolventAtStart = startBalance >= 0;
   for (let i = 1; i <= n; i++) {
     const at = now + (i - 0.5) * monthMs;
     balance += netPerMonth;
-    if (firstNegativeMonth === null && balance < 0) firstNegativeMonth = i;
+    if (wasSolventAtStart && firstNegativeMonth === null && balance < 0) {
+      firstNegativeMonth = i;
+    }
     points.push({
       at,
       label: new Date(at).toISOString().slice(0, 7),

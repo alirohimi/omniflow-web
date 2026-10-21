@@ -37,6 +37,28 @@ export interface TrendDay {
   amount: number; // base currency
 }
 
+/** One drill-down group: a category and its most-recent transactions. */
+export interface CategoryDrill {
+  category: string;
+  total: number;   // base currency, in-window
+  share: number;   // 0..1 of window total
+  items: {
+    id: string;
+    merchant: string;
+    amount: number; // base currency
+    timestamp: number;
+  }[];
+}
+
+/** The single largest outflow in the window (null when there is no spend). */
+export interface LargestSpend {
+  id: string;
+  merchant: string;
+  category: string;
+  amount: number; // base currency
+  timestamp: number;
+}
+
 export interface SpendingBreakdown {
   /** Total non-Income spend in the window, base currency. */
   total: number;
@@ -54,6 +76,23 @@ export interface SpendingBreakdown {
   trend: TrendDay[];
   /** Per-category budget performance when budgets are supplied. */
   budgets?: BudgetLine[];
+  /** Total spend in the *preceding* window of the same length (for a fair
+   *  period-over-period delta). Null when the window is `all` (no equal
+   *  preceding period) or when there is no spend data. */
+  prevTotal: number | null;
+  /** (total - prevTotal) / prevTotal when `prevTotal > 0`, else null.
+   *  Positive = spending up vs the prior period. */
+  deltaPct: number | null;
+  /** Number of days the window spans (for avg-per-day). 0 when `all`. */
+  windowDays: number;
+  /** Mean daily spend over the window (total / windowDays), 0 when no days. */
+  avgPerDay: number;
+  /** The single largest outflow in the window, or null when no spend. */
+  largest: LargestSpend | null;
+  /** Per-category drill-downs for the top N categories (by spend), each
+   *  with up to 5 of its most-recent transactions. Drives the expandable
+   *  "what's costing the most" detail list. */
+  drills: CategoryDrill[];
 }
 
 /** Local-midnight epoch-ms for `date` (the stable day boundary for grouping). */
@@ -147,6 +186,69 @@ export function spendingBreakdown(
     trend.push({ date: day, amount: trendByDay.get(day) ?? 0 });
   }
 
+  // ---- period-over-period delta: spend in the preceding window of the same
+  //      length. A fair "am I spending more/less than before?" read. 'all'
+  //      has no equal preceding period, so prevTotal stays null.
+  const isAll = 'all' in window;
+  const windowDays = isAll ? 0 : window.days;
+  let prevTotal: number | null = null;
+  if (!isAll) {
+    const prevEnd = cutoff;
+    const prevStart = prevEnd - window.days * 86_400_000;
+    let s = 0;
+    for (const e of expenses) {
+      if (!isSpend(e)) continue;
+      if (e.timestamp < prevStart || e.timestamp >= prevEnd) continue;
+      s += e.baseAmount;
+      s = Number.isFinite(s) ? s : 0;
+    }
+    prevTotal = s;
+  }
+  const deltaPct =
+    prevTotal != null && prevTotal > 0 && Number.isFinite(total)
+      ? (total - prevTotal) / prevTotal
+      : null;
+  const avgPerDay = windowDays > 0 ? total / windowDays : 0;
+
+  // ---- largest single outflow in the window -----------------------------
+  let largest: LargestSpend | null = null;
+  for (const e of inWindow) {
+    if (e.baseAmount <= 0) continue;
+    if (!largest || e.baseAmount > largest.amount) {
+      largest = {
+        id: e.id,
+        merchant: e.merchant,
+        category: e.category,
+        amount: e.baseAmount,
+        timestamp: e.timestamp,
+      };
+    }
+  }
+
+  // ---- per-category drill-downs (top N categories, up to 5 recent items) --
+  const drillLimit = Math.min(6, Math.max(1, byCategory.length));
+  const drills: CategoryDrill[] = [];
+  for (let i = 0; i < drillLimit; i++) {
+    const b = byCategory[i];
+    if (!b) break;
+    const items = inWindow
+      .filter((e) => e.category === b.key)
+      .sort((a, c) => c.timestamp - a.timestamp)
+      .slice(0, 5)
+      .map((e) => ({
+        id: e.id,
+        merchant: e.merchant,
+        amount: e.baseAmount,
+        timestamp: e.timestamp,
+      }));
+    drills.push({
+      category: b.key,
+      total: b.amount,
+      share: b.share,
+      items,
+    });
+  }
+
   // ---- budgets: cap-vs-actual for the trailing month (the engine's window)
   const budgets: BudgetLine[] | undefined = opts.budgets?.length
     ? budgetLineAll(opts.budgets, expenses, now)
@@ -160,6 +262,12 @@ export function spendingBreakdown(
     topMerchants,
     trend,
     budgets,
+    prevTotal,
+    deltaPct,
+    windowDays,
+    avgPerDay,
+    largest,
+    drills,
   };
 }
 
