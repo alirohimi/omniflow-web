@@ -24,23 +24,46 @@ export interface ForecastResult {
   /** Months until the running balance first turns negative (null if it never
    *  does within the horizon, or the starting balance is already negative). */
   firstNegativeMonth: number | null;
-  /** Trailing-90-day derived monthly income / expense rates (base currency). */
+  /** Trailing-30-day derived monthly income / expense rates (base currency).
+   *  income = logged income over the last 30 days; spend = recurring-equiv
+   *  when any active recurring exists, else the 30-day spend total. Both are
+   *  the trailing observed rates, NOT a salary figure. */
   monthlyIncome: number;
   monthlyExpenses: number;
   netPerMonth: number;
+  /** How many income rows fed `monthlyIncome` over the trailing window.
+   *  A near-zero income with incomeCount = 0 means "not logged", not
+   *  "you earn nothing" — the UI labels it accordingly. */
+  incomeRowCount: number;
+  /** True when no income rows were logged in the window — the monthly income
+   *  rate is a floor (0), not a real salary signal. */
+  incomeLogged: boolean;
 }
 
+/**
+ * Trailing-window income + spend totals. Income rows are tracked in the
+ * SAME `Expense` array as spend (category === 'Income'), but they are
+ * CREDITS, not outflows — every spend figure in the app excludes them,
+ * so income never inflates a spend/pace/budget number. The forecast just
+ * needs the two totals separately.
+ *
+ * `days` is the trailing window (e.g. 30 to match the "pace" figure the
+ * user actually trusts). Callers decide how to annualise — do NOT bake a
+ * "÷3 = monthly" assumption in here, that's what made the old 90-day÷3
+ * rate read as a fake monthly figure.
+ */
 function ratesPerMonth(expenses: Expense[], _baseCurrency: string, days: number, now: number) {
   const cutoff = now - days * 86_400_000;
   let sum = 0;
   let income = 0;
+  let incomeCount = 0;
   for (const e of expenses) {
     if (e.timestamp < cutoff) continue;
     const a = Number.isFinite(e.baseAmount) ? e.baseAmount : 0;
-    if (e.category === 'Income') income += a;
+    if (e.category === 'Income') { income += a; incomeCount += 1; }
     else sum += a;
   }
-  return { income, spend: sum };
+  return { income, spend: sum, incomeCount };
 }
 
 /**
@@ -61,8 +84,12 @@ export function forecastCashFlow(
   now: number,
 ): ForecastResult {
   const n = Math.max(1, Math.floor(months));
-  const trailing = ratesPerMonth(expenses, baseCurrency, 90, now);
-  const monthlyIncome = trailing.income / 3; // 90d -> ~3 months
+  // Match the "pace" figure the user trusts: a 30-day trailing window, not a
+  // noisy 90-day÷3 rate. Income and spend are the observed trailing-30-day
+  // totals; when recurring bills exist, the expense rate uses their
+  // monthly-equivalent instead (a more faithful "known bills" rate).
+  const trailing = ratesPerMonth(expenses, baseCurrency, 30, now);
+  const monthlyIncome = trailing.income; // logged income, last 30 days
   // Use recurring monthly-equivalent when any active recurring exists; it is
   // a more faithful "known bills" rate than trailing spending.
   let monthlyExpenses: number;
@@ -75,7 +102,7 @@ export function forecastCashFlow(
     }
     monthlyExpenses = t;
   } else {
-    monthlyExpenses = trailing.spend / 3;
+    monthlyExpenses = trailing.spend; // observed spend, last 30 days
   }
   const netPerMonth = monthlyIncome - monthlyExpenses;
 
@@ -102,5 +129,13 @@ export function forecastCashFlow(
       expenses: monthlyExpenses,
     });
   }
-  return { points, firstNegativeMonth, monthlyIncome, monthlyExpenses, netPerMonth };
+  return {
+    points,
+    firstNegativeMonth,
+    monthlyIncome,
+    monthlyExpenses,
+    netPerMonth,
+    incomeRowCount: trailing.incomeCount,
+    incomeLogged: trailing.incomeCount > 0,
+  };
 }

@@ -173,6 +173,31 @@ describe('cash-flow forecast', () => {
     expect(plan.firstNegativeMonth).toBeNull();
     expect(plan.points[1].balance).toBeGreaterThan(0);
   });
+
+  it('uses a 30-day trailing window (matches the pace figure) and flags un-logged income', () => {
+    // A 90-day window would have ÷3'd the totals; now income = raw last-30d
+    // logged total. An income row at NOW-45d must be OUTSIDE the window.
+    const day = 86_400_000;
+    const exps = [
+      expense({ id: 'in-old', category: 'Income', baseAmount: 500, timestamp: NOW - 45 * day }),
+      expense({ id: 'in-new', category: 'Income', baseAmount: 300, timestamp: NOW - 10 * day }),
+      expense({ id: 'sp-new', category: 'Food', baseAmount: 800, timestamp: NOW - 10 * day }),
+    ];
+    const plan = forecastCashFlow(0, 3, exps, [], 'MYR', NOW);
+    // Only the 10d-ago income is in the window -> 300, not 800/3.
+    expect(plan.monthlyIncome).toBe(300);
+    expect(plan.incomeRowCount).toBe(1);
+    expect(plan.incomeLogged).toBe(true);
+    // Spend rate is the raw 30-day total, not ÷3.
+    expect(plan.monthlyExpenses).toBe(800);
+  });
+
+  it('marks incomeLogged=false when no income rows are in the window (data-entry gap, not zero salary)', () => {
+    const plan = forecastCashFlow(0, 3, [expense({ id: 'sp', category: 'Food', baseAmount: 400 })], [], 'MYR', NOW);
+    expect(plan.monthlyIncome).toBe(0);
+    expect(plan.incomeRowCount).toBe(0);
+    expect(plan.incomeLogged).toBe(false);
+  });
 });
 
 // ---- recurring detection --------------------------------------------------

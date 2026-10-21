@@ -353,7 +353,11 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
                         : `Holds ${forecast.points.length} mo at current pace`}
                 </div>
                 <div className="hero-sub">
-                  <span className="muted">income {sym}{forecast.monthlyIncome.toFixed(0)}/mo · spend {sym}{forecast.monthlyExpenses.toFixed(0)}/mo</span>
+                  <span className="muted">
+                    income {sym}{forecast.monthlyIncome.toFixed(0)}/mo
+                    {!forecast.incomeLogged ? ' (none logged)' : ''}
+                    {' · '}spend {sym}{forecast.monthlyExpenses.toFixed(0)}/mo
+                  </span>
                 </div>
               </div>
             </div>

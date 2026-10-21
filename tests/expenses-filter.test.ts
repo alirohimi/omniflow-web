@@ -39,6 +39,15 @@ describe('Task 003: Expenses History — show-all + filter & search', () => {
     expect(viewSrc).toMatch(/className="hist-clear"/);
   });
 
+  it('defaults the History list to outflows only (this is the Expenses tab; income is opt-in)', () => {
+    // The type filter RESTING state is 'expense', not 'all' — income rows
+    // (which live in the same vault.expenses array as outflows) must not be
+    // in the list by default on the Expenses tab.
+    expect(viewSrc).toMatch(/useState<HistType>\('expense'\)/);
+    // "Clear filters" restores the resting state (expense), never a raw 'all'.
+    expect(viewSrc).toMatch(/clearFilters[\s\S]*?setTypeF\('expense'\)/);
+  });
+
   it('adds a themed search box that matches merchant, note, category, payment method and currency', () => {
     expect(viewSrc).toContain('setQ');
     // Case-insensitive substring match across the searchable fields.

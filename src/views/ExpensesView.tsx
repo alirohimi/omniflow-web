@@ -128,7 +128,10 @@ export function ExpensesView() {
   const [q, setQ] = useState('');
   const [catF, setCatF] = useState<string>('all'); // category name or 'all'
   const [rangeF, setRangeF] = useState<HistRange>('all');
-  const [typeF, setTypeF] = useState<HistType>('all');
+  // Default to outflows only: this IS the "Expenses" tab, so income rows
+  // (credits, same array) stay out of the list until the user explicitly
+  // picks "Income" or "All" in the type filter.
+  const [typeF, setTypeF] = useState<HistType>('expense');
   // Collapsible filter bar: closed by default on mobile, force-open whenever
   // a filter/search is active (a closed bar with an active filter would be
   // confusing — the "Showing X of Y" + "clear filters" already signals state).
@@ -168,7 +171,7 @@ export function ExpensesView() {
     [vault.expenses],
   );
 
-  const clearFilters = () => { setQ(''); setCatF('all'); setRangeF('all'); setTypeF('all'); };
+  const clearFilters = () => { setQ(''); setCatF('all'); setRangeF('all'); setTypeF('expense'); };
 
   // Drives the "Select all" toolbar button state (check + "All selected").
   // Operates on the VISIBLE (filtered) set, so bulk-delete respects filters.
@@ -791,7 +794,9 @@ export function ExpensesView() {
       <h2 className="section-title">History</h2>
       <div className="row muted small" style={{ marginBottom: 6, justifyContent: 'space-between', alignItems: 'center' }}>
         <span>
-          {filtersActive ? `Showing ${visible.length} of ${sorted.length}` : `${sorted.length} total`}
+          {filtersActive
+            ? `Showing ${visible.length} of ${sorted.length}`
+            : `${sorted.length} total`}
           {filtersActive ? <button type="button" className="hist-clear" onClick={clearFilters}> clear filters</button> : null}
         </span>
         <button
