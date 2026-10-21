@@ -41,16 +41,21 @@ jobs:
       - run: npm ci
       - name: Unit tests
         # Default thread pool + raised Node heap limit. On GH's ubuntu-latest
-        # the 16-file suite (heavy React + @supabase/supabase-js graph loaded
+        # the 20-file suite (heavy React + @supabase/supabase-js graph loaded
         # per file) can OOM a worker at Node's default ~4 GB old-space limit
         # ("JavaScript heap out of memory" -> tinypool 'Worker exited
         # unexpectedly', exit 1) even though every test passes. Bump the heap
         # so no worker hits the limit. The async vault tests (store-extended,
-        # vault-race) use real timers + polling; 30s testTimeout absorbs
-        # slow-runner slack.
+        # vault-race, store-threads) use real timers + polling; 30s testTimeout
+        # absorbs slow-runner slack.
         env:
-          NODE_OPTIONS: --max-old-space-size=6144
-        run: npx vitest run --testTimeout=30000
+          NODE_OPTIONS: --max-old-space-size=8192
+        # --pool=forks + --poolOptions.forks.maxForks=2 bounds parallelism:
+        # each worker loads the full React+supabase graph, and with the
+        # suite now at 20 files the default pool (one worker per CPU)
+        # spawns too many heavy workers for a 4-core runner even at 8 GB.
+        # Two forked workers keeps memory flat while still parallelizing.
+        run: npx vitest run --testTimeout=30000 --pool=forks --poolOptions.forks.maxForks=2
       - name: Typecheck + build
         env:
           BASE_URL: ${{ env.PAGES_BASE }}
