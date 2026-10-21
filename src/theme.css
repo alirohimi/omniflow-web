@@ -1104,3 +1104,116 @@ body { overflow-x: hidden; }
 @media (pointer: fine) {
   .dep-edit { min-height: 0; }
 }
+
+/* ============================================================================
+   Portfolio hero band + allocation chart (Investments / Portfolio menu).
+   A calm, at-a-glance redesign: big total value + tinted P&L delta, a 3-cell
+   stat strip, and a single interactive allocation view (donut + stacked bar
+   + tappable breakdown rows). Glassmorphism-native.
+   ========================================================================== */
+
+/* Hero band: label + big number + delta, with a stats strip to the right. */
+.pf-hero { display: flex; align-items: stretch; gap: 16px; flex-wrap: wrap; }
+.pf-hero-main { flex: 1; min-width: 190px; display: flex; flex-direction: column; justify-content: center; }
+.pf-hero-lbl {
+  font-size: 11px; font-weight: 650; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .7px;
+}
+.pf-hero-num {
+  font-family: var(--font-display);
+  font-size: 40px; line-height: 1.05; font-weight: 780; letter-spacing: -1.4px;
+  margin-top: 6px; font-variant-numeric: tabular-nums;
+}
+.pf-hero-delta { margin-top: 10px; }
+.pf-delta {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums;
+  padding: 3px 9px; border-radius: 999px; line-height: 1.3;
+}
+.pf-delta.up { color: var(--good); background: var(--good-soft); }
+.pf-delta.down { color: var(--bad, #ff6b6b); background: rgba(255,107,107,.14); }
+.pf-delta-pct { font-weight: 650; opacity: .85; font-size: 12px; }
+
+.pf-hero-stats {
+  display: grid; grid-template-columns: repeat(3, minmax(56px, 1fr));
+  gap: 8px; align-content: center; min-width: 168px;
+}
+.pf-stat {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 8px; text-align: center;
+  transition: border-color .15s, background .15s;
+}
+.pf-stat:hover { background: var(--bg-3); border-color: var(--line-2); }
+.pf-stat-num {
+  font-family: var(--font-display);
+  font-size: 19px; font-weight: 750; line-height: 1.1;
+  font-variant-numeric: tabular-nums; letter-spacing: -0.3px;
+}
+.pf-stat-lbl {
+  font-size: 9.5px; font-weight: 650; color: var(--faint);
+  text-transform: uppercase; letter-spacing: .5px; margin-top: 4px;
+}
+
+/* ---------- Allocation chart (donut + bar + interactive rows) ---------- */
+.alloc { display: flex; flex-direction: column; gap: 14px; }
+.alloc-top { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.alloc-donut { flex-shrink: 0; }
+
+/* Generous stacked bar — the primary at-a-glance read. Segments separated
+   by a hairline gap, with a soft top-down gradient for depth. */
+.alloc-bar {
+  flex: 1; min-width: 190px;
+  display: flex; gap: 3px;
+  height: 26px; align-items: stretch;
+}
+.alloc-seg {
+  border-radius: 6px;
+  transition: opacity .18s, transform .12s, filter .18s;
+  cursor: pointer;
+  min-width: 2px;
+}
+.alloc-seg:hover { filter: brightness(1.12); }
+.alloc-seg.on { transform: scaleY(1.08); box-shadow: 0 0 0 1.5px rgba(255,255,255,.35), 0 3px 10px rgba(0,0,0,.35); }
+
+/* Interactive breakdown rows: dot, name, % and value. Tap to pin a slice. */
+.alloc-list { display: flex; flex-direction: column; gap: 2px; }
+.alloc-row { border-radius: var(--radius-sm); transition: background .15s; }
+.alloc-row.on { background: var(--bg-2); }
+.alloc-rowbtn {
+  width: 100%; display: flex; align-items: center; gap: 10px;
+  min-height: 44px; padding: 8px 10px;
+  border: 0; background: none; font: inherit; color: var(--text);
+  cursor: pointer; border-radius: var(--radius-sm);
+  -webkit-tap-highlight-color: transparent;
+}
+.alloc-rowbtn:active { background: var(--bg-3); }
+.alloc-dot { width: 12px; height: 12px; border-radius: 4px; flex: none; }
+.alloc-name {
+  flex: 1; font-size: 13.5px; font-weight: 620; text-align: left;
+}
+.alloc-pct {
+  font-size: 13px; font-weight: 700; color: var(--text-2);
+  min-width: 48px; text-align: right; font-variant-numeric: tabular-nums;
+}
+.alloc-val {
+  font-size: 13px; color: var(--muted); min-width: 84px; text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* Drill-down sub-rows inside an active class row. */
+.alloc-sub { padding: 0 10px 10px 32px; display: flex; flex-direction: column; gap: 2px; }
+.alloc-subrow {
+  display: flex; justify-content: space-between; gap: 10px;
+  font-size: 12px; padding: 3px 0; color: var(--text-2);
+}
+.alloc-foot {
+  font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 520px) {
+  .pf-hero { flex-direction: column; }
+  .pf-hero-stats { width: 100%; min-width: 0; }
+  .pf-hero-num { font-size: 34px; }
+  .alloc-val { min-width: 72px; font-size: 12px; }
+}

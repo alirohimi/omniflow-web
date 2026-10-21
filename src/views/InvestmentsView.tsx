@@ -3,8 +3,7 @@
 // Grouped by platformName, with live quotes and FX-converted base values.
 // ============================================================================
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
 import { useToast } from '../components/Toast';
@@ -14,7 +13,6 @@ import { Modal } from '../components/Sheet';
 import { EmergencyPanel } from './EmergencyPanel';
 import { SavingsGoalsPanel } from './SavingsGoalsPanel';
 import { AutoInvestPanel, ContributionPanel } from './AutoInvestPanel';
-import { AllocationBar } from '../components/AllocationBar';
 import { AllocationPie, type PieSlice } from '../components/AllocationPie';
 import { colorForClass } from '../components/AllocationPie';
 import { fxService } from '../services';
@@ -346,28 +344,42 @@ export function InvestmentsView() {
     <>
       <h2 className="section-title">Portfolio</h2>
       <div className="card">
-        <div className="kpi" style={{ marginBottom: 4 }}>
-          <div className="cell">
-            <div className="num">{formatMoney(live.portfolio?.totalValueBase ?? 0, base)}</div>
-            <div className="lbl">Value ({base})</div>
-          </div>
-          <div className="cell">
-            <div className="num">
+        {/* Hero band: big number + tinted delta + a 3-cell stats strip. */}
+        <div className="pf-hero">
+          <div className="pf-hero-main">
+            <div className="pf-hero-lbl">Total value · {base}</div>
+            <div className="pf-hero-num">{formatMoney(live.portfolio?.totalValueBase ?? 0, base)}</div>
+            <div className="pf-hero-delta">
               {pnl && pnl.totalPnlBase != null ? (
-                <span className={pnl.totalPnlBase >= 0 ? 'pos' : 'neg'}>
-                  {pnl.totalPnlBase >= 0 ? '+' : ''}{formatMoney(pnl.totalPnlBase, base)}
+                <span className={`pf-delta ${pnl.totalPnlBase >= 0 ? 'up' : 'down'}`}>
+                  {pnl.totalPnlBase >= 0 ? '▲' : '▼'}{' '}
+                  {Math.abs(pnl.totalPnlBase) > 0
+                    ? `${pnl.totalPnlBase >= 0 ? '+' : '−'}${formatMoney(Math.abs(pnl.totalPnlBase), base)}`
+                    : 'Breakeven'}
+                  {pnl.totalReturnPct != null ? (
+                    <span className="pf-delta-pct">
+                      {pnl.totalReturnPct >= 0 ? '+' : '−'}{Math.abs(pnl.totalReturnPct).toFixed(1)}%
+                    </span>
+                  ) : null}
                 </span>
               ) : (
-                <span className="muted">—</span>
+                <span className="muted small">No starting capital recorded yet</span>
               )}
             </div>
-            <div className="lbl">
-              P&L on capital{pnl?.totalReturnPct != null ? ` (${pnl.totalReturnPct >= 0 ? '+' : ''}${pnl.totalReturnPct.toFixed(1)}%)` : ''}
-            </div>
           </div>
-          <div className="cell">
-            <div className="num">{vault.holdings.length}</div>
-            <div className="lbl">Holdings</div>
+          <div className="pf-hero-stats">
+            <div className="pf-stat">
+              <div className="pf-stat-num">{vault.holdings.length}</div>
+              <div className="pf-stat-lbl">Holdings</div>
+            </div>
+            <div className="pf-stat">
+              <div className="pf-stat-num">{live.portfolio?.liveQuoteCount ?? 0}</div>
+              <div className="pf-stat-lbl">Live quotes</div>
+            </div>
+            <div className="pf-stat">
+              <div className="pf-stat-num">{vault.accounts.length}</div>
+              <div className="pf-stat-lbl">Accounts</div>
+            </div>
           </div>
         </div>
 
@@ -388,26 +400,13 @@ export function InvestmentsView() {
           </div>
         )}
 
-        {/* Allocation by asset class — stacked bar + legend. One chart for
-            the whole portfolio, driven by the same byAssetClass aggregate
-            the KPI panel uses (NaN-safe, uncounted excluded). */}
-        {live.portfolio && live.portfolio.byAssetClass.length > 0 ? (
-          <div style={{ marginTop: 14 }}>
-            <div className="small muted" style={{ marginBottom: 6 }}>Allocation by class</div>
-            <AllocationBar
-              items={live.portfolio.byAssetClass}
-              total={live.portfolio.totalValueBase}
-              base={base}
-            />
-          </div>
-        ) : null}
-
-        {/* Detail pie: donut with drill-down. Toggle between per-class and
-            per-holding slices; tap a class slice to see its holdings. */}
+        {/* Allocation by asset class — the single hero chart of the page:
+            a smooth segmented bar with an interactive per-class breakdown.
+            (Replaces the old stacked bar + separate donut pair.) */}
         {pieSlices.length > 0 ? (
-          <div style={{ marginTop: 14 }}>
-            <div className="row" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
-              <div className="small muted">Detail breakdown</div>
+          <div className="pf-breakdown" style={{ marginTop: 16 }}>
+            <div className="pf-breakdown-head">
+              <div className="small muted" style={{ marginBottom: 6 }}>Your mix</div>
               <div className="row" style={{ gap: 4 }}>
                 <button
                   className={`chip sm${activePie === 'class' ? ' on' : ''}`}

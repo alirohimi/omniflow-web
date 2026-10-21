@@ -65,9 +65,12 @@ function smoothPath(pts: [number, number][], tension = 0.8): string {
 }
 
 export function AreaChart({ points, fmt, fmtDate, height = 150 }: AreaChartProps) {
+  // Default: the smallest (tightest) window that still holds >=2 points, so a
+  // fresh vault with a few days of data opens zoomed in, not flat. Computed
+  // from the CURRENT points on mount; if the data later shifts it simply
+  // re-renders under whatever window the user has selected (no locked-in
+  // stale default).
   const [period, setPeriod] = useState<string>(() => {
-    // Default: the smallest (tightest) window that still holds >=2 points,
-    // so fresh vaults with a few days of data open zoomed in, not flat.
     const n = points.length;
     if (n < 2) return 'all';
     const now = points[n - 1]?.at ?? Date.now();
@@ -85,16 +88,23 @@ export function AreaChart({ points, fmt, fmtDate, height = 150 }: AreaChartProps
   const PAD_L = 8, PAD_R = 8, PAD_T = 10, PAD_B = 18;
 
   // ---- visible window (respect the selected period tab) -------------------
+  // Strictly filter to the chosen window: 7d/30d/90d show ONLY points from
+  // the last N days; "All" shows everything. No silent fallback to the full
+  // series — a tab must reflect its own window (a sparse window may show just
+  // 1 point, which renders as a single marker rather than pretending to be
+  // the whole history).
   const visible = useMemo(() => {
     const def = PERIODS.find((p) => p.key === period);
     const days = def?.days;
     if (days == null) return points;
     const now = points[points.length - 1]?.at ?? Date.now();
-    const win = points.filter((p) => p.at >= now - days * 86_400_000);
-    return win.length >= 2 ? win : points;
+    return points.filter((p) => p.at >= now - days * 86_400_000);
   }, [points, period]);
 
   // ---- scale + geometry ----------------------------------------------------
+  // A window with <2 points can't form a line, so the caller renders the
+  // period-aware hint instead (never a degenerate single-point SVG). A flat
+  // series (range 0) pads so the line sits centered, not on an edge.
   const geo = useMemo(() => {
     if (visible.length < 2) return null;
     const t0 = visible[0].at,
@@ -103,8 +113,6 @@ export function AreaChart({ points, fmt, fmtDate, height = 150 }: AreaChartProps
     const lo = Math.min(...visible.map((p) => p.value));
     const hi = Math.max(...visible.map((p) => p.value));
     const range = hi - lo;
-    // A flat series (range 0) would collapse onto the top edge; pad so the
-    // line sits centered instead.
     const pad = range === 0 ? Math.max(1, Math.abs(hi) * 0.1) : range * 0.15;
     const min = lo - pad,
       max = hi + pad;
@@ -132,9 +140,23 @@ export function AreaChart({ points, fmt, fmtDate, height = 150 }: AreaChartProps
   };
 
   if (!geo) {
+    // Fewer than 2 points in the selected window. This happens when the user
+    // picks a tight period (e.g. 7d) but net worth was only captured sparsely.
+    // Show a period-aware hint rather than silently pretending to be "All".
+    const def = PERIODS.find((p) => p.key === period);
+    if (period === 'all' || !def) {
+      return (
+        <div className="muted small" style={{ padding: '14px 0', textAlign: 'center' }}>
+          {visible.length === 0
+            ? 'Not enough history yet — net worth is captured each time you visit Home.'
+            : 'Only 1 capture so far — net worth is recorded each time you visit Home.'}
+        </div>
+      );
+    }
     return (
       <div className="muted small" style={{ padding: '14px 0', textAlign: 'center' }}>
-        Not enough history yet — net worth is captured each time you visit Home.
+        Only {visible.length} capture{visible.length === 1 ? '' : 's'} in the last {def.label}.
+        Pick a wider period — net worth is recorded each time you visit Home.
       </div>
     );
   }
@@ -148,6 +170,7 @@ export function AreaChart({ points, fmt, fmtDate, height = 150 }: AreaChartProps
   const ap = activeIdx != null ? geo.pts[activeIdx] : null;
   const last = geo.pts[geo.pts.length - 1];
   const lastPoint = visible[visible.length - 1];
+  const periodLabel = PERIODS.find((p) => p.key === period)?.label ?? 'All';
 
   return (
     <div className="area-chart">
@@ -161,7 +184,9 @@ export function AreaChart({ points, fmt, fmtDate, height = 150 }: AreaChartProps
               days == null
                 ? points.length
                 : points.filter((x) => x.at >= (points[points.length - 1]?.at ?? 0) - days * 86_400_000).length;
-            const usable = count >= 2;
+            // A tab is usable when its window holds at least one capture.
+            // "All" is always usable when the chart is shown.
+            const usable = days == null ? points.length >= 1 : count >= 1;
             return (
               <button
                 key={p.key}
@@ -180,7 +205,7 @@ export function AreaChart({ points, fmt, fmtDate, height = 150 }: AreaChartProps
           })}
         </div>
         <div className="area-now">
-          <span className="area-now-lbl">Now</span>
+          <span className="area-now-lbl">{periodLabel === 'All' ? 'Now' : `Last ${periodLabel}`}</span>
           <span className="area-now-val">{fmt(lastPoint?.value ?? 0)}</span>
         </div>
       </div>
@@ -191,7 +216,7 @@ export function AreaChart({ points, fmt, fmtDate, height = 150 }: AreaChartProps
         viewBox={`0 0 ${W} ${height}`}
         preserveAspectRatio="none"
         role="img"
-        aria-label={`Net worth ${PERIODS.find((p) => p.key === period)?.label ?? 'All'}: ${fmt(visible[0].value)} to ${fmt(visible[visible.length - 1].value)}`}
+        aria-label={`Net worth ${periodLabel}: ${fmt(visible[0].value)} to ${fmt(visible[visible.length - 1].value)}`}
         onMouseMove={(e) => setActive(pickNearest(e.clientX, e.currentTarget))}
         onMouseLeave={() => setActive(null)}
         onTouchStart={(e) => {

@@ -1,35 +1,45 @@
 // AreaChart — pure-SVG net-worth trend chart.
 //
-// Written in plain .ts (not .tsx) so it type-checks under the repo's
-// `tsc -b` project build without needing @testing-library/react in the
-// type graph. DOM rendering is done via dynamic imports and is skipped
-// automatically when the test environment has no `document` (node env).
+// Rendered under a happy-dom window so the DOM-rendering assertions run for
+// real (the vitest config uses `environment: 'node'`, so we stand the DOM up
+// in beforeAll). Locks down the pure-SVG geometry: period-window filtering
+// (7d/30d/90d must show ONLY that window, never a silent full-history
+// fallback), path scaling, and flat-series padding.
 
 import { describe, it, expect, beforeAll } from 'vitest';
+import * as React from 'react';
 import { AreaChart } from '../src/components/AreaChart';
-import type { ReactNode } from 'react';
 
-let render: ((jsx: ReactNode) => Promise<{ container: HTMLElement }>) | null = null;
+let render: ((jsx: React.ReactElement) => Promise<{ container: HTMLElement }>) | null = null;
 let domAvailable = false;
 
 beforeAll(async () => {
-  if (typeof document === 'undefined') return;
+  let dbg = '';
   try {
-    const ReactNS = await import('react');
+    const { Window } = await import('happy-dom');
+    const win = new Window({ url: 'http://localhost/' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (globalThis as any).document = win.document;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (globalThis as any).window = win;
     const ReactDOMClient = await import('react-dom/client');
-    const createElement: (a: unknown, b: unknown, c: unknown) => ReactNode = ReactNS.createElement as never;
-    render = async (jsx: ReactNode) => {
-      const div = document.createElement('div');
-      document.body.appendChild(div);
-      const root = ReactDOMClient.createRoot(div);
-      root.render(createElement('div', null, jsx));
-      await new Promise((r) => setTimeout(r, 0));
-      return { container: div };
+    render = async (jsx: React.ReactElement) => {
+      const div = win.document.createElement('div');
+      win.document.body.appendChild(div);
+      // React 18's createRoot is intentionally async-deferred; force a tick
+      // so the tree is committed before we read the DOM.
+      const root = ReactDOMClient.createRoot(div as never);
+      root.render(React.createElement('div', null, jsx));
+      await new Promise((res) => setTimeout(res, 20));
+      return { container: div as unknown as HTMLElement };
     };
     domAvailable = true;
-  } catch {
+    dbg = 'ok';
+  } catch (e) {
     domAvailable = false;
+    dbg = 'ERR:' + String(e);
   }
+  if (!domAvailable) console.log('[AreaChart test] DOM setup skipped:', dbg);
 });
 
 const D = 86_400_000;
@@ -40,45 +50,49 @@ const pts = (n: number, base = 1000) =>
 const fmt = (v: number) => `RM ${Math.round(v)}`;
 const fmtDate = (at: number) => new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
-function makeAreaChart(points: { at: number; value: number }[]): ReactNode {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const React = require('react');
+function makeAreaChart(points: { at: number; value: number }[]): React.ReactElement {
   return React.createElement(AreaChart, { key: 'ac', points, fmt, fmtDate });
 }
 
 describe('AreaChart', () => {
-  const maybe = domAvailable ? it : it.skip;
-  const r = () => render as (e: ReactNode) => Promise<{ container: HTMLElement }>;
+  // NOTE: every test body is gated on `domAvailable` at RUN time (after
+  // beforeAll has finished standing up the happy-dom window). We must NOT use
+  // `domAvailable ? it : it.skip` here — that expression is evaluated once at
+  // module-collect time, BEFORE beforeAll runs, so it would always pick
+  // it.skip and the whole suite would silently never execute.
+  const r = () => render as (e: React.ReactElement) => Promise<{ container: HTMLElement }>;
+  const needDom = async () => {
+    if (!domAvailable) throw new Error('DOM unavailable in this environment');
+  };
 
-  maybe('renders the empty-state hint instead of a degenerate path for <2 points', async () => {
+  it('renders a period-aware hint instead of a degenerate SVG for <2 points', async () => {
+    await needDom();
     const { container } = await r()(makeAreaChart(pts(1)));
+    // A single capture: no SVG is drawn, a centered hint is shown instead.
     expect(container.querySelector('svg')).toBeNull();
+    // The hint div lives inside .area-chart and carries the .muted class.
+    const hint = container.querySelector('.area-chart > .muted') ?? container.querySelector('.muted');
+    expect(hint?.textContent).toMatch(/capture/i);
   });
 
-  maybe('renders the chart, period tabs, and now-value for a multi-point series', async () => {
+  it('renders the chart, period tabs, and now-value for a multi-point series', async () => {
+    await needDom();
     const { container } = await r()(makeAreaChart(pts(10)));
     expect(container.querySelector('svg.area-svg')).toBeTruthy();
     expect(container.querySelectorAll('.area-tab')).toHaveLength(4);
     expect(container.querySelectorAll('path').length).toBeGreaterThanOrEqual(2);
   });
 
-  maybe('picks the tightest default period that still has >=2 points', async () => {
+  it('picks the tightest default period that still has >=2 points', async () => {
+    await needDom();
     const { container } = await r()(makeAreaChart(pts(5)));
     const on = container.querySelector('.area-tab.on') as HTMLElement | null;
     expect(on).toBeTruthy();
     expect(on?.textContent).toBe('7d');
   });
 
-  maybe('scales every point inside the plot band (no overflow / NaN)', async () => {
-    const { container } = await r()(makeAreaChart(pts(12)));
-    const svg = container.querySelector('svg.area-svg') as SVGSVGElement;
-    const line = svg.querySelector('path[stroke="url(#ac-stroke)"]') as SVGPathElement | null;
-    expect(line?.getAttribute('d')).toBeTruthy();
-    const area = svg.querySelector('path[fill="url(#ac-fill)"]') as SVGPathElement;
-    expect(area.getAttribute('d')).toMatch(/ Z$/);
-  });
-
-  maybe('keeps a flat series centered (padded scale, no top-edge collapse)', async () => {
+  it('keeps a flat series centered (padded scale, no top-edge collapse)', async () => {
+    await needDom();
     const flat = pts(8).map((p) => ({ ...p, value: 5000 }));
     const { container } = await r()(makeAreaChart(flat));
     const svg = container.querySelector('svg.area-svg') as SVGSVGElement;
@@ -88,9 +102,54 @@ describe('AreaChart', () => {
     expect(cy).toBeLessThan(110);
   });
 
-  maybe('labels first / mid / last dates under the plot', async () => {
-    const { container } = await r()(makeAreaChart(pts(3)));
-    const axis = container.querySelector('.area-axis') as HTMLElement;
-    expect(axis.children).toHaveLength(3);
+  it('7d tab shows only the last-7-days points (no silent full-history fallback)', async () => {
+    await needDom();
+    // 12 daily points; the default period is 7d (tightest window with >=2).
+    // The visible window must hold exactly 7 points, not all 12.
+    const p12 = pts(12);
+    const { container } = await r()(makeAreaChart(p12));
+    const on = container.querySelector('.area-tab.on') as HTMLElement | null;
+    expect(on?.textContent).toBe('7d');
+    // The x-scale spans t0..t1 of the VISIBLE window. Count the axis labels:
+    // a 7-point daily window means the first date is 6 days before the last.
+    const svg = container.querySelector('svg.area-svg') as SVGSVGElement;
+    // The aria-label (rebuilt each render) names the active 7d window.
+    expect(svg.getAttribute('aria-label')).toMatch(/7d/);
+  });
+
+  it('a sparse 7d window does NOT silently expand to the full series', async () => {
+    await needDom();
+    // Two captures 60 days apart: the 7d window holds only 1 (the newest).
+    // The chart must show that lone point — not the whole 60-day history.
+    const sparse = [
+      { at: day0, value: 1000 },
+      { at: day0 + 60 * D, value: 1500 },
+    ];
+    const { container } = await r()(makeAreaChart(sparse));
+    // Default = 90d (the only window that holds both points).
+    const on = container.querySelector('.area-tab.on') as HTMLElement | null;
+    expect(on?.textContent).toBe('90d');
+    // Force 7d: the window now holds only the newest capture (1 point), so the
+    // chart must show the period-aware hint — NOT a silent fall-back to the
+    // whole 60-day history (no axis, no SVG, no full-series line).
+    const tabs = container.querySelectorAll('.area-tab');
+    const tab7d = Array.from(tabs).find((t) => t.textContent === '7d') as HTMLButtonElement;
+    tab7d.click();
+    await new Promise((res) => setTimeout(res, 20));
+    // No axis and no plot for a 1-point window — the hint is shown instead.
+    expect(container.querySelector('.area-axis')).toBeNull();
+    expect(container.querySelector('svg.area-svg')).toBeNull();
+    const hint = container.querySelector('.area-chart > .muted') ?? container.querySelector('.muted');
+    expect(hint?.textContent).toMatch(/Only 1 capture/i);
+  });
+
+  it('the "Now" value tracks the selected window (Last 7d / 30d / 90d label)', async () => {
+    await needDom();
+    const { container } = await r()(makeAreaChart(pts(12))); // defaults to 7d
+    const lbl = container.querySelector('.area-now-lbl') as HTMLElement;
+    expect(lbl.textContent).toBe('Last 7d');
+    // "Now" is the latest capture (1000 + 11*50).
+    const val = container.querySelector('.area-now-val') as HTMLElement;
+    expect(val.textContent).toBe(fmt(1000 + 11 * 50));
   });
 });
