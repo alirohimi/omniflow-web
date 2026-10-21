@@ -350,7 +350,7 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
                       ? `Broke in ~${forecast.firstNegativeMonth} mo`
                       : nw.net < 0 && forecast.netPerMonth >= 0
                         ? 'Recovering (in the red)'
-                        : `Stable over ${forecast.points.length} mo`}
+                        : `Holds ${forecast.points.length} mo at current pace`}
                 </div>
                 <div className="hero-sub">
                   <span className="muted">income {sym}{forecast.monthlyIncome.toFixed(0)}/mo · spend {sym}{forecast.monthlyExpenses.toFixed(0)}/mo</span>
