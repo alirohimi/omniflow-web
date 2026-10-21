@@ -608,6 +608,10 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       applyVault(v);
       setStatus('unlocked');
       setError(null);
+      // Persist the device handle so refresh auto-reopens (first-run path).
+      if (cloudOn && scope !== 'local') {
+        try { localStorage.setItem(`ofv:pass:${scope}`, password); } catch { /* ignore */ }
+      }
     },
     [applyVault, cloudOn, scope, resolveCipher, decryptAndHeal],
   );
@@ -636,6 +640,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         passRef.current = password;
         setVault(v);
         setStatus('unlocked');
+        // Persist the per-user device handle so a subsequent page refresh
+        // auto-reopens without re-asking. Revoked on manual lock / sign-out.
+        if (cloudOn && scope !== 'local') {
+          try { localStorage.setItem(`ofv:pass:${scope}`, password); } catch { /* ignore */ }
+        }
         return 'unlocked';
       } catch {
         setError('Wrong password. Your data stays encrypted until you type it right.');
@@ -643,7 +652,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         return 'locked';
       }
     },
-    [resolveCipher, decryptAndHeal],
+    [resolveCipher, decryptAndHeal, cloudOn, scope],
   );
 
   const lock = useCallback(() => {
@@ -655,7 +664,12 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setError(null);
     // Disarm the auto-unlock: with no in-memory password the gate asks for it.
     auth.setAccountPassword('');
-  }, [auth]);
+    // Revoke the device handle too: a manual "Lock now" is an explicit
+    // request to re-ask, so refresh must not silently reopen.
+    if (cloudOn && scope !== 'local') {
+      try { localStorage.removeItem(`ofv:pass:${scope}`); } catch { /* ignore */ }
+    }
+  }, [auth, cloudOn, scope]);
 
   // ---- single-credential auto flow: account password == vault key ----
   // A fresh sign-in stores the password in auth (pp). First run (no DB row
@@ -671,11 +685,30 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   // logout -> login race where sign-in arrives while a stale 'creating'
   // status would make the auto-create overwrite the user's real vault row.
   const pp = auth.accountPassword;
+  // Refresh auto-reopen: on a returning session (pp null) we look for a
+  // per-user device handle written at last successful unlock. If present,
+  // use it to unlock without showing the gate. The handle is scoped to the
+  // Supabase user id, so it NEVER leaks across accounts.
+  const deviceHandle = cloudOn ? localStorage.getItem(`ofv:pass:${scope}`) : null;
   useEffect(() => {
-    if (!probeSettledRef.current || !pp || !auth.user) return;
-    if (status === 'locked') void unlock(pp);
-    else if (status === 'creating') void createVault(pp);
-  }, [probeSettled, pp, auth.user, status, unlock, createVault]);
+    if (!probeSettledRef.current || !auth.user) return;
+    // In-memory password from sign-in (pp) wins — it's always the current
+    // key. A stored handle is only a fallback for the refresh path.
+    const key = pp || (status === 'locked' ? deviceHandle : null);
+    if (!key) return;
+    if (status === 'locked') {
+      void unlock(key);
+      // Persist the in-memory key for next refresh.
+      if (pp && cloudOn) {
+        try { localStorage.setItem(`ofv:pass:${scope}`, pp); } catch { /* ignore */ }
+      }
+    } else if (status === 'creating') {
+      void createVault(key);
+      if (pp && cloudOn) {
+        try { localStorage.setItem(`ofv:pass:${scope}`, pp); } catch { /* ignore */ }
+      }
+    }
+  }, [probeSettled, pp, deviceHandle, auth.user, status, unlock, createVault, scope, cloudOn]);
 
   /**
    * Change the account password. It doubles as the vault key, so the vault
@@ -699,6 +732,15 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       }
       // (1) New Supabase auth password; auth state now holds the new key.
       await auth.updateAccountPassword(current, next);
+      // The device handle (if any) must track the new key, else a refresh
+      // would try the old one and fail. Update it atomically with the change.
+      if (cloudOn && scope !== 'local') {
+        try {
+          if (localStorage.getItem(`ofv:pass:${scope}`) != null) {
+            localStorage.setItem(`ofv:pass:${scope}`, next);
+          }
+        } catch { /* ignore */ }
+      }
       // (2) Re-encrypt the whole blob under the new key and upsert.
       try {
         if (!vault) throw new Error('Vault is not unlocked.');

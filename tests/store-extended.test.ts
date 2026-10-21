@@ -560,4 +560,86 @@ describe('extended-entity CRUD (budgets/recurring/liabilities/assets/dividends/d
     });
     container.remove();
   });
+
+  it('persists a per-user device handle on unlock and revokes it on manual lock / sign-out', async () => {
+    // Regression: after "keep it secure but stop the auto-lock + re-ask on
+    // refresh", a successful unlock must write a per-user localStorage handle
+    // so a page refresh auto-reopens (no password gate), while a manual
+    // "Lock now" and a sign-out must REVOKE it so refresh re-asks. The handle
+    // is keyed by the Supabase user id, so it never leaks across accounts.
+    const USER = 'user-device-handle';
+    const key = `ofv:pass:${USER}`;
+    localStorage.removeItem(key);
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    cloudRef.saves = [];
+    cloudRef.strict = async () => undefined;
+    authRef.set({
+      user: { id: USER },
+      accountPassword: PASSWORD,
+      accessToken: 'fake-jwt',
+      restoring: false,
+    });
+
+    const storeRef = React.createRef<VaultStore | null>();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root: Root = createRoot(container);
+    await act(async () => {
+      root.render(
+        React.createElement(VaultProvider, null, React.createElement(Probe, { storeRef })),
+      );
+    });
+    await act(async () => {
+      await storeRef.current!.createVault(PASSWORD, { baseCurrency: 'MYR' });
+    });
+    await waitFor(
+      () => storeRef.current?.status === 'unlocked',
+      25_000,
+      'createVault -> unlocked',
+    );
+
+    // 1) After unlock, the device handle exists for this user only. Wait for
+    //    the fire-and-forget persist chain to flush the create upsert first.
+    await waitFor(
+      () => cloudRef.saves.some((s) => s.userId === USER),
+      25_000,
+      'cloud upsert recorded',
+    );
+    expect(localStorage.getItem(key)).toBe(PASSWORD);
+
+    // 2) Manual lock revokes it: a refresh now lands on the gate again.
+    await act(async () => {
+      storeRef.current!.lock();
+    });
+    expect(localStorage.getItem(key)).toBeNull();
+
+    // 3) Unlock again -> handle is written back. Strict now returns the
+    //    row createVault just persisted, so unlock() decrypts it.
+    cloudRef.strict = (id: string) => {
+      const saves = cloudRef.saves.filter((s) => s.userId === id);
+      return Promise.resolve(saves.length ? saves[saves.length - 1].cipher : undefined);
+    };
+    await act(async () => {
+      await storeRef.current!.unlock(PASSWORD);
+    });
+    await waitFor(
+      () => storeRef.current?.status === 'unlocked',
+      25_000,
+      're-unlock -> unlocked',
+    );
+    expect(localStorage.getItem(key)).toBe(PASSWORD);
+
+    // 4) Another user's handle is independent — signing in as a different
+    //    account must not read or write this user's stored key.
+    const other = `ofv:pass:user-other`;
+    localStorage.removeItem(other);
+    expect(localStorage.getItem(other)).toBeNull();
+
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+    // Clean up so the shared mock state for later tests starts fresh.
+    localStorage.removeItem(key);
+  });
 });

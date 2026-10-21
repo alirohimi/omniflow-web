@@ -179,6 +179,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     const sb = getSupabase();
+    // Revoke any per-user device unlock handle BEFORE the session goes away,
+    // so a sign-out never leaves a stored key that a different account could
+    // later reuse. The handle is keyed by Supabase user id.
+    if (sb) {
+      const session = await sb.auth.getSession().catch(() => ({ data: { session: null } }));
+      const u = session.data.session?.user?.id;
+      if (u) { try { localStorage.removeItem(`ofv:pass:${u}`); } catch { /* ignore */ } }
+    }
     if (sb) await sb.auth.signOut();
     setUser(null);
     setLastError(null);

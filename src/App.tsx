@@ -35,23 +35,13 @@ function Shell() {
   const symbol = currencyInfo(base).symbol;
   const cloudOn = auth.cloudAvailable && store.cloudSynced;
 
-  // Auto-lock: re-arm the vault gate after 5 min of idle (client-side only,
-  // so no data leaves the device; this is the web analogue of the LAContext
-  // app-lock on iOS).
+  // Auto-lock: disabled on the user's request. The vault stays unlocked on an
+  // open session across idle periods. Manual lock (the lock button / "Lock now")
+  // and sign-out remain the only ways to re-arm the gate. To re-enable:
+  //   window.setTimeout(() => store.lock(), 5 * 60 * 1000) on pointerdown-idle.
   useEffect(() => {
-    if (store.status !== 'unlocked') return;
-    let timer: number | undefined;
-    const reset = () => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => store.lock(), 5 * 60 * 1000);
-    };
-    reset();
-    window.addEventListener('pointerdown', reset);
-    return () => {
-      window.clearTimeout(timer);
-      window.removeEventListener('pointerdown', reset);
-    };
-  }, [store]);
+    // no-op — auto-lock intentionally removed
+  }, []);
 
   // Cloud is configured: the account gate (or a brief "restoring session"
   // loader) is the entry point — data lives only in the DB, so the old
