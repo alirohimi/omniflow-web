@@ -128,6 +128,20 @@ export const ICheck = (p: P) => (
   </S>
 );
 
+/** Search / magnifier — the History filter bar. */
+export const ISearch = (p: P) => (
+  <S {...p}>
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="m20 20-4.35-4.35" />
+  </S>
+);
+
+export const IFilter = (p: P) => (
+  <S {...p}>
+    <path d="M4 6h16M7 12h10M10 18h4" />
+  </S>
+);
+
 export const IDots = (p: P) => (
   <S {...p}>
     <circle cx="5.5" cy="12" r="1.4" />

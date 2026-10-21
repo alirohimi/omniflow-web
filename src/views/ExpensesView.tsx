@@ -20,7 +20,7 @@ import {
 } from '../services';
 import { categorize } from '../ai';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
-import { IReceipt, IScan, ICheck } from '../icons';
+import { IReceipt, IScan, ICheck, ISearch, IFilter } from '../icons';
 import { SpendingBreakdown } from '../components/SpendingBreakdown';
 import type { Expense, PendingImport } from '../domain/types';
 
@@ -53,8 +53,9 @@ export function ExpensesView() {
 
   // ---- multi-select delete state (History). Two-tap armed delete reuses the
   //      same pattern as single-row DelButton so a mass delete is never
-  //      accidental. Selection is a Set of ids so it survives the list
-  //      scrolling to the first 60 rows.
+  //      accidental. Selection is a Set of ids so it survives filtering
+  //      (Task 003 removed the old 60-row display cap; the list now renders
+  //      the full filtered set).
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkArmed, setBulkArmed] = useState(false);
   const bulkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -84,11 +85,13 @@ export function ExpensesView() {
   };
 
   const selectAll = () => {
-    // Toggle: if every visible row is already picked, tapping clears the
-    // whole selection; otherwise select everything. (The previous "early
-    // return when all selected" meant the button read as broken.)
-    const allPicked = sorted.length > 0 && sorted.every((e) => selected.has(e.id));
-    setSelected(allPicked ? new Set() : new Set(sorted.map((e) => e.id)));
+    // Toggle: if every visible (filtered) row is already picked, tapping
+    // clears the whole selection; otherwise select everything visible.
+    // (The previous "early return when all selected" meant the button read
+    // as broken.) Operates on `visible` so bulk-delete respects filters.
+    const allVisiblePicked =
+      visible.length > 0 && visible.every((e) => selected.has(e.id));
+    setSelected(allVisiblePicked ? new Set() : new Set(visible.map((e) => e.id)));
   };
 
   const clearSelection = () => {
@@ -103,7 +106,7 @@ export function ExpensesView() {
     store.deleteExpenses([...selected]);
     setSelected(new Set());
     setBulkArmed(false);
-    toast(`Deleted ${count} expense${count === 1 ? '' : 's'}.`);
+    toast(`Deleted ${count} row${count === 1 ? '' : 's'}.`);
   };
 
   const selectedTotal = useMemo(
@@ -119,9 +122,58 @@ export function ExpensesView() {
     [vault.expenses],
   );
 
+  // ---- History filters + search (session-only, compose with AND) ----------
+  type HistRange = 'all' | 'month' | '30d' | '90d';
+  type HistType = 'all' | 'expense' | 'income';
+  const [q, setQ] = useState('');
+  const [catF, setCatF] = useState<string>('all'); // category name or 'all'
+  const [rangeF, setRangeF] = useState<HistRange>('all');
+  const [typeF, setTypeF] = useState<HistType>('all');
+  // Collapsible filter bar: closed by default on mobile, force-open whenever
+  // a filter/search is active (a closed bar with an active filter would be
+  // confusing — the "Showing X of Y" + "clear filters" already signals state).
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  const rangeStart = useMemo(() => {
+    if (rangeF === 'month') {
+      const d = new Date();
+      d.setDate(1); d.setHours(0, 0, 0, 0);
+      return d.getTime();
+    }
+    if (rangeF === '30d') return Date.now() - 30 * 86_400_000;
+    if (rangeF === '90d') return Date.now() - 90 * 86_400_000;
+    return 0; // 'all'
+  }, [rangeF]);
+
+  const visible = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return sorted.filter((e) => {
+      if (rangeStart && e.timestamp < rangeStart) return false;
+      if (typeF === 'income' ? e.category !== 'Income' : typeF === 'expense' ? e.category === 'Income' : false) return false;
+      if (catF !== 'all' && e.category !== catF) return false;
+      if (needle) {
+        const hay = [e.merchant, e.note ?? '', e.category, e.paymentMethod, e.originalCurrency]
+          .join(' ')
+          .toLowerCase();
+        if (!hay.includes(needle)) return false;
+      }
+      return true;
+    });
+  }, [sorted, q, catF, rangeF, typeF, rangeStart]);
+
+  const filtersActive = q.trim() !== '' || catF !== 'all' || rangeF !== 'all' || typeF !== 'all';
+
+  const catOptions = useMemo(
+    () => [...new Set(vault.expenses.map((e) => e.category))].sort(),
+    [vault.expenses],
+  );
+
+  const clearFilters = () => { setQ(''); setCatF('all'); setRangeF('all'); setTypeF('all'); };
+
   // Drives the "Select all" toolbar button state (check + "All selected").
+  // Operates on the VISIBLE (filtered) set, so bulk-delete respects filters.
   const allPicked =
-    sorted.length > 0 && sorted.every((e) => selected.has(e.id));
+    visible.length > 0 && visible.every((e) => selected.has(e.id));
 
   const totalMonth = useMemo(() => {
     const start = new Date();
@@ -738,9 +790,87 @@ export function ExpensesView() {
 
       <h2 className="section-title">History</h2>
       <div className="row muted small" style={{ marginBottom: 6, justifyContent: 'space-between', alignItems: 'center' }}>
-        <span>{sorted.length} total</span>
-        <span>{sym}{totalMonth.toFixed(0)} this month</span>
+        <span>
+          {filtersActive ? `Showing ${visible.length} of ${sorted.length}` : `${sorted.length} total`}
+          {filtersActive ? <button type="button" className="hist-clear" onClick={clearFilters}> clear filters</button> : null}
+        </span>
+        <button
+          type="button"
+          className={`chip sm${filtersActive ? ' on' : ''}`}
+          onClick={() => setFiltersOpen((v) => !v)}
+          aria-expanded={filtersOpen}
+          aria-label="Toggle filters"
+        >
+          <IFilter size={13} />
+          Filters{filtersActive ? ' · on' : ''}
+        </button>
       </div>
+
+      {/* Filter + search bar. Every control is themed (no native browser
+          controls); search matches merchant, note, category, payment
+          method and currency case-insensitively. Filters compose (AND).
+          Collapsible on mobile via the "Filters" chip above; stays open
+          when a filter is active (can't trap the user inside a closed bar
+          with an active filter). */}
+      {(filtersOpen || filtersActive) && (
+      <div className="hist-filters">
+        <label className="field hist-search">
+          <ISearch size={15} />
+          <input
+            type="search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search merchant, note, category…"
+            aria-label="Search transactions"
+          />
+        </label>
+        <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+          <div className="seg" role="tablist" aria-label="Type">
+            {([
+              ['all', 'All'],
+              ['expense', 'Expenses'],
+              ['income', 'Income'],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={typeF === id}
+                onClick={() => setTypeF(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="seg" role="tablist" aria-label="Date range">
+            {([
+              ['all', 'All time'],
+              ['month', 'This month'],
+              ['30d', '30d'],
+              ['90d', '90d'],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={rangeF === id}
+                onClick={() => setRangeF(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="hist-cats">
+          <button type="button" className={`chip sm${catF === 'all' ? ' on' : ''}`} onClick={() => setCatF('all')}>
+            All categories
+          </button>
+          {catOptions.map((c) => (
+            <button key={c} type="button" className={`chip sm${catF === c ? ' on' : ''}`} onClick={() => setCatF(c)}>
+              {c}
+            </button>
+          ))}
+        </div>
+      </div>
+      )}
 
       {/* Multi-select. "Select all" toggles the whole list; "Clear" wipes the
           selection. The bulk delete is the armed two-tap destructive action.
@@ -780,8 +910,9 @@ export function ExpensesView() {
       )}
 
       <div className="list">
-        {sorted.slice(0, 60).map((e) => {
+        {visible.map((e) => {
           const picked = selected.has(e.id);
+          const isIncome = e.category === 'Income';
           return (
             <div className={`item sel-row${picked ? ' picked' : ''}`} key={e.id}>
               <button
@@ -794,13 +925,16 @@ export function ExpensesView() {
                 {picked ? <ICheck size={15} /> : null}
               </button>
               <div className="grow">
-                <div className="title">{e.merchant}</div>
+                <div className="title">
+                  {isIncome ? <span className="hist-inc" title="Income">+</span> : null}
+                  {e.merchant}
+                </div>
                 <div className="meta">
                   {e.category} · {e.paymentMethod} · {new Date(e.timestamp).toLocaleDateString()}
                   {e.originalCurrency !== base ? ` · ${formatMoney(e.originalAmount, e.originalCurrency)}` : ''}
                 </div>
               </div>
-              <div className="amt">{sym}{e.baseAmount.toFixed(2)}</div>
+              <div className={`amt${isIncome ? ' income' : ''}`}>{isIncome ? '+' : ''}{sym}{e.baseAmount.toFixed(2)}</div>
               <DelButton
                 label={`Delete ${e.merchant}`}
                 onConfirm={() => {
@@ -811,6 +945,9 @@ export function ExpensesView() {
             </div>
           );
         })}
+        {visible.length === 0 && sorted.length > 0 && (
+          <div className="empty">No transactions match your search / filters. <button type="button" className="hist-clear" onClick={clearFilters}>Clear them</button></div>
+        )}
         {sorted.length === 0 && <div className="empty">No expenses yet. Add one above, or ask the Coach to log one for you.</div>}
       </div>
     </>

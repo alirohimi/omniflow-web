@@ -718,6 +718,56 @@ button.chip { -webkit-tap-highlight-color: transparent; }
 .selchip:active { transform: scale(.94); }
 @keyframes del-pulse { from { filter: brightness(1); } to { filter: brightness(1.25); } }
 
+/* ---------- History filter + search bar (Task 003) ----------
+   Mobile-first: search on top, then the two segmented rows, then a
+   horizontally-scrolling category chip strip. All themed on the glass
+   tokens; touch targets >= 44px in the coarse-pointer media block. */
+.hist-filters {
+  display: flex; flex-direction: column; gap: 8px;
+  margin: 2px 0 10px;
+  background: color-mix(in srgb, var(--bg-2) 72%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--line); border-radius: 14px; padding: 10px;
+}
+.hist-search {
+  display: flex; align-items: center; gap: 8px; margin: 0;
+  background: var(--bg-2); border: 1px solid var(--line);
+  border-radius: 12px; padding: 0 12px; min-height: 48px;
+  color: var(--muted); transition: border-color .15s;
+}
+.hist-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+.hist-search svg { flex: none; color: var(--faint); }
+.hist-search input {
+  flex: 1; min-width: 0; background: none; border: 0; outline: none;
+  color: var(--text); font: inherit; font-size: 14px; min-height: 44px;
+}
+.hist-search input::placeholder { color: var(--faint); }
+.hist-cats {
+  display: flex; gap: 6px; overflow-x: auto; padding: 2px;
+  -webkit-overflow-scrolling: touch; scrollbar-width: none;
+}
+.hist-cats::-webkit-scrollbar { display: none; }
+.hist-cats .chip { flex: 0 0 auto; min-height: 36px; display: inline-flex; align-items: center; cursor: pointer; }
+/* "Clear filters" link-button used in the header + empty state. */
+.hist-clear {
+  padding: 2px 4px; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 12.5px; font-weight: 600;
+  color: var(--accent); text-decoration: underline; text-underline-offset: 2px;
+}
+.hist-clear:hover { color: var(--text); }
+/* Income rows read as credits: green plus prefix + tinted amount. */
+.hist-inc {
+  display: inline-grid; place-items: center; width: 16px; height: 16px;
+  margin-right: 4px; border-radius: 50%;
+  background: var(--good-soft); color: var(--good);
+  font-size: 11px; font-weight: 800; vertical-align: baseline;
+}
+.item .amt.income { color: var(--good); }
+@media (pointer: coarse) {
+  .hist-cats .chip { min-height: 44px; }
+  .hist-search { min-height: 52px; }
+}
+
 /* ---------- Progress ---------- */
 .bar { height: 8px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 99px; overflow: hidden; margin-top: 14px; }
 .bar > i {
