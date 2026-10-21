@@ -50,6 +50,7 @@ import type {
   SavingsGoal,
   AutoInvest,
   Contribution,
+  CoachThread,
 } from '../domain/types';
 import { emptyVault, healVault, withoutUndefined } from '../domain/seed';
 import { encryptVault, decryptVault, fingerprintSecret, type VaultCipher } from '../security/vault';
@@ -276,10 +277,29 @@ export interface VaultStore {
   /** Admin-only: apply the platform default to one member's personal policy row. */
   adminApplyDefault: (targetUserId: string) => Promise<boolean>;
 
-  // Coach (conversational advisor) — persisted encrypted with the vault.
+  // Coach (conversational advisor) — multi-session threads, persisted
+  // encrypted with the vault. `coachThreads` is the new shape; the old
+  // single `coachLog` is kept one release as a deprecated alias (the
+  // active thread's messages) so not-yet-migrated call sites keep working.
+  coachThreads: CoachThread[];
+  activeCoachThread: string; // guaranteed non-empty (provider ensures a valid thread)
+  /** Derived: the active thread's messages (view convenience). */
+  coachMessages: CoachMessage[];
+  addCoachThread: () => string; // returns new id; sets it active; title "New chat"
+  renameCoachThread: (id: string, title: string) => void;
+  deleteCoachThread: (id: string) => void; // UI arms it; provider just deletes + re-points active
+  setActiveCoachThread: (id: string) => void;
+  /** Append to one specific thread (bounded: last 200). Bumps updatedAt. */
+  pushCoachMessageTo: (threadId: string, msg: Omit<CoachMessage, 'id'>) => void;
+  clearActiveThread: () => void; // clears the active thread's messages, keeps the thread
+
+  // Deprecated one release — thin wrappers over the active thread. Remove
+  // after CoachView is confirmed migrated.
+  /** @deprecated use coachThreads / coachMessages */
   coachLog: CoachMessage[];
-  /** Append a chat turn (bounded: the last 200 messages are kept). */
+  /** @deprecated use pushCoachMessageTo(activeCoachThread, msg) */
   pushCoachMessage: (msg: Omit<CoachMessage, 'id'>) => void;
+  /** @deprecated use clearActiveThread() */
   clearCoachLog: () => void;
 
   categories: Category[];
@@ -1436,22 +1456,124 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const adminIds = useCallback(async (): Promise<string[]> => listAdminIds(), []);
   const adminPolicies = useCallback(async (): Promise<PolicySummary[]> => listPolicies(), []);
 
-  // ---- coach (conversational advisor) ----
-  // Persisted encrypted with the vault like everything else. Bounded: keep
-  // only the last 200 messages so the blob (and every full re-encrypt of it)
-  // stays small no matter how long the user chats.
+  // ---- coach (conversational advisor) — multi-session threads ----
+  // Persisted encrypted with the vault like everything else. Each thread is
+  // bounded to the last 200 messages so the blob stays small no matter how
+  // long the user chats. The active thread is always valid: when a thread is
+  // deleted or is missing, we re-point to the most-recently-updated thread or
+  // create a fresh "New chat".
+  const newThreadId = () =>
+    `ct-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const newMsgId = () =>
+    `cm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
-  const pushCoachMessage = useCallback(
-    (msg: Omit<CoachMessage, 'id'>) => {
+  /** Idempotent migration: if the vault has a legacy coachLog but no threads,
+   *  fold the log into one auto-titled thread and set it active. Runs only
+   *  when coachThreads is empty/absent, so a second run is a no-op. */
+  const migrateThreads = useCallback(
+    (prev: VaultBlob): VaultBlob => {
+      const threads = prev.coachThreads ?? [];
+      let next = prev;
+      if (threads.length === 0) {
+        const legacy = prev.coachLog ?? [];
+        if (legacy.length > 0) {
+          const first = legacy[0];
+          const title =
+            legacy.find((m) => m.role === 'user')?.text
+              ?.slice(0, 40) ?? 'Earlier conversation';
+          const ts = legacy[legacy.length - 1].at;
+          const migrated: CoachThread = {
+            id: newThreadId(),
+            title: title.length > 0 ? title : 'Earlier conversation',
+            createdAt: first.at,
+            updatedAt: ts,
+            messages: legacy,
+          };
+          next = {
+            ...prev,
+            coachThreads: [migrated],
+            activeCoachThread: migrated.id,
+          };
+        } else {
+          // No legacy log and no threads -> one fresh, empty thread.
+          const fresh: CoachThread = {
+            id: newThreadId(),
+            title: 'New chat',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            messages: [],
+          };
+          next = { ...prev, coachThreads: [fresh], activeCoachThread: fresh.id };
+        }
+      }
+      // Even when threads exist, ensure activeCoachThread points at a real id.
+      const activeId = next.activeCoachThread;
+      if (!activeId || !next.coachThreads!.some((t) => t.id === activeId)) {
+        const sorted = [...(next.coachThreads ?? [])].sort((a, b) => b.updatedAt - a.updatedAt);
+        const fallback = sorted[0];
+        if (fallback) {
+          next = { ...next, activeCoachThread: fallback.id };
+        } else {
+          const fresh: CoachThread = {
+            id: newThreadId(),
+            title: 'New chat',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            messages: [],
+          };
+          next = { ...next, coachThreads: [fresh], activeCoachThread: fresh.id };
+        }
+      }
+      return next;
+    },
+    [],
+  );
+
+  // Run migration once on hydration (vault just decrypted) and whenever a
+  // new vault is set. Cheap + idempotent.
+  useEffect(() => {
+    setVault((prev) => {
+      if (!prev) return prev;
+      const migrated = migrateThreads(prev);
+      if (migrated === prev) return prev;
+      void persist(migrated);
+      return migrated;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vault]);
+
+  const coachThreads = useMemo(
+    () => (vault?.coachThreads ?? []),
+    [vault?.coachThreads],
+  );
+  const activeCoachThread = useMemo(() => {
+    const threads = vault?.coachThreads ?? [];
+    const a = vault?.activeCoachThread;
+    if (a && threads.some((t) => t.id === a)) return a;
+    return threads[0]?.id ?? '';
+  }, [vault?.coachThreads, vault?.activeCoachThread]);
+
+  const addCoachThread = useCallback((): string => {
+    const id = newThreadId();
+    setVault((prev) => {
+      if (!prev) return prev;
+      const t: CoachThread = { id, title: 'New chat', createdAt: Date.now(), updatedAt: Date.now(), messages: [] };
+      const next = { ...prev, coachThreads: [...(prev.coachThreads ?? []), t], activeCoachThread: id, updatedAt: Date.now() };
+      void persist(next);
+      return next;
+    });
+    return id;
+  }, [persist]);
+
+  const renameCoachThread = useCallback(
+    (id: string, title: string) => {
       setVault((prev) => {
         if (!prev) return prev;
-        const entry: CoachMessage = {
-          ...msg,
-          id: `cm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-        };
         const next = {
           ...prev,
-          coachLog: [...(prev.coachLog ?? []), entry].slice(-200),
+          coachThreads: (prev.coachThreads ?? []).map((t) =>
+            t.id === id ? { ...t, title: title.slice(0, 80), updatedAt: Date.now() } : t,
+          ),
           updatedAt: Date.now(),
         };
         void persist(next);
@@ -1461,14 +1583,110 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     [persist],
   );
 
-  const clearCoachLog = useCallback(() => {
+  const deleteCoachThread = useCallback(
+    (id: string) => {
+      setVault((prev) => {
+        if (!prev) return prev;
+        const remaining = (prev.coachThreads ?? []).filter((t) => t.id !== id);
+        const wasActive = prev.activeCoachThread === id;
+        let active = prev.activeCoachThread;
+        let threads = remaining;
+        if (wasActive) {
+          if (remaining.length > 0) {
+            const sorted = [...remaining].sort((a, b) => b.updatedAt - a.updatedAt);
+            active = sorted[0].id;
+          } else {
+            const fresh: CoachThread = { id: newThreadId(), title: 'New chat', createdAt: Date.now(), updatedAt: Date.now(), messages: [] };
+            threads = [fresh];
+            active = fresh.id;
+          }
+        }
+        const next = { ...prev, coachThreads: threads, activeCoachThread: active, updatedAt: Date.now() };
+        void persist(next);
+        return next;
+      });
+    },
+    [persist],
+  );
+
+  const setActiveCoachThread = useCallback(
+    (id: string) => {
+      setVault((prev) => {
+        if (!prev) return prev;
+        if (!(prev.coachThreads ?? []).some((t) => t.id === id)) return prev;
+        const next = { ...prev, activeCoachThread: id, updatedAt: Date.now() };
+        void persist(next);
+        return next;
+      });
+    },
+    [persist],
+  );
+
+  const pushCoachMessageTo = useCallback(
+    (threadId: string, msg: Omit<CoachMessage, 'id'>) => {
+      setVault((prev) => {
+        if (!prev) return prev;
+        const entry: CoachMessage = { ...msg, id: newMsgId() };
+        const now = Date.now();
+        const threads = (prev.coachThreads ?? []).map((t) =>
+          t.id === threadId
+            ? { ...t, messages: [...t.messages, entry].slice(-200), updatedAt: now }
+            : t,
+        );
+        // Auto-title: if the thread is still "New chat" and the first pushed
+        // message is a user message, name it from that text (40-char cap).
+        const target = threads.find((t) => t.id === threadId);
+        if (target && (target.title === 'New chat' || target.title === '') && msg.role === 'user') {
+          const idx = threads.findIndex((t) => t.id === threadId);
+          if (idx >= 0)
+            threads[idx] = { ...target, title: msg.text.slice(0, 40) || 'New chat' };
+        }
+        const next = { ...prev, coachThreads: threads, updatedAt: now };
+        void persist(next);
+        return next;
+      });
+    },
+    [persist],
+  );
+
+  const clearActiveThread = useCallback(() => {
     setVault((prev) => {
       if (!prev) return prev;
-      const next = { ...prev, coachLog: [], updatedAt: Date.now() };
+      const activeId = prev.activeCoachThread;
+      const threads = (prev.coachThreads ?? []).map((t) =>
+        t.id === activeId ? { ...t, messages: [], updatedAt: Date.now() } : t,
+      );
+      const next = { ...prev, coachThreads: threads, updatedAt: Date.now() };
       void persist(next);
       return next;
     });
   }, [persist]);
+
+  // ---- deprecated one-release wrappers over the active thread ----
+  const pushCoachMessage = useCallback(
+    (msg: Omit<CoachMessage, 'id'>) => {
+      const activeId = vault?.activeCoachThread;
+      if (!activeId) return;
+      pushCoachMessageTo(activeId, msg);
+    },
+    [vault?.activeCoachThread, pushCoachMessageTo],
+  );
+
+  const clearCoachLog = useCallback(() => {
+    clearActiveThread();
+  }, [clearActiveThread]);
+
+  const coachMessagesForActive = (threads: CoachThread[], activeId: string): CoachMessage[] =>
+    threads.find((t) => t.id === activeId)?.messages ?? [];
+
+  const coachMessages = useMemo(
+    () => coachMessagesForActive(coachThreads, activeCoachThread),
+    [coachThreads, activeCoachThread],
+  );
+
+  // Deprecated one-release alias: the active thread's messages (so old readers
+  // of `coachLog` still see the active conversation, not a lost global).
+  const coachLog = coachMessages;
 
   const llmConfig = useMemo<LLMConfig | null>(() => {
     // Four-tier resolution: admin lock > user BYOK > platform default >
@@ -1555,7 +1773,18 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     defaultLlm,
     adminSetLlmDefault,
     adminApplyDefault,
-    coachLog: vault?.coachLog ?? [],
+    // Multi-session coach threads (new shape).
+    coachThreads,
+    activeCoachThread,
+    coachMessages,
+    addCoachThread,
+    renameCoachThread,
+    deleteCoachThread,
+    setActiveCoachThread,
+    pushCoachMessageTo,
+    clearActiveThread,
+    // Deprecated one-release aliases over the active thread.
+    coachLog,
     pushCoachMessage,
     clearCoachLog,
     categories: vault?.categories ?? [],

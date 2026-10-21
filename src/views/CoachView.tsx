@@ -1,23 +1,29 @@
 // ============================================================================
 // Coach — conversational financial advisor (chat).
 //
+// Multi-session: chat history is split into named threads persisted
+// encrypted inside the vault. The user can switch, rename, and delete
+// threads (armed destructive). Selecting a thread re-points the chat and
+// feeds that thread's history into coachAsk.
+//
 // Grounded in the user's real encrypted data via useLiveData; answers come
 // from the 3-tier coach engine (BYOK LLM -> deterministic rule engine).
-// Chat history persists encrypted with the vault. Suggestion chips open the
-// conversation with data-grounded questions instead of a blank box.
+// Bubble chat: per-thread continuity, collapsible "Quick starts" replacing
+// the old blocking suggestion menu, image attach + action confirm card kept.
 // ============================================================================
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
 import { coachAsk, applyAction as applyAiAction, type Action, type ActionStore } from '../ai';
 import type { CoachContext } from '../ai/coach';
-import { ICoach, IClose, IImage } from '../icons';
+import type { CoachThread } from '../domain/types';
+import { ICoach, IClose, IImage, IPlus, IChevron, IPencil, IX, ICheck } from '../icons';
 import Markdown from '../components/Markdown';
 import { useToast } from '../components/Toast';
 import { compressImageToDataUrl } from '../lib/image';
 
-const SUGGESTIONS = [
+const QUICK_STARTS = [
   'Where should I put new money?',
   'How is my portfolio allocated?',
   'Am I overspending?',
@@ -57,33 +63,225 @@ function actionDetail(a: Action): string {
   }
 }
 
+/** Relative "last updated" label for a thread row. */
+function relTime(ts: number): string {
+  const now = Date.now();
+  const diff = now - ts;
+  if (diff < 60_000) return 'just now';
+  const m = Math.floor(diff / 60_000);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
+}
+
+// ---------------------------------------------------------------------------
+// ThreadSwitcher — custom-themed panel (NO native <select>).
+// Mobile: bottom sheet. Wide: dropdown card. Rows >=44px. Armed delete.
+// ---------------------------------------------------------------------------
+
+interface ThreadSwitcherProps {
+  threads: CoachThread[];
+  activeId: string;
+  onSelect: (id: string) => void;
+  onNew: () => void;
+  onRename: (id: string, title: string) => void;
+  onDelete: (id: string) => void;
+  onClose: () => void;
+  toast: (msg: string, kind?: 'ok' | 'err') => void;
+}
+
+function ThreadSwitcher({
+  threads, activeId, onSelect, onNew, onRename, onDelete, onClose, toast,
+}: ThreadSwitcherProps) {
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameText, setRenameText] = useState('');
+  const [armedDelete, setArmedDelete] = useState<string | null>(null);
+  const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const armDelete = (id: string) => {
+    if (armedDelete === id) {
+      deleteCoachThreadSafe(id);
+      setArmedDelete(null);
+      if (deleteTimer.current) clearTimeout(deleteTimer.current);
+      return;
+    }
+    setArmedDelete(id);
+    if (deleteTimer.current) clearTimeout(deleteTimer.current);
+    deleteTimer.current = setTimeout(() => setArmedDelete(null), 3000);
+  };
+
+  const deleteCoachThreadSafe = (id: string) => {
+    const wasActive = id === activeId;
+    onDelete(id);
+    toast(wasActive ? 'Thread deleted. Switched to another chat.' : 'Thread deleted.', 'ok');
+  };
+
+  useEffect(() => () => { if (deleteTimer.current) clearTimeout(deleteTimer.current); }, []);
+
+  const sorted = [...threads].sort((a, b) => b.updatedAt - a.updatedAt);
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        style={{
+          position: 'fixed', inset: 0, zIndex: 900,
+          background: 'rgba(0,0,0,0.3)',
+        }}
+        onClick={onClose}
+      />
+      {/* Panel */}
+      <div
+        style={{
+          position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 901,
+          background: 'var(--surface, #1a1a2e)',
+          borderTop: '1px solid var(--border, #333)',
+          borderRadius: '16px 16px 0 0',
+          padding: '16px 16px calc(16px + env(safe-area-inset-bottom, 0px))',
+          maxHeight: '70vh',
+          display: 'flex', flexDirection: 'column',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <strong style={{ fontSize: 15 }}>Chats</strong>
+          <button className="btn ghost sm" onClick={onClose} aria-label="Close"><IClose size={16} /></button>
+        </div>
+
+        {/* Thread list */}
+        <div style={{ flex: 1, overflowY: 'auto', maxHeight: '50vh' }}>
+          {sorted.map((t) => {
+            const isActive = t.id === activeId;
+            const isArmed = armedDelete === t.id;
+            const isRenaming = renaming === t.id;
+            return (
+              <div
+                key={t.id}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  minHeight: 44, padding: '6px 8px',
+                  borderRadius: 10,
+                  background: isActive ? 'var(--accent-bg, rgba(59,130,246,0.12))' : 'transparent',
+                  borderLeft: isActive ? '3px solid var(--accent, #3b82f6)' : '3px solid transparent',
+                  marginBottom: 2,
+                }}
+              >
+                {/* Row content */}
+                <div
+                  style={{ flex: 1, cursor: 'pointer', minHeight: 32, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}
+                  onClick={() => { if (!isRenaming) { onSelect(t.id); onClose(); } }}
+                >
+                  {isRenaming ? (
+                    <input
+                      value={renameText}
+                      maxLength={80}
+                      onChange={(e) => setRenameText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && renameText.trim()) {
+                          onRename(t.id, renameText.trim());
+                          setRenaming(null);
+                          toast(
+                            renameText.length >= 80
+                              ? 'Renamed (title capped at 80 characters).'
+                              : 'Renamed.',
+                            'ok',
+                          );
+                        }
+                        if (e.key === 'Escape') setRenaming(null);
+                      }}
+                      style={{
+                        width: '100%', background: 'transparent',
+                        border: '1px solid var(--accent, #3b82f6)',
+                        borderRadius: 6, padding: '4px 8px',
+                        color: 'var(--text, #fff)', fontSize: 14,
+                      }}
+                      autoFocus
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {t.title || 'New chat'}
+                      </span>
+                      {isActive && <ICheck size={12} />}
+                    </div>
+                  )}
+                  {!isRenaming && (
+                    <span className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                      {relTime(t.updatedAt)} · {t.messages.length} msg
+                    </span>
+                  )}
+                </div>
+
+                {/* Row actions — 44px min hit targets (P2-1). */}
+                <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                  <button
+                    className="btn ghost sm"
+                    style={{ minWidth: 44, minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                    onClick={(e) => { e.stopPropagation(); setRenaming(t.id); setRenameText(t.title); }}
+                    aria-label="Rename"
+                  >
+                    <IPencil size={14} />
+                  </button>
+                  <button
+                    className={`btn sm ${isArmed ? 'danger' : 'ghost'}`}
+                    style={{ minWidth: 44, minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: isArmed ? 11 : 14, gap: 4 }}
+                    onClick={(e) => { e.stopPropagation(); armDelete(t.id); }}
+                    aria-label="Delete thread"
+                  >
+                    {isArmed ? 'Confirm' : <IX size={14} />}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          {sorted.length === 0 && (
+            <p className="muted" style={{ padding: 16, textAlign: 'center' }}>No chats yet</p>
+          )}
+        </div>
+
+        {/* Footer: New chat */}
+        <button
+          className="btn sm"
+          style={{ marginTop: 12, minHeight: 44, width: '100%' }}
+          onClick={() => { onNew(); onClose(); }}
+        >
+          <IPlus size={14} /> New chat
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main CoachView
+// ---------------------------------------------------------------------------
+
 export function CoachView() {
   const store = useVaultStore();
   const live = useLiveData();
   const { toast } = useToast();
-  const { vault, coachLog } = store;
+  const { vault, coachMessages, activeCoachThread, coachThreads } = store;
+
   const [draft, setDraft] = useState('');
   const [attach, setAttach] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [pendingAction, setPendingAction] = useState<Action | null>(null);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [quickStartsOpen, setQuickStartsOpen] = useState(false);
+  const [armedClear, setArmedClear] = useState(false);
+  const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const hasLLM = store.llmConfig != null;
-  // Pro-gated: the LLM tier of the coach is a paid feature. When the user is
-  // on the free tier, fall through to the on-device rule engine (no network).
   const llmAllowed = store.entitlements.has('llm-coach');
-
-  // When an admin pinned this (non-admin) user to a cloud provider, the vendor
-  // name must not leak to the target user — show a neutral chip instead of the
-  // raw provider. Admins keep seeing the real provider; a user's OWN BYOK key
-  // still shows its own provider (it is their setting, not a leak).
   const adminLocked =
     !store.isAdminUser && !!store.llmPolicy && store.llmPolicy.provider !== 'none';
 
-  // The grounded context the engine reasons over. Rebuilt when the data
-  // moves; the LLM prompt only ever receives the compact brief derived
-  // from this (never the raw ledger).
+  // Grounded context for the coach engine.
   const ctx: CoachContext | null = useMemo(() => {
     if (!vault) return null;
     return {
@@ -93,23 +291,20 @@ export function CoachView() {
       quotes: live.quotes,
       prefs: vault.prefs,
       portfolio: live.portfolio,
-      // The user's category list — threaded to parseAction so proposed
-      // add_expense / edit_expense actions validate against real names.
       categories: store.categories,
-      // Emergency-reserve module + live FX table — buildBrief converts
-      // manual lines to base and derives the coverage facts the coach
-      // quotes (omitted when offline + no spend, in which case the coach
-      // must not invent cushion numbers).
       emergency: vault.emergency,
       fx: live.fx,
     };
   }, [vault, live.quotes, live.portfolio, live.fx, store.categories]);
 
-  // Keep the newest message in view as the thread grows.
+  // Scroll to bottom when the active thread's messages grow or we switch thread.
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [coachLog.length, pending]);
+  }, [coachMessages.length, activeCoachThread, pending]);
+
+  // Reset armed state on unmount.
+  useEffect(() => () => { if (clearTimer.current) clearTimeout(clearTimer.current); }, []);
 
   const pickImage = async (f: File | null) => {
     if (!f) return;
@@ -124,38 +319,34 @@ export function CoachView() {
   const send = async (text: string, image?: string) => {
     const q = text.trim();
     const img = image ?? attach;
-    if ((!q && !img) || !ctx || pending) return;
+    if ((!q && !img) || !ctx || pending || !activeCoachThread) return;
     setDraft('');
     setAttach(null);
     setPendingAction(null);
-    store.pushCoachMessage({ role: 'user', text: q, image: img ?? undefined, at: Date.now() });
+    store.pushCoachMessageTo(activeCoachThread, { role: 'user', text: q, image: img ?? undefined, at: Date.now() });
     setPending(true);
     try {
-      // Pro-gate: only use the LLM when the user's tier allows it. Free-tier
-      // users fall through to the on-device rule engine (no network, no cost).
       const activeLlm = llmAllowed ? store.llmConfig : null;
       const ans = await coachAsk(
         q,
         ctx,
         activeLlm,
-        coachLog,
+        coachMessages,
         img ? [img] : [],
       );
-      store.pushCoachMessage({
+      store.pushCoachMessageTo(activeCoachThread, {
         role: 'coach',
         text: ans.text,
         source: ans.source,
         at: Date.now(),
       });
-      // If the LLM proposed a create_portfolio action, hold it for explicit
-      // user confirmation (Apply). Nothing is written to the vault until then.
       if (ans.proposedAction) setPendingAction(ans.proposedAction);
       if (ans.degraded) {
         const why = ans.llmError ? ` (${ans.llmError.slice(0, 140)})` : '';
-        toast(`Advisor key call failed${why} — answered with the on-device rule engine. Fix it in Settings (Test key shows the provider's exact error).`, 'err');
+        toast(`Advisor key call failed${why} — answered with the on-device rule engine. Fix it in Settings.`, 'err');
       }
     } catch (e) {
-      store.pushCoachMessage({
+      store.pushCoachMessageTo(activeCoachThread, {
         role: 'coach',
         text: `I could not produce an answer just now (${e instanceof Error ? e.message : 'unknown error'}). Try again in a moment.`,
         source: 'system',
@@ -171,8 +362,6 @@ export function CoachView() {
     const a = pendingAction;
     setPendingAction(null);
     try {
-      // Bridge the real VaultStore (accounts/holdings nested inside `vault`)
-      // to the minimal ActionStore surface the applier reads.
       const actionStore: import('../ai').ActionStore = {
         addAccount: store.addAccount,
         addHolding: store.addHolding,
@@ -186,13 +375,13 @@ export function CoachView() {
         updateHolding: store.updateHolding,
       };
       const summary = applyAiAction(actionStore, a, live.fx ?? undefined);
-      store.pushCoachMessage({
+      store.pushCoachMessageTo(activeCoachThread, {
         role: 'coach',
         text: `Done — ${summary}. It is live in your data; quotes fill in automatically.`,
         source: 'system',
         at: Date.now(),
       });
-      toast('Action applied.');
+      toast('Action applied.', 'ok');
     } catch (e) {
       toast(`Could not apply the action: ${e instanceof Error ? e.message : String(e)}`, 'err');
     }
@@ -200,7 +389,7 @@ export function CoachView() {
 
   const dismissAction = () => {
     if (!pendingAction) return;
-    store.pushCoachMessage({
+    store.pushCoachMessageTo(activeCoachThread, {
       role: 'coach',
       text: 'Understood — nothing was created. Tell me what to change and I will re-propose it.',
       source: 'system',
@@ -209,9 +398,22 @@ export function CoachView() {
     setPendingAction(null);
   };
 
+  const armClear = () => {
+    if (armedClear) {
+      store.clearActiveThread();
+      setArmedClear(false);
+      toast('Chat cleared.', 'ok');
+      if (clearTimer.current) clearTimeout(clearTimer.current);
+      return;
+    }
+    setArmedClear(true);
+    if (clearTimer.current) clearTimeout(clearTimer.current);
+    clearTimer.current = setTimeout(() => setArmedClear(false), 3000);
+  };
+
   if (!vault) return null;
 
-  const hasMessages = coachLog.length > 0;
+  const hasMessages = coachMessages.length > 0;
 
   return (
     <>
@@ -230,21 +432,33 @@ export function CoachView() {
                 : 'ON-DEVICE RULES (free)'}
           </span>
         </div>
-        {hasMessages && (
+        <div className="row" style={{ gap: 4 }}>
+          {/* Thread switcher trigger */}
           <button
             className="btn ghost sm"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-            onClick={() => {
-              store.clearCoachLog();
-              toast('Conversation cleared.');
-            }}
-          >
-            <IClose size={13} /> Clear
-          </button>
-        )}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 44, minHeight: 44 }}
+            onClick={() => setSwitcherOpen(true)}
+            aria-label="Switch chat"
+            >
+            <span style={{ display: 'inline-flex', transform: 'rotate(-90deg)' }}><IChevron size={13} /></span>
+            Chats
+            </button>
+          {/* Per-thread clear */}
+          {hasMessages && (
+            <button
+              className={`btn ghost sm ${armedClear ? 'danger' : ''}`}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 44, minHeight: 44 }}
+              onClick={armClear}
+            >
+              <IClose size={13} />
+              {armedClear ? 'Tap to clear' : 'Clear'}
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="coach-chat" ref={scrollRef}>
+        {/* Quick starts accordion — shown only when the active thread is empty */}
         {!hasMessages && (
           <div className="coach-welcome">
             <div className="coach-welcome-ico"><ICoach size={22} /></div>
@@ -254,17 +468,32 @@ export function CoachView() {
               pace, currency exposure. No key configured? I answer with the
               on-device rule engine, so it stays free and offline.
             </p>
-            <div className="coach-chips">
-              {SUGGESTIONS.map((s) => (
-                <button key={s} className="chip" onClick={() => void send(s)}>
-                  {s}
-                </button>
-              ))}
+            {/* Collapsible quick starts */}
+            <div style={{ marginTop: 8 }}>
+              <button
+                className="btn ghost sm"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: 44 }}
+                onClick={() => setQuickStartsOpen(!quickStartsOpen)}
+              >
+                <span style={{ display: 'inline-flex', transform: quickStartsOpen ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.2s' }}>
+                  <IChevron size={12} />
+                </span>
+                Quick starts
+              </button>
+              {quickStartsOpen && (
+                <div className="coach-chips" style={{ marginTop: 8 }}>
+                  {QUICK_STARTS.map((s) => (
+                    <button key={s} className="chip" onClick={() => void send(s)}>
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
 
-        {coachLog.map((m) => (
+        {coachMessages.map((m) => (
           <div key={m.id} className={`msg ${m.role}`}>
             <div className="msg-body">
               {m.image ? <img className="coach-msg-img" src={m.image} alt="Attached" /> : null}
@@ -370,6 +599,19 @@ export function CoachView() {
           </button>
         </div>
       </form>
+
+      {switcherOpen && (
+        <ThreadSwitcher
+          threads={coachThreads}
+          activeId={activeCoachThread}
+          onSelect={(id) => store.setActiveCoachThread(id)}
+          onNew={() => store.addCoachThread()}
+          onRename={(id, title) => store.renameCoachThread(id, title)}
+          onDelete={(id) => store.deleteCoachThread(id)}
+          onClose={() => setSwitcherOpen(false)}
+          toast={toast}
+        />
+      )}
     </>
   );
 }

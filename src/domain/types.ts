@@ -354,6 +354,15 @@ export interface VaultBlob {
   // Coach conversation, persisted so a reload keeps the thread. Old
   // encrypted blobs may lack it — readers normalize with ?? [].
   coachLog?: CoachMessage[];
+  /** Multi-session coach threads. NEW — replaces the single coachLog with a
+   *  set of named conversations, each persisted encrypted inside the vault.
+   *  Optional so old blobs keep decrypting; readers normalize with ?? [].
+   *  @deprecated alias below (coachLog) is retained one release. */
+  coachThreads?: CoachThread[];
+  /** The thread id currently open in the Coach UI. Optional; readers default
+   *  to the most-recently-updated thread when it's missing or points at a
+   *  deleted id. */
+  activeCoachThread?: string;
   // ---- Extended entities (gap-report P0/P1). All optional so old encrypted
   // blobs keep decrypting; readers normalize with ?? []. ----
   /** Category budget caps (P0 #4). */
@@ -405,6 +414,19 @@ export interface CoachMessage {
   image?: string;
   source?: 'llm' | 'rules' | 'system';
   at: number;
+}
+
+/** One named coach conversation. Persisted encrypted inside the vault.
+ *  Bounded to the last 200 messages per thread (same bound as the old
+ *  single coachLog) so the vault blob stays small no matter how long the
+ *  user chats. `title` is auto-set from the first user message (40-char cap)
+ *  and can be user-renamed; `updatedAt` bumps on every message push. */
+export interface CoachThread {
+  id: string; // client-generated
+  title: string; // "New chat" until the first user message titles it
+  createdAt: number; // epoch ms
+  updatedAt: number; // epoch ms
+  messages: CoachMessage[];
 }
 
 /** Snapshot of live market data — not persisted with the vault by default

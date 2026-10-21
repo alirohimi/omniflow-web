@@ -5,7 +5,7 @@
 // ============================================================================
 
 import { describe, it, expect } from 'vitest';
-import { buildBrief, coachSystemPrompt, coachFallback, coachAsk } from '../src/ai/coach';
+import { buildBrief, coachSystemPrompt, coachFallback, coachAsk, buildContextPack, HISTORY_TURNS, __test, type CoachBrief } from '../src/ai/coach';
 import type { CoachContext } from '../src/ai/coach';
 import type { LLMConfig } from '../src/ai/categorize';
 import type { CoachMessage, Category } from '../src/domain/types';
@@ -87,7 +87,9 @@ describe('coach persona', () => {
     });
     const p = coachSystemPrompt(buildBrief(c));
     expect(p).toContain('MYR');
-    expect(p).toContain('1000');
+    // Numbers are pre-formatted with the currency symbol (locale thousands
+    // separator), so the raw "1000" appears as "1,000".
+    expect(p).toContain('1,000');
     expect(p.toLowerCase()).toMatch(/margin of safety|discipline|time horizon|concentrat/);
   });
 });
@@ -212,8 +214,112 @@ describe('coach orchestration', () => {
   it('the LLM system prompt carries the exact category names to pick from', () => {
     const c = ctx();
     const p = coachSystemPrompt(buildBrief(c));
-    expect(p).toContain('"categories"');
+    // Categories are surfaced via the ## CATEGORIES section of the context pack.
+    expect(p).toContain('## CATEGORIES');
     expect(p).toContain('Food');
     expect(p).toContain('Transport');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// New: buildContextPack + cheap-model system prompt (Task 002)
+// ---------------------------------------------------------------------------
+
+function sampleBrief(): CoachBrief {
+  return buildBrief(
+    ctx({
+      holdings: [
+        {
+          symbol: 'VOO', assetClass: 'etf', units: 10,
+          holdingCurrency: 'USD', currentPriceBase: 400,
+        } as never,
+      ],
+      expenses: [
+        { id: 'tx_1', merchant: 'Shopee', category: 'Food', amountBase: 100, currency: MYR, at: Date.now() - 86400000 } as never,
+      ],
+    }),
+  );
+}
+
+describe('buildContextPack', () => {
+  it('is deterministic: same brief + same history -> identical string', () => {
+    const b = sampleBrief();
+    const h: CoachMessage[] = [
+      { id: '1', role: 'user', text: 'hello', at: Date.now() },
+      { id: '2', role: 'coach', text: 'hi', at: Date.now() },
+    ];
+    expect(buildContextPack(b, h)).toBe(buildContextPack(b, h));
+  });
+
+  it('emits sections in the fixed required order', () => {
+    const p = buildContextPack(sampleBrief());
+    const idx = (s: string) => p.indexOf(s);
+    const order = ['## PORTFOLIO', '## SPENDING', '## SAFETY CUSHION', '## RECENT', '## CATEGORIES'];
+    for (const s of order) expect(idx(s)).toBeGreaterThan(-1);
+    for (let i = 1; i < order.length; i++)
+      expect(idx(order[i])).toBeGreaterThan(idx(order[i - 1]));
+  });
+
+  it('reads "Not set up" for SAFETY CUSHION when emergency data is absent', () => {
+    const b = sampleBrief();
+    delete (b as { emergency?: unknown }).emergency;
+    const p = buildContextPack(b);
+    expect(p).toContain('## SAFETY CUSHION');
+    expect(p).toContain('Not set up');
+  });
+
+  it('includes the CATEGORIES list', () => {
+    const p = buildContextPack(sampleBrief());
+    expect(p).toContain('Food');
+    expect(p).toContain('Transport');
+    expect(p).toContain('Other');
+  });
+});
+
+describe('coachSystemPrompt (cheap-model ready)', () => {
+  it('contains the context pack sections', () => {
+    const p = coachSystemPrompt(sampleBrief());
+    for (const s of ['## PORTFOLIO', '## SPENDING', '## CATEGORIES'])
+      expect(p).toContain(s);
+  });
+
+  it('contains the few-shot exemplars and ACTION_CONTRACT', () => {
+    const p = coachSystemPrompt(sampleBrief());
+    expect(p).toContain('Example 1');
+    expect(p).toContain('Example 2');
+    expect(p).toContain('Example 3');
+    // The hard style rules are present:
+    expect(p).toContain('Max 120 words');
+    expect(p).toContain('dash bullets');
+    // ACTION_CONTRACT is appended verbatim (its opening line):
+    expect(p).toContain('[ACTION:');
+  });
+
+  it('no longer sends the raw JSON brief blob to the model', () => {
+    const p = coachSystemPrompt(sampleBrief());
+    // The old JSON.stringify(brief) is gone; replaced by the structured pack.
+    expect(p).not.toContain('"netWorthBase"');
+    expect(p).not.toContain('"spend30Base"');
+  });
+});
+
+describe('coachAsk history window', () => {
+  it('sends only the last HISTORY_TURNS turns of context', async () => {
+    const history: CoachMessage[] = Array.from({ length: 10 }, (_, i) => ({
+      id: `h${i}`, role: i % 2 === 0 ? 'user' : 'coach', text: `turn ${i}`, at: Date.now(),
+    })) as CoachMessage[];
+    let captured: string | null = null;
+    const transport = async (_cfg: LLMConfig, _sys: string, user: string, _images?: string[]) => {
+      captured = user;
+      return 'ok';
+    };
+    const llm: LLMConfig = { provider: 'openai', apiKey: 'sk-test' };
+    await coachAsk('q', ctx(), llm, history, [], transport);
+    expect(captured).not.toBeNull();
+    // Count how many history turns leaked into the payload.
+    const leaks = (captured!.match(/turn \d+/g) ?? []).length;
+    expect(leaks).toBeLessThanOrEqual(HISTORY_TURNS);
+    // The payload is labeled so a weak model separates context from question.
+    expect(captured).toContain('Context so far:');
   });
 });

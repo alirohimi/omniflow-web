@@ -115,6 +115,122 @@ const round = (n: number, d = 0): number => {
   return Math.round(n * p) / p;
 };
 
+/** Format a base-currency amount the way the UI does — symbol + locale string,
+ *  rounded to the given decimals. A single source of truth so the context
+ *  pack and the rule-engine answers agree on number formatting. */
+const fmtMoney = (v: number, code: string, d = 2): string =>
+  `${currencyInfo(code).symbol}${round(v, d).toLocaleString()}`;
+
+/** The bounded history window the LLM tier sends. Kept small so cheap
+ *  models stay inside their sweet spot; each turn is ~50-100 tokens, so 4
+ *  turns (2 user + 2 coach) is ~300-400 tokens. Exported for tests. */
+export const HISTORY_TURNS = 4;
+
+/** Build a clearly-sectioned, fixed-order "context pack" string that a weak
+ *  model can parse without JSON tooling. Same brief + same history -> the
+ *  same string (deterministic: no timestamps, no random elements).
+ *
+ *  Deliberately NOT JSON: structured markdown with one fact per line is far
+ *  more reliably followed by small models than a nested blob, and it costs
+ *  fewer tokens. `##` section headers give a weak model clear anchors; every
+ *  field is labeled in plain language so it never has to infer the meaning
+ *  of a key like `spend30Base`.
+ *
+ *  Only derived aggregates reach the pack (never the raw ledger) — the
+ *  privacy invariant. `brief.emergency` absent -> "Not set up", never
+ *  invented numbers. */
+export function buildContextPack(brief: CoachBrief, history?: CoachMessage[]): string {
+  const cur = brief.baseCurrency;
+  const lines: string[] = [];
+
+  // ## PORTFOLIO
+  lines.push('## PORTFOLIO');
+  lines.push(`Net worth: **${fmtMoney(brief.netWorthBase, cur)}**`);
+  if (brief.portfolioReturnPct != null)
+    lines.push(`Return vs cost: ${brief.portfolioReturnPct >= 0 ? '+' : ''}${round(brief.portfolioReturnPct, 1)}%`);
+  lines.push(
+    brief.allocationPct.length > 0
+      ? `Allocation: ${brief.allocationPct.map((a) => `${a.assetClass} ${a.pct}%`).join(' | ')}`
+      : 'Allocation: no holdings tracked yet',
+  );
+  if (brief.topHolding)
+    lines.push(`Top holding: ${brief.topHolding.symbol} (${brief.topHolding.pct}% of portfolio)`);
+  lines.push(`Crypto share: ${brief.cryptoSharePct}%`);
+  lines.push(`FX exposure: ${brief.fxExposurePct}% in non-base currencies`);
+  lines.push('');
+
+  // ## SPENDING
+  lines.push('## SPENDING');
+  lines.push(`Last 30 days: **${fmtMoney(brief.spend30Base, cur)}**`);
+  lines.push(`Daily pace: ${fmtMoney(brief.dailyPace, cur)}`);
+  lines.push(`Projected month (31d): ${fmtMoney(brief.projectedMonthBase, cur)}`);
+  lines.push(
+    brief.topCategory
+      ? `Top category: ${brief.topCategory.name} (${brief.topCategory.pct}% of tracked spend)`
+      : 'Top category: no spend tracked yet',
+  );
+  lines.push('');
+
+  // ## SAFETY CUSHION
+  lines.push('## SAFETY CUSHION');
+  const e = brief.emergency;
+  if (!e || e.lineCount === 0) {
+    lines.push('Not set up');
+  } else {
+    lines.push(`Reserve: ${fmtMoney(e.reserve, cur)} / target ${fmtMoney(e.target, cur)}`);
+    if (e.coverageMonths != null)
+      lines.push(`Coverage: ${round(e.coverageMonths, 1)} months of essential spend`);
+    const statusNote: Record<string, string> = {
+      building: `building — ${fmtMoney(Math.max(0, e.target - e.reserve), cur)} gap`,
+      ok: 'at or past target',
+      over: 'past target',
+      none: 'not set up',
+    };
+    lines.push(`Status: ${statusNote[e.status] ?? e.status}`);
+    if (e.investedValue > 0)
+      lines.push(`Liquid: ${fmtMoney(e.liquidValue, cur)} · Invested: ${fmtMoney(e.investedValue, cur)}`);
+  }
+  lines.push('');
+
+  // ## RECENT
+  lines.push('## RECENT');
+  if (brief.recentExpenses.length > 0) {
+    lines.push('Transactions (id — merchant — category — amount — date):');
+    for (const t of brief.recentExpenses)
+      lines.push(
+        `- ${t.id} — ${t.merchant || 'unknown'} — ${t.category} — ${fmtMoney(t.amountBase, cur)}${t.when ? ` — ${t.when}` : ''}`,
+      );
+  } else {
+    lines.push('Transactions: none in the last 10 logged');
+  }
+  if (brief.openHoldings.length > 0) {
+    lines.push('Holdings (id — symbol — units — class — currency):');
+    for (const h of brief.openHoldings)
+      lines.push(`- ${h.id} — ${h.symbol} — ${h.units} — ${h.assetClass} — ${h.currency}`);
+  }
+  lines.push('');
+
+  // ## CATEGORIES
+  lines.push('## CATEGORIES');
+  lines.push(
+    brief.categories.length > 0
+      ? `Valid category names: ${brief.categories.join(', ')}`
+      : 'Valid category names: (none defined yet)',
+  );
+
+  // ## HISTORY — only the bounded recent turns, labeled so a weak model
+  // separates prior context from the current question.
+  if (history && history.length > 0) {
+    const tail = history.slice(-HISTORY_TURNS);
+    lines.push('');
+    lines.push('## HISTORY (recent turns — context, not the current question)');
+    for (const m of tail)
+      lines.push(`${m.role === 'user' ? 'User' : 'Coach'}: ${m.text}`);
+  }
+
+  return lines.join('\n');
+}
+
 /** Build the compact, LLM-safe brief from the full context. */
 export function buildBrief(ctx: CoachContext): CoachBrief {
   const { prefs, portfolio, holdings, quotes, expenses, accounts, categories, emergency, fx, now } = ctx;
@@ -233,21 +349,36 @@ export function buildBrief(ctx: CoachContext): CoachBrief {
  *  the voice is stable: a value investor, not a hype man. Grounded, blunt,
  *  margin-of-safety framing, short and actionable — never a disclaimer wall. */
 export function coachSystemPrompt(brief: CoachBrief): string {
+  const pack = buildContextPack(brief);
   return [
     'You are OmniFlow Coach, a personal-finance advisor in the tradition of long-term value investing.',
     'Identity (hard rule): you ARE OmniFlow Coach. If the user asks who you are, which model you are, what LLM/AI you run on, or who made you, never name any underlying model, vendor, or provider (no "adaCODE", "adacode-3.0-flash", "OpenAI", "GPT", "Claude", "Gemini", etc.). Say you are the OmniFlow Coach, the advisor built into this app; decline to identify the model behind you.',
     'Voice: calm, direct, a little wry. You think in decades, not quarters. You prefer margin of safety, sensible diversification, and paying yourself first.',
-    'Rules:',
-    '- Ground every answer ONLY in the user data below. Never invent prices, returns, or holdings that are not in it.',
-    '- Short. 1-4 tight paragraphs or a short list. Concrete numbers from the data, not platitudes.',
-    '- Formatting: compact markdown only — bold (**...**) the key numbers, use "-" dash bullets for comparisons or allocations. Never use # headers, tables, code blocks, [links], or emoji. Max 140 words.',
-    `- Money always in ${brief.baseCurrency}, the user's base currency.`,
-    '- When they ask what to buy, give process (criteria, position sizing, when to act), not a single-stock call.',
-    '- Flag concentrated positions, heavy crypto, and FX exposure when the data shows them.',
-    '- No legal/tax advice; one line of "general education, not advice" only when a recommendation-adjacent answer is given.',
     '',
-    'User data (derived snapshot — not the raw ledger):',
-    JSON.stringify(brief),
+    'OUTPUT STYLE (hard rules — follow exactly):',
+    '- Compact: 1-3 short paragraphs OR a short bullet list. Max 120 words.',
+    `- Bold (**...**) every key number. Use "-" dash bullets for comparisons or allocations. Never use # headers, tables, code blocks, [links], or emoji.`,
+    `- All money in ${brief.baseCurrency} (the user's base currency), the currency shown in the data below.`,
+    '- Answer using the sections in the data snapshot below; cite the relevant section when you do.',
+    '- When they ask what to buy, give process (criteria, position sizing, when to act), not a single-stock call.',
+    '- Flag concentrated positions, heavy crypto, or FX exposure ONLY when the data below shows it.',
+    '- No legal/tax advice; one line of "general education, not advice" only on a recommendation-adjacent answer.',
+    '',
+    "The data snapshot below is derived aggregates only — NOT the raw ledger. Ground every answer in it; never invent numbers that are not in it.",
+    pack,
+    '',
+    'EXAMPLES (format + grounding only; the numbers are illustrative of style, not real data for this user):',
+    'Example 1',
+    'User: Where should I put new money?',
+    "Coach: - First, top up your cushion: you're at **RM 9,000** of a **RM 12,000** target, so direct the next installment to the emergency reserve before the growth slice.",
+    '- Once the cushion is funded, redirect new money into your lightest allocation.',
+    '- Buy boring, own it long — no timing, no averaging down on a thesis you cannot restate.',
+    'Example 2',
+    'User: Am I overspending?',
+    "Coach: Your pace is **RM 137/day** — about **RM 4,258** for a 31-day month. Your heaviest slice is **Food at 41%** of tracked spend. That's the first thing to trim, not a new subscription.",
+    'Example 3',
+    'User: What is my currency exposure?',
+    "Coach: **30%** of your portfolio sits outside your base currency. That is a position, whether you intended it or not — a deliberate hedge beats an accidental one.",
     '',
     ACTION_CONTRACT,
   ].join('\n');
@@ -434,11 +565,15 @@ export async function coachAsk(
   if (llm) {
     try {
       const sys = coachSystemPrompt(brief);
+      // Bounded, labeled history window so cheap models can separate prior
+      // context from the current question. The tail is "Context so far:"
+      // because the system prompt already carries the full data pack; this
+      // is just the recent conversational flow.
       const tail = history
-        .slice(-6)
+        .slice(-HISTORY_TURNS)
         .map((m) => `${m.role === 'user' ? 'User' : 'Coach'}: ${m.text}`)
         .join('\n');
-      const user = tail ? `${tail}\nUser: ${question}` : question;
+      const user = tail ? `Context so far:\n${tail}\n\nUser: ${question}` : question;
       const raw = await transport(llm, sys, user, images);
       const clean = stripActionMarker(raw.trim());
       // Validate against the user's REAL category list (ctx.categories).
@@ -481,4 +616,4 @@ export async function coachAsk(
   return { ...fb, degraded: Boolean(llm), llmError };
 }
 
-export const __test = { buildBrief, coachSystemPrompt, coachFallback, INTENTS };
+export const __test = { buildBrief, buildContextPack, coachSystemPrompt, coachFallback, INTENTS, HISTORY_TURNS };
