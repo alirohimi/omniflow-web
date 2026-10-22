@@ -60,11 +60,13 @@ export function portfolioBaseValue(
 /** Spend over the trailing `days` days, in base currency.
  *  `baseAmount` is snapshotted at capture time in whatever base was active
  *  then; when the user has since switched base we re-convert via the stored
- *  FX rate instead of assuming the snapshot is still in the active base. */
-export function spendOverLastDays(expenses: Expense[], days: number, baseCurrency: string): number {
-  const cutoff = Date.now() - days * 86_400_000;
+ *  FX rate instead of assuming the snapshot is still in the active base.
+ *  `cutoff` pins the window start (default: Date.now() - days). Engines that
+ *  must stay deterministic given an explicit `now` pass their own cutoff. */
+export function spendOverLastDays(expenses: Expense[], days: number, baseCurrency: string, cutoff?: number): number {
+  const start = cutoff ?? (Date.now() - days * 86_400_000);
   return expenses
-    .filter((e) => e.timestamp >= cutoff && e.category !== 'Income')
+    .filter((e) => e.timestamp >= start && e.category !== 'Income')
     .reduce((sum, e) => {
       // If the snapshot was taken in the active base, use it directly.
       // Otherwise re-convert originalAmount through the stored fxRate so a

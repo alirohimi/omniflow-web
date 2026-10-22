@@ -141,8 +141,8 @@ export function EmergencyPanel() {
           <div className="hero-sub">
             <span className={res.status === 'building' || res.status === 'none' ? 'neg' : 'pos'}>
               {res.coverageMonths != null
-                ? `${res.coverageMonths.toFixed(1)} months of essentials`
-                : 'no essential spend recorded yet'}
+                ? `${res.coverageMonths.toFixed(1)} months of spending`
+                : 'no spending recorded yet'}
             </span>
           </div>
         </div>
@@ -158,7 +158,7 @@ export function EmergencyPanel() {
             ? ' (pinned)'
             : res.targetSource === 'zero-spend'
               ? ' (no spend base)'
-              : ` (${res.targetMonths} mo × ${sym}${res.monthlyEssential.toFixed(0)})`}
+              : ` (${res.targetMonths} mo × ${sym}${res.monthlySpend.toFixed(0)})`}
         </span>
         <span>
           {sym}{res.liquidValue.toFixed(0)} liquid · {sym}{res.investedValue.toFixed(0)} invested
@@ -253,7 +253,7 @@ export function EmergencyPanel() {
       <Disclosure id="em-target" title="Reserve target">
       <h2 className="section-title">Target</h2>
       <div className="cols">
-        <label className="field"><span>Months of essentials</span>
+        <label className="field"><span>Months of spending (default 6)</span>
           <input
             type="number"
             inputMode="numeric"

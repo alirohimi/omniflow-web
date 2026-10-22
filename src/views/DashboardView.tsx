@@ -474,7 +474,7 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
               {emRes.lines.length === 0 ? (
                 <span className="muted">No lines yet — add one under Portfolio</span>
               ) : emRes.coverageMonths != null ? (
-                <span>{emRes.coverageMonths.toFixed(1)} mo of essentials</span>
+                <span>{emRes.coverageMonths.toFixed(1)} mo of spending</span>
               ) : (
                 <span className="muted">Coverage not measurable yet</span>
               )}

@@ -23,13 +23,14 @@ export const BUDGET_PERIODS: BudgetPeriod[] = ['daily', 'weekly', 'monthly', 'ye
 export const ASSET_KINDS: ManualAsset['kind'][] = ['bank', 'cash', 'property', 'other'];
 export const AUTO_INVEST_PERIODS: AutoInvestPeriod[] = ['weekly', 'monthly', 'quarterly', 'yearly'];
 
-/** Fresh emergency-fund module. `targetMonths` defaults to 3 (the classic
- *  YNAB starter cushion; the 3–6 range is the user's to widen). No
- *  `targetOverrideBase` — the target is derived from essential spending
+/** Fresh emergency-fund module. `targetMonths` defaults to 6 — the user's
+ *  rule is "emergency funds = average monthly expenses × 6". A user can
+ *  still narrow the cushion to 1-12 from the EmergencyPanel. No
+ *  `targetOverrideBase` — the target is derived from total monthly spend
  *  until the user pins an explicit number. */
 export const EMERGENCY_DEFAULT: EmergencyFund = {
   items: [],
-  targetMonths: 3,
+  targetMonths: 6,
 };
 
 export const CATEGORIES: Category[] = [

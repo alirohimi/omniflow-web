@@ -22,20 +22,13 @@ import type {
 import type { RatesForBase } from '../services/fx';
 import type { PortfolioSummary, AccountLine } from '../ai/portfolio';
 import { fxService } from '../services/fx';
+import { spendOverLastDays } from '../ai/advisor';
 
-/** Curated "essential" category names — the bills you cannot skip.
- *  Matched against `Expense.category` (the Category.name string). */
-export const ESSENTIAL_CATEGORIES: string[] = [
-  'Housing & Rent',
-  'Utilities',
-  'Groceries',
-  'Food & Dining',
-  'Transport',
-  'Health & Beauty',
-  'Education',
-];
-
-export const EMERGENCY_WINDOW_DAYS = 90; // ~3 months of essential spend
+export const EMERGENCY_WINDOW_DAYS = 90; // ~3 months of total spend
+/** Default months-of-spend target. 6 per the user's rule ("emergency funds
+ *  = average monthly expenses × 6"); the EmergencyPanel still lets the user
+ *  pick 1-12, and a pinned override wins over both. */
+export const EMERGENCY_DEFAULT_MONTHS = 6;
 
 export interface EmergencyLine {
   id: string;
@@ -51,18 +44,19 @@ export interface EmergencyLine {
 export type EmergencyStatus = 'none' | 'building' | 'ok' | 'over';
 
 export interface EmergencyResult {
-  /** Essential monthly spend in base currency (90-day window / 3). 0 when
-   *  no essential spending is recorded. */
-  monthlyEssential: number;
+  /** AVERAGE MONTHLY SPEND (all non-Income outflows, 90-day window / 3) in
+   *  base currency. 0 when no spending is recorded. Per the user's rule the
+   *  emergency target reflects total monthly expenses, not just essentials. */
+  monthlySpend: number;
   /** Target reserve in base currency. From `targetOverrideBase` when the
-   *  user pinned a number, else monthlyEssential * targetMonths. */
+   *  user pinned a number, else monthlySpend * targetMonths (default 6). */
   target: number;
   targetSource: 'override' | 'derived' | 'zero-spend';
   targetMonths: number;
   /** Total reserve value in base currency. */
   reserve: number;
-  /** reserve / monthlyEssential — how many months of essentials you cover.
-   *  null when monthlyEssential is 0 (unknown without a spend base). */
+  /** reserve / monthlySpend — how many months of average spending you cover.
+   *  null when monthlySpend is 0 (unknown without a spend base). */
   coverageMonths: number | null;
   /** reserve / target * 100 (0..100+, clamped for display elsewhere). */
   pctOfTarget: number;
@@ -94,18 +88,16 @@ function toBase(amount: number, from: string, fx: RatesForBase | null, base: str
   return fxService.toBase(amount, from, fx);
 }
 
-/** 90-day essential spend, monthly-equivalent, base currency. */
+/** Trailing-90-day average monthly spend (ALL non-Income outflows) in base
+ *  currency. The 90-day window is pinned to `now` via an explicit
+ *  `cutoff` (spendOverLastDays defaults to Date.now(), which would make the
+ *  engine non-deterministic in tests). Reuses `spendOverLastDays` so the
+ *  base-currency-snapshot FX re-conversion logic is shared with the pace
+ *  engine. 90 days -> /3 = one average month. 0 when no spending is
+ *  recorded. */
 export function essentialMonthlySpend(expenses: Expense[], base: string, now: number): number {
-  const from = now - EMERGENCY_WINDOW_DAYS * 86_400_000;
-  let sum = 0;
-  for (const e of expenses) {
-    if (e.category === 'Income') continue;
-    if (!ESSENTIAL_CATEGORIES.includes(e.category)) continue;
-    if (e.timestamp < from) continue;
-    if (typeof e.baseAmount === 'number' && Number.isFinite(e.baseAmount)) sum += e.baseAmount;
-  }
-  // 90 days -> /3 = one average month. Guard divide-by-zero upstream.
-  return sum / 3;
+  const cutoff = now - EMERGENCY_WINDOW_DAYS * 86_400_000;
+  return spendOverLastDays(expenses, EMERGENCY_WINDOW_DAYS, base, cutoff) / 3;
 }
 
 /** Is a designated account "liquid" (instantly usable) by the asset classes
@@ -118,20 +110,29 @@ function accountIsLiquid(line: AccountLine | undefined): boolean {
 
 export function computeEmergency(input: EmergencyInput): EmergencyResult {
   const { emergency, expenses, accounts, portfolio, fx, base, now } = input;
-  const monthlyEssential = essentialMonthlySpend(expenses, base, now);
+  const monthlySpend = essentialMonthlySpend(expenses, base, now);
 
   const monthlyOverride =
     typeof emergency.targetOverrideBase === 'number' && Number.isFinite(emergency.targetOverrideBase) && emergency.targetOverrideBase > 0
       ? emergency.targetOverrideBase
       : null;
 
+  // Default target months is 6 per the user's rule ("emergency funds =
+  // average monthly expenses × 6"). Old encrypted blobs carry targetMonths
+  // (3) — normalize the MISSING/default case to 6, but respect an explicit
+  // user-set value from the panel (which is clamped 1-12 on save).
+  const targetMonths =
+    typeof emergency.targetMonths === 'number' && Number.isFinite(emergency.targetMonths) && emergency.targetMonths > 0
+      ? emergency.targetMonths
+      : EMERGENCY_DEFAULT_MONTHS;
+
   let target: number;
   let targetSource: EmergencyResult['targetSource'];
   if (monthlyOverride != null) {
     target = monthlyOverride;
     targetSource = 'override';
-  } else if (monthlyEssential > 0) {
-    target = monthlyEssential * emergency.targetMonths;
+  } else if (monthlySpend > 0) {
+    target = monthlySpend * targetMonths;
     targetSource = 'derived';
   } else {
     target = 0;
@@ -184,17 +185,17 @@ export function computeEmergency(input: EmergencyInput): EmergencyResult {
     }
   }
 
-  const coverageMonths = monthlyEssential > 0 ? reserve / monthlyEssential : null;
+  const coverageMonths = monthlySpend > 0 ? reserve / monthlySpend : null;
   const pctOfTarget = target > 0 ? (reserve / target) * 100 : reserve > 0 ? 100 : 0;
   const status: EmergencyStatus =
     lines.length === 0 ? 'none' : target > 0 && reserve >= target ? (reserve > target ? 'over' : 'ok') : 'building';
   const gap = target > 0 ? Math.max(0, target - reserve) : 0;
 
   return {
-    monthlyEssential,
+    monthlySpend,
     target,
     targetSource,
-    targetMonths: emergency.targetMonths,
+    targetMonths,
     reserve,
     coverageMonths,
     pctOfTarget,

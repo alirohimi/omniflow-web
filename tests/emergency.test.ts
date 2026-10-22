@@ -39,7 +39,7 @@ const expense = (over: Partial<Expense>): Expense =>
 
 const em = (over: Partial<EmergencyFund>): EmergencyFund => ({
   items: [],
-  targetMonths: 3,
+  targetMonths: 6,
   ...over,
 });
 
@@ -74,28 +74,30 @@ const acctLine = (id: string, platformName: string, valueBase: number, classes: 
   returnPct: null,
 });
 
-/** 90-day essential spend, pinned: only in-window essential categories count. */
+/** 90-day spend, pinned: income + out-of-window rows excluded; ALL
+ *  non-income outflows count (total monthly spend, not just essentials). */
 const SPEND = [
   expense({ id: 's1', category: 'Housing & Rent', baseAmount: 300, timestamp: NOW - 30 * D }),
   expense({ id: 's2', category: 'Groceries', baseAmount: 300, timestamp: NOW - 10 * D }),
-  expense({ id: 's3', category: 'Entertainment', baseAmount: 999, timestamp: NOW }), // non-essential
+  expense({ id: 's3', category: 'Entertainment', baseAmount: 999, timestamp: NOW }), // non-essential: still counts
   expense({ id: 's4', category: 'Housing & Rent', baseAmount: 1000, timestamp: NOW - 100 * D }), // out of window
   expense({ id: 's5', category: 'Income', baseAmount: 5000, timestamp: NOW - 5 * D }), // income
 ];
 
 describe('essentialMonthlySpend', () => {
-  it('averages 90-day essential spend and skips non-essential / income / out-of-window', () => {
-    // (300 + 300) / 3 = 200.  s3 (entertainment), s4 (>90d), s5 (income) excluded.
-    expect(essentialMonthlySpend(SPEND, 'MYR', NOW)).toBe(200);
+  it('averages 90-day total spend (all non-income outflows) and skips income / out-of-window', () => {
+    // (300 + 300 + 999) / 3 = 533. s4 (>90d) and s5 (income) excluded;
+    // s3 (non-essential) now INCLUDES the total.
+    expect(essentialMonthlySpend(SPEND, 'MYR', NOW)).toBeCloseTo(533, 0);
   });
 
-  it('is zero when no essential spending exists', () => {
-    expect(essentialMonthlySpend([expense({ category: 'Entertainment', baseAmount: 500, timestamp: NOW })], 'MYR', NOW)).toBe(0);
+  it('is zero when no spending exists', () => {
+    expect(essentialMonthlySpend([expense({ category: 'Income', baseAmount: 500, timestamp: NOW })], 'MYR', NOW)).toBe(0);
   });
 });
 
 describe('computeEmergency', () => {
-  it('derives target = months x essential spend; a manual line is FX-converted to base', () => {
+  it('derives target = months x total monthly spend; a manual line is FX-converted to base', () => {
     const r = computeEmergency({
       emergency: em({ items: [{ id: 'm1', kind: 'manual', name: 'Bank HYSA', amount: 150, currency: 'USD', createdAt: NOW }] }),
       expenses: SPEND,
@@ -105,16 +107,37 @@ describe('computeEmergency', () => {
       base: 'MYR',
       now: NOW,
     });
-    // 150 USD / 0.25 = 600 MYR reserve.  target = 200 * 3 = 600.
+    // 150 USD / 0.25 = 600 MYR reserve.  target = 533 * 6 (default months)
+    // = 3198.  No explicit targetMonths on the emergency blob -> the 6-month
+    // rule applies, not the old 3.
     expect(r.reserve).toBe(600);
-    expect(r.monthlyEssential).toBe(200);
-    expect(r.target).toBe(600);
+    expect(r.monthlySpend).toBeCloseTo(533, 0);
+    expect(r.targetMonths).toBe(6);
+    expect(r.target).toBeCloseTo(3198, 0);
     expect(r.targetSource).toBe('derived');
-    expect(r.coverageMonths).toBe(3);
-    expect(r.status).toBe('ok');
+    expect(r.coverageMonths).toBeCloseTo(1.1, 1); // 600 / 533
+    expect(r.status).toBe('building'); // reserve < target
     expect(r.liquidValue).toBe(600); // manual reserve counts as liquid
     expect(r.investedValue).toBe(0);
-    expect(r.gap).toBe(0);
+    expect(r.gap).toBeCloseTo(2598, 0);
+  });
+
+  it('an explicit user-set targetMonths (e.g. 3) is respected over the 6 default', () => {
+    const r = computeEmergency({
+      emergency: em({
+        targetMonths: 3,
+        items: [{ id: 'm1', kind: 'manual', name: 'Bank', amount: 150, currency: 'USD', createdAt: NOW }],
+      }),
+      expenses: SPEND,
+      accounts: [],
+      portfolio: null,
+      fx,
+      base: 'MYR',
+      now: NOW,
+    });
+    expect(r.targetMonths).toBe(3);
+    expect(r.target).toBeCloseTo(533 * 3, 0); // 1599
+    expect(r.targetSource).toBe('derived');
   });
 
   it('a pinned override wins over the months-derived target and sets the gap', () => {
@@ -191,7 +214,7 @@ describe('computeEmergency', () => {
       now: NOW,
     });
     expect(r.status).toBe('none');
-    expect(r.coverageMonths).toBeNull(); // no essential spend to measure against
+    expect(r.coverageMonths).toBeNull(); // no spend base to measure against
     expect(r.target).toBe(0);
     expect(r.targetSource).toBe('zero-spend');
   });

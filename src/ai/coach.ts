@@ -101,7 +101,8 @@ export interface CoachBrief {
     reserve: number;         // base currency, all lines combined
     target: number;          // base currency
     coverageMonths: number | null;
-    monthlyEssential: number;
+    monthlySpend: number;    // average monthly spend (all outflows) the target is derived from
+    targetMonths: number;    // months of spend the target expresses (default 6)
     targetSource: 'override' | 'derived' | 'zero-spend';
     status: 'none' | 'building' | 'ok' | 'over';
     liquidValue: number;
@@ -179,7 +180,7 @@ export function buildContextPack(brief: CoachBrief, history?: CoachMessage[]): s
   } else {
     lines.push(`Reserve: ${fmtMoney(e.reserve, cur)} / target ${fmtMoney(e.target, cur)}`);
     if (e.coverageMonths != null)
-      lines.push(`Coverage: ${round(e.coverageMonths, 1)} months of essential spend`);
+      lines.push(`Coverage: ${round(e.coverageMonths, 1)} months of average spend`);
     const statusNote: Record<string, string> = {
       building: `building — ${fmtMoney(Math.max(0, e.target - e.reserve), cur)} gap`,
       ok: 'at or past target',
@@ -293,7 +294,8 @@ export function buildBrief(ctx: CoachContext): CoachBrief {
       reserve: round(res.reserve, 2),
       target: round(res.target, 2),
       coverageMonths: res.coverageMonths == null ? null : round(res.coverageMonths, 1),
-      monthlyEssential: round(res.monthlyEssential, 2),
+      monthlySpend: round(res.monthlySpend, 2),
+      targetMonths: res.targetMonths,
       targetSource: res.targetSource,
       status: res.status,
       liquidValue: round(res.liquidValue, 2),
@@ -447,16 +449,16 @@ const INTENTS: Intent[] = [
     answer: (b) => {
       const e = b.emergency;
       if (!e || e.lineCount === 0)
-        return 'You have no emergency reserve set up yet, and that is the one thing that decides whether a job loss is a blip or a crisis. Start a separate cushion — even a small one — before you let the growth slice decide your entire financial fate. Size it to your essential spend, not your total spend.';
+        return 'You have no emergency reserve set up yet, and that is the one thing that decides whether a job loss is a blip or a crisis. Start a separate cushion — even a small one — before you let the growth slice decide your entire financial fate. Size it to your average monthly spend.';
       const cov =
         e.coverageMonths != null
-          ? ` You currently cover ${round(e.coverageMonths, 1)} months of essential spend.`
+          ? ` You currently cover ${round(e.coverageMonths, 1)} months of average spend.`
           : '';
       const targetLine =
         e.targetSource === 'override'
           ? ` Your pinned target is ${money(e.target, b.baseCurrency)}.`
           : e.targetSource === 'derived'
-            ? ` At ${money(e.monthlyEssential, b.baseCurrency)}/month of essentials, a 3-month cushion lands around ${money(e.target, b.baseCurrency)}.`
+            ? ` At ${money(e.monthlySpend, b.baseCurrency)}/month average spend, a ${e.targetMonths}-month cushion lands around ${money(e.target, b.baseCurrency)}.`
             : '';
       const statusLine =
         e.status === 'over'

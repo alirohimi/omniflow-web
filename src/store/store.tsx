@@ -1144,7 +1144,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const setEmergencyModule = (fn: (em: EmergencyFund) => EmergencyFund) => {
     setVault((prev) => {
       if (!prev) return prev;
-      const em = prev.emergency ?? { items: [], targetMonths: 3 };
+      const em = prev.emergency ?? { items: [], targetMonths: 6 };
       const next = { ...prev, emergency: fn(em), updatedAt: Date.now() } as VaultBlob;
       void persist(next);
       return next;
