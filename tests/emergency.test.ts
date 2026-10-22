@@ -1,8 +1,10 @@
 // ============================================================================
-// OmniFlow — regression tests for the emergency-reserve engine (2026-10-11).
+// OmniFlow — regression tests for the emergency-reserve engine (2026-10-11,
+// avg-spend rule reworked 2026-10-21 for Task 006).
 // Pins the coverage position the Settings panel and Dashboard card render:
-// essential-spend filtering, derived vs. pinned target, FX conversion of
-// manual lines, designated-account liquidity, and the status ladder.
+// average-MONTHLY-spend (all non-Income outflows, partial current month
+// prorated), derived vs. pinned target, FX conversion of manual lines,
+// designated-account liquidity, and the status ladder.
 // All inputs are deterministic (explicit `now`), so tests pin exact numbers.
 // ============================================================================
 
@@ -16,8 +18,10 @@ import type { RatesForBase } from '../src/services/fx';
 import type { PortfolioSummary } from '../src/ai/portfolio';
 import { computeEmergency, essentialMonthlySpend } from '../src/insights/emergency';
 
-const NOW = 1_760_000_000_000;
-const D = 86_400_000;
+const DAY = 86_400_000;
+// Fixed 1st of the month at 12:00 local -> current-month daysElapsed = 25,
+// daysInMonth = 31 (October).  Prorate factor = 31/25 = 1.24.
+const NOW = new Date(2025, 9, 1).getTime();
 
 // 1 MYR = 0.25 USD  =>  1 USD = 4 MYR (toBase divides by the rate).
 const fx: RatesForBase = { base: 'MYR', rates: { USD: 0.25 }, asOf: NOW, source: 'offline' };
@@ -74,30 +78,57 @@ const acctLine = (id: string, platformName: string, valueBase: number, classes: 
   returnPct: null,
 });
 
-/** 90-day spend, pinned: income + out-of-window rows excluded; ALL
- *  non-income outflows count (total monthly spend, not just essentials). */
+/** 3+ months of spend, pinned. NOW = 1st Oct 2025 00:00 -> complete months
+ *  are Aug & Sep 2025; current partial month = Oct (just started, ~1 day).
+ *  All non-Income outflows count; income rows + out-of-window months excluded. */
 const SPEND = [
-  expense({ id: 's1', category: 'Housing & Rent', baseAmount: 300, timestamp: NOW - 30 * D }),
-  expense({ id: 's2', category: 'Groceries', baseAmount: 300, timestamp: NOW - 10 * D }),
-  expense({ id: 's3', category: 'Entertainment', baseAmount: 999, timestamp: NOW }), // non-essential: still counts
-  expense({ id: 's4', category: 'Housing & Rent', baseAmount: 1000, timestamp: NOW - 100 * D }), // out of window
-  expense({ id: 's5', category: 'Income', baseAmount: 5000, timestamp: NOW - 5 * D }), // income
+  expense({ id: 'aug1', category: 'Transport', baseAmount: 800, timestamp: new Date(2025, 7, 10).getTime() }),
+  expense({ id: 'sep1', category: 'Groceries', baseAmount: 300, timestamp: new Date(2025, 8, 5).getTime() }),
+  expense({ id: 'sep2', category: 'Entertainment', baseAmount: 200, timestamp: new Date(2025, 8, 24).getTime() }),
+  expense({ id: 'jul', category: 'Housing & Rent', baseAmount: 5000, timestamp: new Date(2025, 6, 5).getTime() }),  // out of window
+  expense({ id: 'inc', category: 'Income', baseAmount: 5000, timestamp: new Date(2025, 8, 5).getTime() }),     // income
 ];
 
 describe('essentialMonthlySpend', () => {
-  it('averages 90-day total spend (all non-income outflows) and skips income / out-of-window', () => {
-    // (300 + 300 + 999) / 3 = 533. s4 (>90d) and s5 (income) excluded;
-    // s3 (non-essential) now INCLUDES the total.
-    expect(essentialMonthlySpend(SPEND, 'MYR', NOW)).toBeCloseTo(533, 0);
+  it('averages complete calendar months and prorates the partial current month', () => {
+    // Aug complete: 800
+    // Sep complete: 300+200 = 500
+    // Oct current (partial, ~1 day elapsed, 0 spend): prorates to 0
+    // average = (800 + 500 + 0) / 3 = 433.33
+    expect(essentialMonthlySpend(SPEND, 'MYR', NOW)).toBeCloseTo(433.33, 0);
+  });
+
+  it('prorates a partial current month up to its full-month equivalent', () => {
+    // Pin NOW to a full UTC day boundary so the proration fraction is
+    // timezone-deterministic: local "Sep 25 00:00" in WIB (UTC+7) is
+    // Sep 24 17:00 UTC, 23.67 days into Sep -> daysElapsed = round(23.67)
+    // = 24, daysInMonth = 30, proration = 100 * (30/24) = 125.
+    const now = new Date(Date.UTC(2025, 8, 25, 0, 0, 0)).getTime();
+    const rows = [
+      expense({ id: 'a', category: 'Groceries', baseAmount: 100, timestamp: new Date(Date.UTC(2025, 8, 2)).getTime() }),
+    ];
+    // 3 windows: Jul (complete, empty -> 0), Aug (complete, empty -> 0),
+    // Sep current partial: 100 * (30 / 24 elapsed) = 125.
+    // average = (0 + 0 + 125) / 3 = 41.67.
+    expect(essentialMonthlySpend(rows, 'MYR', now)).toBeCloseTo(41.67, 0);
   });
 
   it('is zero when no spending exists', () => {
     expect(essentialMonthlySpend([expense({ category: 'Income', baseAmount: 500, timestamp: NOW })], 'MYR', NOW)).toBe(0);
   });
+
+  it('treats a no-spend complete month as a known 0 (pulls the average down)', () => {
+    const noSpendMonth = [
+      expense({ id: 'a', category: 'Groceries', baseAmount: 300, timestamp: new Date(2025, 7, 20).getTime() }), // Aug
+      // Sep has no spending -> counts as 0; Oct partial -> 0
+    ];
+    // (800 absent) (0 + 300 + 0) / 3 = 100.  A no-spend month must NOT be skipped.
+    expect(essentialMonthlySpend(noSpendMonth, 'MYR', NOW)).toBeCloseTo(100, 0);
+  });
 });
 
 describe('computeEmergency', () => {
-  it('derives target = months x total monthly spend; a manual line is FX-converted to base', () => {
+  it('derives target = months x average monthly spend; a manual line is FX-converted to base', () => {
     const r = computeEmergency({
       emergency: em({ items: [{ id: 'm1', kind: 'manual', name: 'Bank HYSA', amount: 150, currency: 'USD', createdAt: NOW }] }),
       expenses: SPEND,
@@ -107,19 +138,18 @@ describe('computeEmergency', () => {
       base: 'MYR',
       now: NOW,
     });
-    // 150 USD / 0.25 = 600 MYR reserve.  target = 533 * 6 (default months)
-    // = 3198.  No explicit targetMonths on the emergency blob -> the 6-month
-    // rule applies, not the old 3.
+    // 150 USD / 0.25 = 600 MYR reserve.  monthlySpend = 433.33 (from the
+    // SPEND dataset above), target = 433.33 * 6 (default months) = 2600.
     expect(r.reserve).toBe(600);
-    expect(r.monthlySpend).toBeCloseTo(533, 0);
+    expect(r.monthlySpend).toBeCloseTo(433.33, 0);
     expect(r.targetMonths).toBe(6);
-    expect(r.target).toBeCloseTo(3198, 0);
+    expect(r.target).toBeCloseTo(2600, 0);
     expect(r.targetSource).toBe('derived');
-    expect(r.coverageMonths).toBeCloseTo(1.1, 1); // 600 / 533
+    expect(r.coverageMonths).toBeCloseTo(1.4, 1); // 600 / 433.33
     expect(r.status).toBe('building'); // reserve < target
     expect(r.liquidValue).toBe(600); // manual reserve counts as liquid
     expect(r.investedValue).toBe(0);
-    expect(r.gap).toBeCloseTo(2598, 0);
+    expect(r.gap).toBeCloseTo(2000, 0);
   });
 
   it('an explicit user-set targetMonths (e.g. 3) is respected over the 6 default', () => {
@@ -136,7 +166,7 @@ describe('computeEmergency', () => {
       now: NOW,
     });
     expect(r.targetMonths).toBe(3);
-    expect(r.target).toBeCloseTo(533 * 3, 0); // 1599
+    expect(r.target).toBeCloseTo(433.33 * 3, 0); // 1300
     expect(r.targetSource).toBe('derived');
   });
 

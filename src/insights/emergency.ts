@@ -22,7 +22,6 @@ import type {
 import type { RatesForBase } from '../services/fx';
 import type { PortfolioSummary, AccountLine } from '../ai/portfolio';
 import { fxService } from '../services/fx';
-import { spendOverLastDays } from '../ai/advisor';
 
 export const EMERGENCY_WINDOW_DAYS = 90; // ~3 months of total spend
 /** Default months-of-spend target. 6 per the user's rule ("emergency funds
@@ -88,16 +87,84 @@ function toBase(amount: number, from: string, fx: RatesForBase | null, base: str
   return fxService.toBase(amount, from, fx);
 }
 
-/** Trailing-90-day average monthly spend (ALL non-Income outflows) in base
- *  currency. The 90-day window is pinned to `now` via an explicit
- *  `cutoff` (spendOverLastDays defaults to Date.now(), which would make the
- *  engine non-deterministic in tests). Reuses `spendOverLastDays` so the
- *  base-currency-snapshot FX re-conversion logic is shared with the pace
- *  engine. 90 days -> /3 = one average month. 0 when no spending is
- *  recorded. */
+/** Average MONTHLY spend in base currency (all non-Income outflows), pinned
+ *  to the explicit `now` for determinism.
+ *
+ *  Why not `spendOverLastDays(90) / 3`? Because of the *partial current
+ *  month*. A 90-day window cut at "now" straddles up to 4 calendar
+ *  months: two complete ones plus a partial leading month and a partial
+ *  current month. Dividing the raw 90-day sum by 3 double-counts the
+ *  middle months and under-counts the edges, so the average is off by
+ *  25–50% depending on where in the calendar month "now" lands.
+ *
+ *  The correct rule: average only *complete* calendar months, and include
+ *  the current (partial) month only after prorating it to a full-month
+ *  equivalent — `partialTotal / daysElapsed * daysInMonth`. Proration is
+ *  exactly how the rest of the app's monthly-equivalent math works (the
+ *  recurring engine's yearly÷12, the forecast's 30-day window), so this
+ *  keeps one convention across the product.
+ *
+ *  Calendar months are derived from `now` (local time, consistent with
+ *  the rest of the app's date handling). Up to 3 complete months + the
+ *  current partial month are considered; fewer if the vault has less
+ *  history. A vault with <30 days of history has no complete month yet,
+ *  so the average is proration-only; with <1 day it's 0 ("no spending
+ *  recorded yet" — same as a brand-new vault). */
 export function essentialMonthlySpend(expenses: Expense[], base: string, now: number): number {
-  const cutoff = now - EMERGENCY_WINDOW_DAYS * 86_400_000;
-  return spendOverLastDays(expenses, EMERGENCY_WINDOW_DAYS, base, cutoff) / 3;
+  const DAY = 86_400_000;
+  const t = new Date(now);
+  // Start of the CURRENT calendar month.
+  const curMonthStart = new Date(t.getFullYear(), t.getMonth(), 1).getTime();
+  const curMonthEnd = new Date(t.getFullYear(), t.getMonth() + 1, 1).getTime();
+  const daysInCurMonth = (curMonthEnd - curMonthStart) / DAY;
+  // round() not ceil(): the host's sub-day TZ offset (e.g. UTC+8) would
+  // otherwise shift the integer day count. An intraday offset (< 1 day)
+  // cannot change round((elapsed)/day).
+  const daysElapsed = Math.max(1, Math.round((now - curMonthStart) / DAY)); // >=1
+
+  // Candidate windows, oldest first: complete months within the 90-day
+  // lookback, then the current partial month. A complete month M counts
+  // only if its end is <= 90 days before `now` start-of-window... simpler:
+  // include the two calendar months before the current one when they fit
+  // inside 90 days of history (the classic "3 months of spend" target),
+  // plus always prorate the current partial month.
+  const windows: Array<{ start: number; end: number; complete: boolean; days: number; daysSoFar: number }> = [
+    { start: curMonthStart, end: curMonthEnd, complete: false, days: daysInCurMonth, daysSoFar: daysElapsed },
+  ];
+  // Two preceding complete months, if the vault has that much history.
+  for (let m = 1; m <= 2; m++) {
+    const s = new Date(t.getFullYear(), t.getMonth() - m, 1);
+    const e = new Date(t.getFullYear(), t.getMonth() - m + 1, 1);
+    const start = s.getTime(), end = e.getTime();
+    // Only include a month that started within the 90-day window and
+    // ended in the past (complete).
+    if (end <= curMonthStart && start >= now - EMERGENCY_WINDOW_DAYS * DAY) {
+      windows.unshift({ start, end, complete: true, days: (end - start) / DAY, daysSoFar: (end - start) / DAY });
+    }
+  }
+
+  let totalMonthly = 0;
+  let count = 0;
+  for (const w of windows) {
+    let sum = 0;
+    for (const e of expenses) {
+      if (e.category === 'Income') continue;
+      if (e.timestamp < w.start || e.timestamp >= w.end) continue;
+      const amt =
+        e.baseCurrency === base
+          ? e.baseAmount
+          : e.originalAmount * (Number.isFinite(e.fxRate) ? e.fxRate : 1);
+      if (typeof amt === 'number' && Number.isFinite(amt)) sum += amt;
+    }
+    // Every candidate month counts toward the average — INCLUDING a month
+    // with zero spending. That is the point of an average: a no-spend
+    // month is a legitimate 0 that pulls the rate down. Skipping it would
+    // bias the target upward whenever the user has a lean month.
+    const monthlyEq = w.complete ? sum : (sum / w.daysSoFar) * w.days; // prorate partial
+    totalMonthly += monthlyEq;
+    count += 1;
+  }
+  return count === 0 ? 0 : totalMonthly / count;
 }
 
 /** Is a designated account "liquid" (instantly usable) by the asset classes
