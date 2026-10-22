@@ -227,6 +227,10 @@ export interface VaultStore {
   setPendingImport: (p: import('../domain/types').PendingImport | null) => void;
 
   setPrefs: (patch: Partial<UserPreferences>) => void;
+  /** Set or clear the user's declared salary / income figure. This is the
+   *  authoritative income rate for the cash-flow forecast; `null` clears it
+   *  so the forecast falls back to the logged-income rate. */
+  setSalary: (salary: import('../domain/types').SalaryProfile | null) => void;
   setLlmKey: (
     provider: 'none' | 'openai' | 'anthropic' | 'gemini' | 'adacode',
     key: string,
@@ -1092,6 +1096,32 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     [persist],
   );
 
+  // ---- Declared salary / income figure (authoritative forecast income rate)
+  // A single optional object (not an array) — the pattern of `emergency` and
+  // `pendingImport`: patch-or-null mutator, persisted through the same
+  // re-encrypt-upsert path. `null` clears it (user removed the salary).
+  const setSalary = useCallback(
+    (salary: import('../domain/types').SalaryProfile | null) => {
+      setVault((prev) => {
+        if (!prev) return prev;
+        // Only bump updatedAt when the value actually changes, so a repeated
+        // "save the same number" tap doesn't spawn a redundant upsert.
+        const same =
+          salary === null && prev.salary == null ||
+          (salary != null &&
+            prev.salary != null &&
+            prev.salary.amountPerMonth === salary.amountPerMonth &&
+            prev.salary.period === salary.period &&
+            prev.salary.label === salary.label);
+        if (same) return prev;
+        const next = { ...prev, salary, updatedAt: Date.now() };
+        void persist(next);
+        return next;
+      });
+    },
+    [persist],
+  );
+
   // ---- extended-entity CRUD (budgets / recurring / liabilities / assets / dividends / disposals).
   // Generic factories keep the 12 near-identical mutators DRY. Arrays are
   // optional on old encrypted blobs, so every read normalizes with ?? [].
@@ -1752,6 +1782,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     captureNetWorth,
     setPendingImport,
     setPrefs,
+    setSalary,
     setLlmKey,
     retrySync,
     // Admin & LLM policy (RLS-gated; no-ops when cloud is off or the 0002

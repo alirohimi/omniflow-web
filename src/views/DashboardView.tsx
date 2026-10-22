@@ -8,15 +8,17 @@ import { useMemo, useState, useEffect, useRef } from 'react';
 import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
 import { currencyInfo, formatMoney, EMERGENCY_DEFAULT } from '../domain/enums';
+import type { SalaryPeriod } from '../domain/types';
 import { runRules, spendOverLastDays, summarizeDashboard, type DashboardSummary } from '../ai';
 import {
   computeEmergency,
   forecastCashFlow,
+  periodToMonthly,
   budgetReport,
   upcomingBills,
   bestStrategy,
 } from '../insights';
-import { IPlus, IRefresh, IChevron, ITrend } from '../icons';
+import { IPlus, IRefresh, IChevron, ITrend, IWallet } from '../icons';
 import { fxService } from '../services';
 import { valueInBase } from '../ai/portfolio';
 import Markdown from '../components/Markdown';
@@ -36,6 +38,7 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
   const budgets = vault.budgets ?? [];
   const recurring = vault.recurring ?? [];
   const liabilities = vault.liabilities ?? [];
+  const salary = vault.salary ?? null;
 
   // Net-worth hero: full assets − liabilities.
   //
@@ -81,7 +84,10 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
     [vault, live.quotes, live.fx, base, liabilities],
   );
 
-  // K1 — cashflow forecast: months-until-broke + 6-month projected balances.
+  // K1 — cash-flow forecast: months-until-broke + 6-month projected balances.
+  // A declared salary (vault.salary) is the authoritative income rate and
+  // overrides the sparse logged-income rate, so the forecast reflects the
+  // user's real earnings rather than "income RM21/mo".
   const forecast = useMemo(() => {
     if (!vault.expenses.length) return null;
     return forecastCashFlow(
@@ -91,8 +97,9 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
       recurring,
       base,
       now,
+      salary,
     );
-  }, [nw, vault.expenses, recurring, base, now]);
+  }, [nw, vault.expenses, recurring, base, now, salary]);
 
   // K2 — budget report (spend vs cap, per category, this month).
   const budgetLines = useMemo(
@@ -354,8 +361,9 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
                 </div>
                 <div className="hero-sub">
                   <span className="muted">
-                    income {sym}{forecast.monthlyIncome.toFixed(0)}/mo
-                    {!forecast.incomeLogged ? ' (none logged)' : ''}
+                    {forecast.incomeSource === 'salary'
+                      ? <>salary {sym}{forecast.monthlyIncome.toFixed(0)}/mo</>
+                      : <>income {sym}{forecast.monthlyIncome.toFixed(0)}/mo{!forecast.salarySet && forecast.incomeRowCount === 0 ? ' (none logged)' : ''}</>}
                     {' · '}spend {sym}{forecast.monthlyExpenses.toFixed(0)}/mo
                   </span>
                 </div>
@@ -377,6 +385,14 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
           </div>
         </>
       )}
+
+      {/* ---- Salary / income input ----------------------------------------
+          The cash-flow forecast's income rate should reflect the user's REAL
+          earnings, not the (often sparse) logged Income rows. A compact,
+          always-visible card on the dashboard lets them declare a salary;
+          the engine uses it as the authoritative income rate and the
+          "salary …/mo" label appears in the hero when active. */}
+      <SalaryInputCard baseCurrency={base} store={store} />
 
       {budgetLines.length > 0 && (
         <>
@@ -520,6 +536,106 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
         <button className="btn ghost sm" onClick={() => onOpenTab('investments')} style={{ flex: 1, justifyContent: 'center' }}>
           Portfolio <IChevron size={16} />
         </button>
+      </div>
+    </>
+  );
+}
+
+// ============================================================================
+// SalaryInputCard — declare a salary so the cashflow forecast uses real
+// income instead of the (sparse) logged Income rows. Mobile-first, themed
+// components only (.field / .seg / .btn primitives), touch targets >=44px.
+// ============================================================================
+
+function SalaryInputCard({ baseCurrency, store }: {
+  baseCurrency: string;
+  store: ReturnType<typeof useVaultStore>;
+}) {
+  const sym = currencyInfo(baseCurrency).symbol;
+  const salary = store.vault?.salary ?? null;
+  const [amount, setAmount] = useState(salary ? String(salary.amountPerMonth) : '');
+  const [period, setPeriod] = useState<SalaryPeriod>(salary?.period ?? 'monthly');
+
+  // Re-sync the draft when a saved value changes from another surface (or
+  // after this card saves) so the input never shows a stale figure.
+  useEffect(() => {
+    setAmount(salary ? String(salary.amountPerMonth) : '');
+    setPeriod(salary?.period ?? 'monthly');
+  }, [salary]);
+
+  const canSave = Number(amount) > 0;
+  const save = () => {
+    if (!canSave) return;
+    store.setSalary({
+      amountPerMonth: Number(amount),
+      period,
+      label: 'Salary',
+      updatedAt: Date.now(),
+    });
+  };
+  const clear = () => { store.setSalary(null); };
+
+  const monthlyEquiv = canSave ? periodToMonthly(Number(amount), period) : 0;
+
+  return (
+    <>
+      <h2 className="section-title">Monthly income</h2>
+      <div className="card">
+        <div className="row" style={{ gap: 10, alignItems: 'center' }}>
+          <label className="field grow">
+            <IWallet size={15} />
+            <input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="any"
+              placeholder="e.g. 5000"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              aria-label="Monthly salary amount"
+            />
+          </label>
+          <div className="seg" role="tablist" aria-label="Salary period">
+            {([['monthly', 'mo'], ['weekly', 'wk'], ['yearly', 'yr']] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={period === id}
+                onClick={() => setPeriod(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {canSave ? (
+          <div className="row" style={{ gap: 10, marginTop: 10, alignItems: 'center' }}>
+            <span className="muted small grow">
+              ≈ {sym}{Math.round(monthlyEquiv).toLocaleString()}/mo
+              {salary ? '' : ' — saving uses this for the forecast'}
+            </span>
+            <button type="button" className="btn sm" onClick={save} aria-label="Save salary">
+              Save
+            </button>
+            {salary && (
+              <button type="button" className="btn ghost sm" onClick={clear} aria-label="Remove saved salary">
+                Remove
+              </button>
+            )}
+          </div>
+        ) : (
+          salary && (
+            <div className="row" style={{ gap: 10, marginTop: 10, alignItems: 'center' }}>
+              <span className="muted small grow">
+                {sym}{Math.round(salary.amountPerMonth).toLocaleString()}/{salary.period === 'monthly' ? 'mo' : salary.period === 'weekly' ? 'wk' : 'yr'} saved
+              </span>
+              <button type="button" className="btn ghost sm" onClick={clear} aria-label="Remove saved salary">
+                Remove
+              </button>
+            </div>
+          )
+        )}
       </div>
     </>
   );

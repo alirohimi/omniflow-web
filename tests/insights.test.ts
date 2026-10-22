@@ -187,16 +187,50 @@ describe('cash-flow forecast', () => {
     // Only the 10d-ago income is in the window -> 300, not 800/3.
     expect(plan.monthlyIncome).toBe(300);
     expect(plan.incomeRowCount).toBe(1);
-    expect(plan.incomeLogged).toBe(true);
+    expect(plan.incomeSource).toBe('logged');
+    expect(plan.salarySet).toBe(false);
     // Spend rate is the raw 30-day total, not ÷3.
     expect(plan.monthlyExpenses).toBe(800);
   });
 
-  it('marks incomeLogged=false when no income rows are in the window (data-entry gap, not zero salary)', () => {
+  it('marks incomeSource=logged + no salary when no income rows are in the window (data-entry gap)', () => {
     const plan = forecastCashFlow(0, 3, [expense({ id: 'sp', category: 'Food', baseAmount: 400 })], [], 'MYR', NOW);
     expect(plan.monthlyIncome).toBe(0);
     expect(plan.incomeRowCount).toBe(0);
-    expect(plan.incomeLogged).toBe(false);
+    expect(plan.incomeSource).toBe('logged');
+    expect(plan.salarySet).toBe(false);
+  });
+
+  it('a declared salary OVERRIDES the logged-income rate (authoritative income)', () => {
+    // Even though 300 of income was logged in the window, a declared
+    // RM5000/mo salary is what the forecast uses — that's the whole point.
+    const exps = [expense({ id: 'in', category: 'Income', baseAmount: 300 })];
+    const plan = forecastCashFlow(0, 3, exps, [], 'MYR', NOW, {
+      amountPerMonth: 5000, period: 'monthly', updatedAt: NOW,
+    });
+    expect(plan.monthlyIncome).toBe(5000);
+    expect(plan.incomeSource).toBe('salary');
+    expect(plan.salarySet).toBe(true);
+    // The logged count is still reported for transparency.
+    expect(plan.incomeRowCount).toBe(1);
+    // Net now reflects the salary, not the logged 300.
+    expect(plan.netPerMonth).toBe(5000 - 0);
+  });
+
+  it('converts a period-cadence salary to a monthly-equivalent', () => {
+    const plan = forecastCashFlow(0, 3, [], [], 'MYR', NOW, {
+      amountPerMonth: 60000, period: 'yearly', updatedAt: NOW,
+    });
+    // 60000/year ÷ 12 = 5000/mo.
+    expect(plan.monthlyIncome).toBeCloseTo(5000, 3);
+    expect(plan.incomeSource).toBe('salary');
+  });
+
+  it('a null/absent salary falls back to the logged rate (backward-compat)', () => {
+    const exps = [expense({ id: 'in', category: 'Income', baseAmount: 250 })];
+    const plan = forecastCashFlow(0, 3, exps, [], 'MYR', NOW, null);
+    expect(plan.monthlyIncome).toBe(250);
+    expect(plan.incomeSource).toBe('logged');
   });
 });
 

@@ -152,6 +152,27 @@ export interface NetWorthPoint {
 
 export type AutoInvestPeriod = 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 
+/** Cadence the salary input figure was expressed in — reuses the same
+ *  BudgetPeriod the budgets / recurring modules already use. */
+export type SalaryPeriod = BudgetPeriod;
+
+/** A declared salary / income figure, entered by the user. This is the
+ *  authoritative income rate for the cash-flow forecast: logged Income
+ *  rows are often sparse (people don't log every payday), so a near-zero
+ *  "income/mo" derived from the ledger reads like a data error. The user
+ *  declares their real salary here; the forecast uses it INSTEAD of the
+ *  logged-income rate when present. `period` is the cadence the amount
+ *  expresses; the engine converts everything to a monthly-equivalent. */
+export interface SalaryProfile {
+  /** Monthly-equivalent amount in base currency (after period conversion). */
+  amountPerMonth: number;
+  /** Cadence the input figure was expressed in (default 'monthly'). */
+  period: SalaryPeriod;
+  /** Optional label, e.g. "Salary", "Salary + side income". Display only. */
+  label?: string;
+  updatedAt: number;
+}
+
 /** A standing auto-invest plan: "invest X per period into this account".
  *  `nextDue` is the next cycle the plan owes a contribution. `active` plans
  *  are surfaced in the panel with a "Log now" action; the panel also
@@ -393,6 +414,10 @@ export interface VaultBlob {
    *  Optional so old encrypted blobs keep decrypting; readers normalize
    *  with ?? []. */
   autoInvests?: AutoInvest[];
+  /** Declared salary / income figure (authoritative forecast income rate).
+   *  Optional so old encrypted blobs keep decrypting; readers normalize
+   *  with ?? null. */
+  salary?: SalaryProfile | null;
   /** Contribution ledger (settled auto-invest cycles + manual top-ups).
    *  Grows each account's invested capital; P&L measures against it.
    *  Optional so old encrypted blobs keep decrypting; readers normalize
