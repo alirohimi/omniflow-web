@@ -346,6 +346,13 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const passRef = useRef<string>(''); // holds passphrase in-memory only
   const cipherRef = useRef<VaultCipher | null>(null); // last encrypted blob
   const chainRef = useRef<Promise<void>>(Promise.resolve());
+  // Guard against the async cloud-sync chain resolving AFTER the provider is
+  // unmounted (tests unmount mid-mutation): setState-after-unmount on a
+  // detached root throws "window is not defined" through React's scheduler
+  // and surfaces as a flaky unhandled error. Flipped to false in the
+  // unmount cleanup below; the persist chain checks it before any state
+  // write so a late cloud save never touches dead state.
+  const aliveRef = useRef(true);
   // Latest-auth refs: the provider mounts BEFORE sign-in (user=null ->
   // cloudOn=false, scope='local'). The extended-entity CRUD mutators are
   // stable callbacks ([] deps) that froze the FIRST-render `persist`
@@ -421,11 +428,13 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       if (!pass || !cloudOn) return; // unsigned-in scope: in-memory only
       chainRef.current = chainRef.current.then(
         async () => {
+          if (!aliveRef.current) return; // provider unmounted: never touch state
           try {
             setSyncState('syncing');
             const cipher = await encryptVault(next, pass);
             cipherRef.current = cipher;
             const ok = await saveCloudVault(scope, cipher);
+            if (!aliveRef.current) return; // unmounted mid-flight
             if (ok) {
               setSyncState('synced');
               setError(null);
@@ -434,6 +443,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
               setError('Cloud save failed — your latest change is in memory only. Retry or it will be lost on reload.');
             }
           } catch (e) {
+            if (!aliveRef.current) return;
             setSyncState('error');
             setError(e instanceof Error ? e.message : String(e));
           }
@@ -493,6 +503,18 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     return () => {
       window.removeEventListener('pagehide', onPageHide);
       document.removeEventListener('visibilitychange', onVis);
+    };
+  }, []);
+
+  // Unmount cleanup: flip the alive guard so the async cloud-sync chain
+  // (persist) stops writing to React state after this provider is detached.
+  // Without this, a test that unmounts mid-mutation sees a late
+  // setSyncState/setError throw "window is not defined" through React's
+  // scheduler — the flaky unhandled error that intermittently fails CI.
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
     };
   }, []);
 
