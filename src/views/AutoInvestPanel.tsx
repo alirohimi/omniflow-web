@@ -21,6 +21,7 @@ import { Disclosure } from '../components/Disclosure';
 import { IPlus } from '../icons';
 import { fxService, type RatesForBase } from '../services';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
+import { ThemedSelect } from '../components/ThemedSelect';
 import { dueAutoInvests, advanceNextDue, periodsBetween, autoInvestMonthlyTotal } from '../insights';
 import type { AutoInvest, AutoInvestPeriod, Contribution } from '../domain/types';
 
@@ -193,19 +194,23 @@ export function AutoInvestPanel({ fx }: { fx: RatesForBase | null }) {
 
   const accSel = (value: string, onChange: (v: string) => void, label: string) => (
     <label className="field"><span>{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Select account…</option>
-        {accounts.map((a) => <option key={a.id} value={a.id}>{a.platformName}</option>)}
-      </select>
+      <ThemedSelect
+        value={value}
+        onChange={onChange}
+        placeholder="Select account…"
+        options={[{ value: '', label: 'Select account…' }, ...accounts.map((a) => ({ value: a.id, label: a.platformName }))]}
+        aria-label={label}
+      />
     </label>
   );
 
   const curSel = (value: string, onChange: (v: string) => void) => (
-    <select value={value} onChange={(e) => onChange(e.target.value)}>
-      {[...new Set([base, ...CURRENCIES.map((c) => c.code)])].map((c) => (
-        <option key={c} value={c}>{c}</option>
-      ))}
-    </select>
+    <ThemedSelect
+      value={value}
+      onChange={onChange}
+      options={[...new Set([base, ...CURRENCIES.map((c) => c.code)])].map((c) => ({ value: c, label: c }))}
+      aria-label="Currency"
+    />
   );
 
   const ledgerFor = (accId: string): Contribution[] =>
@@ -241,9 +246,12 @@ export function AutoInvestPanel({ fx }: { fx: RatesForBase | null }) {
             {curSel(planCur || base, setPlanCur)}
           </label>
           <label className="field"><span>Frequency</span>
-            <select value={planPeriod} onChange={(e) => setPlanPeriod(e.target.value as AutoInvestPeriod)}>
-              {PERIODS.map((p) => <option key={p.v} value={p.v}>{p.label}</option>)}
-            </select>
+            <ThemedSelect
+              value={planPeriod}
+              onChange={(v: string) => setPlanPeriod(v as AutoInvestPeriod)}
+              options={PERIODS.map((p) => ({ value: p.v, label: p.label }))}
+              aria-label="Frequency"
+            />
           </label>
           <label className="field"><span>First due (optional)</span>
             <input type="date" value={planStart} onChange={(e) => setPlanStart(e.target.value)} />
@@ -313,19 +321,23 @@ export function ContributionPanel({ fx }: { fx: RatesForBase | null }) {
 
   const accSel = (value: string, onChange: (v: string) => void, label: string) => (
     <label className="field"><span>{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Select account…</option>
-        {accounts.map((a) => <option key={a.id} value={a.id}>{a.platformName}</option>)}
-      </select>
+      <ThemedSelect
+        value={value}
+        onChange={onChange}
+        placeholder="Select account…"
+        options={[{ value: '', label: 'Select account…' }, ...accounts.map((a) => ({ value: a.id, label: a.platformName }))]}
+        aria-label={label}
+      />
     </label>
   );
 
   const curSel = (value: string, onChange: (v: string) => void) => (
-    <select value={value} onChange={(e) => onChange(e.target.value)}>
-      {[...new Set([base, ...CURRENCIES.map((c) => c.code)])].map((c) => (
-        <option key={c} value={c}>{c}</option>
-      ))}
-    </select>
+    <ThemedSelect
+      value={value}
+      onChange={onChange}
+      options={[...new Set([base, ...CURRENCIES.map((c) => c.code)])].map((c) => ({ value: c, label: c }))}
+      aria-label="Currency"
+    />
   );
 
   const ledgerFor = (accId: string): Contribution[] =>

@@ -26,6 +26,7 @@ import {
 import { valueInBase } from '../ai/portfolio';
 import type { AccountLine } from '../ai/portfolio';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
+import { ThemedSelect } from '../components/ThemedSelect';
 import { IRefresh, IPlus, IPencil, IDots, ICheck } from '../icons';
 import type { InvestmentAccount, InvestmentHolding } from '../domain/types';
 
@@ -474,13 +475,18 @@ export function InvestmentsView() {
             <input value={platform} onChange={(e) => setPlatform(e.target.value)} placeholder="StashAway" />
           </label>
           <label className="field"><span>Type</span>
-            <select value={acctType} onChange={(e) => setAcctType(e.target.value as typeof acctType)}>
-              <option value="broker">Broker</option>
-              <option value="robo">Robo-advisor</option>
-              <option value="crypto">Crypto wallet</option>
-              <option value="cash">Cash / MMF</option>
-              <option value="other">Other</option>
-            </select>
+            <ThemedSelect
+              value={acctType}
+              onChange={(v: string) => setAcctType(v as typeof acctType)}
+              options={[
+                { value: 'broker', label: 'Broker' },
+                { value: 'robo', label: 'Robo-advisor' },
+                { value: 'crypto', label: 'Crypto wallet' },
+                { value: 'cash', label: 'Cash / MMF' },
+                { value: 'other', label: 'Other' },
+              ]}
+              aria-label="Account type"
+            />
           </label>
           <label className="field"><span>Starting capital ({base}, optional)</span>
             <input type="number" inputMode="decimal" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="5000" />
@@ -628,9 +634,12 @@ export function InvestmentsView() {
             />
           </label>
           <label className="field"><span>Asset class</span>
-            <select value={assetClass} onChange={(e) => pickAssetClass(e.target.value as typeof assetClass)}>
-              {ASSET_CLASSES.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
+            <ThemedSelect
+              value={assetClass}
+              onChange={(v: string) => pickAssetClass(v as typeof assetClass)}
+              options={ASSET_CLASSES.map((c) => ({ value: c, label: c }))}
+              aria-label="Asset class"
+            />
           </label>
           {parMode ? (
             <label className="field"><span>Amount ({holdCur})</span>
@@ -647,9 +656,12 @@ export function InvestmentsView() {
             </>
           )}
           <label className="field"><span>Holding cur</span>
-            <select value={holdCur} onChange={(e) => setHoldCur(e.target.value)}>
-              {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
-            </select>
+            <ThemedSelect
+              value={holdCur}
+              onChange={(v: string) => setHoldCur(v)}
+              options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))}
+              aria-label="Holding currency"
+            />
           </label>
         </div>
         <button className={`btn sm${accountId ? '' : ' ghost'}`} style={{ width: '100%' }} disabled={!accountId} onClick={() => void addHolding()}>
@@ -671,13 +683,16 @@ export function InvestmentsView() {
               />
             </label>
             <label className="field"><span>Asset class</span>
-              <select value={mClass} onChange={(e) => {
-                const c = e.target.value as InvestmentHolding['assetClass'];
-                setMClass(c);
-                if (isParClass(c)) setMSymbol(parSymbolFor(c));
-              }}>
-                {ASSET_CLASSES.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <ThemedSelect
+                value={mClass}
+                onChange={(v: string) => {
+                  const c = v as InvestmentHolding['assetClass'];
+                  setMClass(c);
+                  if (isParClass(c)) setMSymbol(parSymbolFor(c));
+                }}
+                options={ASSET_CLASSES.map((c) => ({ value: c, label: c }))}
+                aria-label="Asset class"
+              />
             </label>
             {mPar ? (
               <label className="field"><span>Amount ({mCur})</span>
@@ -694,9 +709,12 @@ export function InvestmentsView() {
               </>
             )}
             <label className="field"><span>Holding cur</span>
-              <select value={mCur} onChange={(e) => setMCur(e.target.value)}>
-                {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
-              </select>
+              <ThemedSelect
+                value={mCur}
+                onChange={(v: string) => setMCur(v)}
+                options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))}
+                aria-label="Holding currency"
+              />
             </label>
           </div>
           <div className="row" style={{ marginTop: 14, gap: 10 }}>

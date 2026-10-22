@@ -23,6 +23,7 @@ import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
 import { IReceipt, IScan, ICheck, ISearch, IFilter } from '../icons';
 import { sortExpenses, type SortKey, type SortDir } from './expensesSort';
 import { SpendingBreakdown } from '../components/SpendingBreakdown';
+import { ThemedSelect } from '../components/ThemedSelect';
 import type { Expense, PendingImport } from '../domain/types';
 
 /** Task 007: direction-toggle chip label, keyed to the active sort key so the
@@ -578,15 +579,21 @@ export function ExpensesView() {
         </label>
         <div className="cols">
           <label className="field"><span>Currency</span>
-            <select value={cur} onChange={(e) => setCur(e.target.value)}>
-              {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.code} ({c.name})</option>)}
-            </select>
+            <ThemedSelect
+              value={cur}
+              onChange={(v: string) => setCur(v)}
+              options={CURRENCIES.map((c) => ({ value: c.code, label: `${c.code} (${c.name})` }))}
+              aria-label="Currency"
+            />
           </label>
           {!isIncome && (
             <label className="field"><span>Payment</span>
-              <select value={pm} onChange={(e) => setPm(e.target.value as typeof pm)}>
-                {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
-              </select>
+              <ThemedSelect
+                value={pm}
+                onChange={(v: string) => setPm(v as typeof pm)}
+                options={PAYMENT_METHODS.map((m) => ({ value: m, label: m }))}
+                aria-label="Payment method"
+              />
             </label>
           )}
         </div>
@@ -598,9 +605,14 @@ export function ExpensesView() {
         ) : aiMsg ? <div className="small muted">{aiMsg}</div> : null}
         {!isIncome && (
           <label className="field"><span>Category</span>
-            <select value={cat} onChange={(e) => setCat(e.target.value)}>
-              {vault.categories.filter((c) => c.name !== 'Income').map((c) => <option key={c.id} value={c.name}>{c.icon} {c.name}</option>)}
-            </select>
+            <ThemedSelect
+              value={cat}
+              onChange={(v: string) => setCat(v)}
+              options={vault.categories
+                .filter((c) => c.name !== 'Income')
+                .map((c) => ({ value: c.name, label: `${c.icon} ${c.name}` }))}
+              aria-label="Category"
+            />
           </label>
         )}
         <label className="field"><span>Note (optional)</span>
@@ -730,15 +742,13 @@ export function ExpensesView() {
                         style={{ minWidth: 0, flex: 1, padding: '2px 4px', minHeight: 0, fontSize: 14 }}
                         aria-label="Merchant"
                       />
-                      <select
+                      <ThemedSelect
+                        compact
                         value={row.direction}
-                        onChange={(e) => patchRow(i, { direction: e.target.value as 'in' | 'out', category: e.target.value === 'in' ? 'Income' : row.category || 'Other' })}
-                        style={{ flex: 'none', width: 74, padding: '2px 4px', minHeight: 0, fontSize: 12.5 }}
+                        onChange={(v: string) => patchRow(i, { direction: v as 'in' | 'out', category: v === 'in' ? 'Income' : row.category || 'Other' })}
+                        options={[{ value: 'out', label: 'out' }, { value: 'in', label: 'in' }]}
                         aria-label="Direction"
-                      >
-                        <option value="out">out</option>
-                        <option value="in">in</option>
-                      </select>
+                      />
                     </div>
                     <div className="meta" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                       <input
@@ -749,26 +759,20 @@ export function ExpensesView() {
                         style={{ width: 92, padding: '2px 6px', minHeight: 0, fontSize: 12.5 }}
                         aria-label="Amount"
                       />
-                      <select
+                      <ThemedSelect
+                        compact
                         value={row.currency || base}
-                        onChange={(e) => patchRow(i, { currency: e.target.value })}
-                        style={{ width: 84, padding: '2px 6px', minHeight: 0, fontSize: 12.5 }}
+                        onChange={(v: string) => patchRow(i, { currency: v })}
+                        options={[...new Set([base, ...CURRENCIES.map((c) => c.code)])].map((c) => ({ value: c, label: c }))}
                         aria-label="Currency"
-                      >
-                        {[...new Set([base, ...CURRENCIES.map((c) => c.code)])].map((c) => (
-                          <option key={c} value={c}>{c}</option>
-                        ))}
-                      </select>
-                      <select
+                      />
+                      <ThemedSelect
+                        compact
                         value={row.category || (isIncome ? 'Income' : 'Other')}
-                        onChange={(e) => patchRow(i, { category: e.target.value })}
-                        style={{ width: 130, padding: '2px 6px', minHeight: 0, fontSize: 12.5 }}
+                        onChange={(v: string) => patchRow(i, { category: v })}
+                        options={vault.categories.map((c) => ({ value: c.name, label: `${c.icon} ${c.name}` }))}
                         aria-label="Category"
-                      >
-                        {vault.categories.map((c) => (
-                          <option key={c.id} value={c.name}>{c.icon} {c.name}</option>
-                        ))}
-                      </select>
+                      />
                       {row.date && (
                         <span>{new Date(row.date).toLocaleDateString()}</span>
                       )}

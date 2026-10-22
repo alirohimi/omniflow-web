@@ -7,6 +7,7 @@ import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
 import { useAuthStore } from '../auth/AuthProvider';
 import { CURRENCIES } from '../domain/enums';
+import { ThemedSelect } from '../components/ThemedSelect';
 import type { LLMProvider } from '../domain/types';
 import type { MemberRow, VaultSyncRow } from '../services/admin';
 import { downloadCsv, expensesToCsv, holdingsToCsv } from '../services/exportCsv';
@@ -178,9 +179,12 @@ export function SettingsView() {
           <input value={prefs.displayName} onChange={(e) => store.setPrefs({ displayName: e.target.value })} />
         </label>
         <label className="field"><span>Base currency (all totals convert to this)</span>
-          <select value={prefs.baseCurrency} onChange={(e) => store.setPrefs({ baseCurrency: e.target.value })}>
-            {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.code} — {c.name}</option>)}
-          </select>
+          <ThemedSelect
+            value={prefs.baseCurrency}
+            onChange={(v: string) => store.setPrefs({ baseCurrency: v })}
+            options={CURRENCIES.map((c) => ({ value: c.code, label: `${c.code} — ${c.name}` }))}
+            aria-label="Base currency"
+          />
         </label>
         <div className="list" style={{ marginTop: 12 }}>
           <label className="row">
@@ -412,13 +416,18 @@ export function SettingsView() {
             {/* ---- Single platform-default LLM (the only AI config) ---- */}
             <div className="list" style={{ marginBottom: 10 }}>
               <label className="field"><span>Provider</span>
-                <select value={defProvider} onChange={(e) => setDefProvider(e.target.value as LLMProvider)}>
-                  <option value="none">None (on-device rules)</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="anthropic">Anthropic</option>
-                  <option value="gemini">Gemini</option>
-                  <option value="adacode">adaCode</option>
-                </select>
+                <ThemedSelect
+                  value={defProvider}
+                  onChange={(v: string) => setDefProvider(v as LLMProvider)}
+                  options={[
+                    { value: 'none', label: 'None (on-device rules)' },
+                    { value: 'openai', label: 'OpenAI' },
+                    { value: 'anthropic', label: 'Anthropic' },
+                    { value: 'gemini', label: 'Gemini' },
+                    { value: 'adacode', label: 'adaCode' },
+                  ]}
+                  aria-label="LLM provider"
+                />
               </label>
               {defProvider !== 'none' && (
                 <>

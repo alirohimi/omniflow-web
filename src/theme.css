@@ -427,6 +427,63 @@ select {
 }
 textarea { resize: vertical; min-height: 44px; }
 
+/* ---------- ThemedSelect (custom dropdown, replaces native <select>) ---------- */
+.tsel { position: relative; width: 100%; }
+.tsel-compact { width: 100%; }
+.tsel-trigger {
+  width: 100%;
+  min-height: 48px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  background: var(--bg-2);
+  backdrop-filter: blur(6px);
+  color: var(--text);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  font: inherit; font-size: 16px;
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
+.tsel-compact .tsel-trigger { min-height: 0; padding: 4px 8px; font-size: 12.5px; }
+.tsel-trigger:hover { border-color: #3d5482; }
+.tsel-open .tsel-trigger, .tsel-trigger:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  background: var(--card-2);
+  outline: none;
+}
+.tsel-value {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tsel-value[data-empty] { color: var(--faint); }
+.tsel-caret { color: var(--muted); display: grid; place-items: center; flex: none; }
+.tsel-menu {
+  list-style: none;
+  margin: 6px 0 0; padding: 6px;
+  position: absolute; left: 0; right: 0; top: 100%;
+  z-index: 60;
+  max-height: 280px; overflow-y: auto;
+  background: var(--card-2);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-soft);
+}
+.tsel-opt {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 44px; padding: 8px 12px;
+  border-radius: 9px; cursor: pointer;
+  color: var(--text-2); font-size: 14px;
+  transition: background .1s, color .1s;
+}
+.tsel-opt.hi { background: var(--bg-3); color: var(--text); }
+.tsel-opt.sel { color: var(--accent); font-weight: 650; }
+.tsel-opt.dis { opacity: .4; cursor: not-allowed; }
+.tsel-opt-lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tsel-opt-check { color: var(--accent); flex: none; }
+
 /* ---------- Buttons (primary must look pressable) ---------- */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;

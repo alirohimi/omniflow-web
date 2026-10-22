@@ -21,6 +21,7 @@ import { DelButton } from '../components/DelButton';
 import { Disclosure } from '../components/Disclosure';
 import { IPlus } from '../icons';
 import { CURRENCIES, currencyInfo, formatMoney, EMERGENCY_DEFAULT } from '../domain/enums';
+import { ThemedSelect } from '../components/ThemedSelect';
 import { computeEmergency } from '../insights';
 import type { EmergencyFundItem, EmergencyFund } from '../domain/types';
 
@@ -222,9 +223,12 @@ export function EmergencyPanel() {
             <input type="number" inputMode="decimal" value={mAmount} onChange={(e) => setMAmount(e.target.value)} placeholder="20000" />
           </label>
           <label className="field"><span>Currency</span>
-            <select value={mCur} onChange={(e) => setMCur(e.target.value)}>
-              {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
-            </select>
+            <ThemedSelect
+              value={mCur}
+              onChange={(v: string) => setMCur(v)}
+              options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))}
+              aria-label="Currency"
+            />
           </label>
         </div>
       ) : (
@@ -235,12 +239,13 @@ export function EmergencyPanel() {
             </div>
           ) : (
             <label className="field"><span>Account</span>
-              <select value={aAccount} onChange={(e) => setAAccount(e.target.value)}>
-                <option value="">Pick an account…</option>
-                {vault.accounts.map((a) => (
-                  <option key={a.id} value={a.id}>{a.platformName}</option>
-                ))}
-              </select>
+              <ThemedSelect
+                value={aAccount}
+                onChange={(v: string) => setAAccount(v)}
+                placeholder="Pick an account…"
+                options={[{ value: '', label: 'Pick an account…' }, ...vault.accounts.map((a) => ({ value: a.id, label: a.platformName }))]}
+                aria-label="Account"
+              />
             </label>
           )}
         </div>
