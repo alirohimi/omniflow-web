@@ -155,6 +155,23 @@ describe('healVault (white-screen regression)', () => {
     expect(out.blob.llmKey).toBe('');
     expect(out.blob.coachLog).toBeUndefined();
   });
+
+  it('upgrades a legacy default targetMonths of 3 to the new 6-month rule', () => {
+    // A vault created under the OLD 3-month rule carries targetMonths: 3 —
+    // which was the DEFAULT, not a deliberate pick. The engine would
+    // otherwise "respect" it and never apply the new 6 default.
+    const blob = emptyVault();
+    blob.emergency = { items: [], targetMonths: 3 };
+    const { blob: out } = healVault(blob);
+    expect(out.emergency!.targetMonths).toBe(6);
+  });
+
+  it('does NOT clobber a deliberately picked targetMonths (4-12)', () => {
+    const blob = emptyVault();
+    blob.emergency = { items: [], targetMonths: 4 };
+    const { blob: out } = healVault(blob);
+    expect(out.emergency!.targetMonths).toBe(4); // user chose 4, keep it
+  });
 });
 
 describe('withoutUndefined (spread-clobber regression)', () => {

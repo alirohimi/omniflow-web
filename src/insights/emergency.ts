@@ -23,6 +23,8 @@ import type { RatesForBase } from '../services/fx';
 import type { PortfolioSummary, AccountLine } from '../ai/portfolio';
 import { fxService } from '../services/fx';
 
+/** 90-day lookback (≈3 months). Used to bound how far back the
+ *  complete-calendar-month windows reach when averaging spend. */
 export const EMERGENCY_WINDOW_DAYS = 90; // ~3 months of total spend
 /** Default months-of-spend target. 6 per the user's rule ("emergency funds
  *  = average monthly expenses × 6"); the EmergencyPanel still lets the user

@@ -148,6 +148,14 @@ export function healVault(blob: VaultBlob): { blob: VaultBlob; changed: boolean 
   // (best-effort; never drop user data).
   if (!blob.emergency || typeof blob.emergency !== 'object') blob.emergency = { ...EMERGENCY_DEFAULT, items: [] };
   if (!Array.isArray(blob.emergency.items)) blob.emergency.items = [];
+  // One-time upgrade: vaults created under the OLD 3-month rule carry a
+  // baked-in targetMonths of 3 that the engine would otherwise "respect"
+  // (treating it as a deliberate user choice), so the new 6-month default
+  // never took effect for existing users. 3 was the legacy DEFAULT, not a
+  // picked value, so we upgrade it to the new default. Any OTHER value
+  // (4..12, set from the panel's 1-12 picker) is a deliberate choice and is
+  // left untouched.
+  if (blob.emergency.targetMonths === 3) blob.emergency.targetMonths = EMERGENCY_DEFAULT.targetMonths;
   if (typeof blob.emergency.targetMonths !== 'number' || !Number.isFinite(blob.emergency.targetMonths) || blob.emergency.targetMonths < 1) {
     blob.emergency.targetMonths = EMERGENCY_DEFAULT.targetMonths;
   }
