@@ -21,8 +21,19 @@ import {
 import { categorize } from '../ai';
 import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
 import { IReceipt, IScan, ICheck, ISearch, IFilter } from '../icons';
+import { sortExpenses, type SortKey, type SortDir } from './expensesSort';
 import { SpendingBreakdown } from '../components/SpendingBreakdown';
 import type { Expense, PendingImport } from '../domain/types';
+
+/** Task 007: direction-toggle chip label, keyed to the active sort key so the
+ *  text is never misleading (e.g. "A → Z" on the date key). One concise
+ *  label per (key, direction) pair. */
+const DIR_LABELS: Record<SortKey, Record<SortDir, string>> = {
+  date: { desc: 'Newest first', asc: 'Oldest first' },
+  amount: { desc: 'High to low', asc: 'Low to high' },
+  merchant: { desc: 'Z → A', asc: 'A → Z' },
+  category: { desc: 'Z → A', asc: 'A → Z' },
+};
 
 const PAYMENT_METHODS = ['card', 'qr', 'ewallet', 'cash', 'bank', 'other'] as const;
 
@@ -132,6 +143,12 @@ export function ExpensesView() {
   // (credits, same array) stay out of the list until the user explicitly
   // picks "Income" or "All" in the type filter.
   const [typeF, setTypeF] = useState<HistType>('expense');
+  // Task 007 — History sort control. Session-only (like the filters above):
+  // the resting state is date-descending (newest first), which is exactly the
+  // pre-Task 007 hardcoded behaviour, so an untouched list looks unchanged.
+  type SortKeyT = SortKey;
+  const [sortKey, setSortKey] = useState<SortKeyT>('date');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
   // Collapsible filter bar: closed by default on mobile, force-open whenever
   // a filter/search is active (a closed bar with an active filter would be
   // confusing — the "Showing X of Y" + "clear filters" already signals state).
@@ -150,7 +167,7 @@ export function ExpensesView() {
 
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return sorted.filter((e) => {
+    const filtered = sorted.filter((e) => {
       if (rangeStart && e.timestamp < rangeStart) return false;
       if (typeF === 'income' ? e.category !== 'Income' : typeF === 'expense' ? e.category === 'Income' : false) return false;
       if (catF !== 'all' && e.category !== catF) return false;
@@ -162,7 +179,12 @@ export function ExpensesView() {
       }
       return true;
     });
-  }, [sorted, q, catF, rangeF, typeF, rangeStart]);
+    // Task 007: filter first, then sort the filtered set — sorting is a pure
+    // display concern. "Showing X of Y" and Select-all keep operating on the
+    // filtered set; the sort only reorders rows within it. Default state
+    // (date desc) reproduces the pre-007 newest-first order exactly.
+    return sortExpenses(filtered, sortKey, sortDir);
+  }, [sorted, q, catF, rangeF, typeF, rangeStart, sortKey, sortDir]);
 
   const filtersActive = q.trim() !== '' || catF !== 'all' || rangeF !== 'all' || typeF !== 'all';
 
@@ -790,6 +812,51 @@ export function ExpensesView() {
         budgets={vault.budgets ?? []}
         baseCurrency={base}
       />
+
+      {/* Task 007: Order-by control — key selector + direction toggle.
+          Rendered UNCONDITIONALLY (outside the collapsible filter bar) so the
+          sort control is always discoverable in the default no-filter state —
+          a sort preference is not a filter and shouldn't be hidden behind
+          the "Filters" chip on mobile. Reuses the .seg primitive (no native
+          <select>); the direction button is a small .chip. Tapping the
+          current key toggles asc/desc; tapping another key keeps direction. */}
+      {sorted.length > 0 && (
+      <div className="row hist-sort" style={{ gap: 6, flexWrap: 'wrap' }}>
+        <div className="seg" role="tablist" aria-label="Order by">
+          {([
+            ['date', 'Date'],
+            ['amount', 'Amount'],
+            ['merchant', 'Merchant'],
+            ['category', 'Category'],
+          ] as [SortKeyT, string][]).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={sortKey === id}
+              onClick={() => {
+                // Tapping the already-selected key toggles its direction;
+                // tapping a new key keeps the current direction.
+                if (sortKey === id) {
+                  setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+                } else {
+                  setSortKey(id);
+                }
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          className={`chip sm${sortDir === 'asc' ? ' on' : ''}`}
+          onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+          aria-label={`Sort ${sortKey} ${sortDir === 'asc' ? 'ascending' : 'descending'}, tap to reverse`}
+        >
+          {DIR_LABELS[sortKey][sortDir]}
+        </button>
+      </div>
+      )}
 
       <h2 className="section-title">History</h2>
       <div className="row muted small" style={{ marginBottom: 6, justifyContent: 'space-between', alignItems: 'center' }}>

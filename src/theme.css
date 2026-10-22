@@ -763,9 +763,16 @@ button.chip { -webkit-tap-highlight-color: transparent; }
   font-size: 11px; font-weight: 800; vertical-align: baseline;
 }
 .item .amt.income { color: var(--good); }
+/* Task 007: order-by row inside the .hist-filters bar. Reuses the shared
+   .seg + .chip primitives; the row itself is just a flex gap wrapper so no
+   extra visual treatment is needed. Coarse-pointer block bumps the touch
+   targets to >= 44px (the .seg buttons and .chip.sm both get min-height). */
+.hist-sort { margin-top: 2px; }
 @media (pointer: coarse) {
   .hist-cats .chip { min-height: 44px; }
   .hist-search { min-height: 52px; }
+  .hist-sort .seg button { min-height: 44px; padding: 8px 14px; }
+  .hist-sort .chip { min-height: 44px; padding: 8px 13px; }
 }
 
 /* ---------- Progress ---------- */
