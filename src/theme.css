@@ -771,6 +771,9 @@ button.chip { -webkit-tap-highlight-color: transparent; }
 @media (pointer: coarse) {
   .hist-cats .chip { min-height: 44px; }
   .hist-search { min-height: 52px; }
+  /* Task 009 P2 #10: the ±100 bump buttons in the goals panel are
+     inline-styled `padding: 2px 8px` (~28px) — pull them up to 44px. */
+  .btn.sm { min-height: 44px; }
   .hist-sort .seg button { min-height: 44px; padding: 8px 14px; }
   .hist-sort .chip { min-height: 44px; padding: 8px 13px; }
 }
@@ -960,7 +963,9 @@ button.chip { -webkit-tap-highlight-color: transparent; }
   color: #fff; box-shadow: 0 2px 12px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,.3);
 }
 @media (pointer: coarse) {
-  .seg button { min-height: 40px; padding: 8px 16px; }
+  /* 44px HIG minimum on touch — applies to EVERY .seg usage (Task 009 P1 #1);
+     the .hist-sort block below adds its own padding for the wider chips. */
+  .seg button { min-height: 44px; padding: 8px 16px; }
 }
 
 .empty { text-align: center; color: var(--faint); padding: 28px 12px; font-size: 13.5px; }
@@ -1035,9 +1040,13 @@ button.chip { -webkit-tap-highlight-color: transparent; }
      expects on touch. Bring them up to a real tap area on coarse pointers. */
   .coach-chips .chip { min-height: 44px; padding: 11px 14px; }
   button, .chip, .seg button { touch-action: manipulation; } /* kill 300ms tap delay */
-  /* Account-card state chips ("target", "in reserve") become real 44px taps */
-  .acc-name button.chip { min-height: 40px; padding: 8px 14px; font-size: 13px; }
-  .dep-edit { min-height: 40px; }
+  /* Account-card state chips ("target", "in reserve") become real 44px taps
+     (Task 009 P1 #2 + P2 #11: 40px was below the HIG minimum). */
+  .acc-name button.chip { min-height: 44px; padding: 10px 14px; font-size: 13px; }
+  .dep-edit { min-height: 44px; }
+  /* Bulk-select row (Expenses History): select-all toggle + clear + delete
+     armed button were ~30px tall with no coarse rule (Task 009 P2 #7). */
+  .selbar-toggle, .selbar-clear, .selbar-del { min-height: 44px; padding: 10px 14px; }
 }
 
 /* Small phones */

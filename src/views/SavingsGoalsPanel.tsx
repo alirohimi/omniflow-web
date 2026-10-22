@@ -84,7 +84,13 @@ export function SavingsGoalsPanel() {
             <button className="btn ghost sm" style={{ padding: '2px 8px' }} onClick={() => bumpFunded(g, -100)} title="Reduce funded by 100">−</button>
             <button className="btn ghost sm" style={{ padding: '2px 8px' }} onClick={() => bumpFunded(g, 100)} title="Add 100 to funded">+</button>
           </div>
-          <DelButton label={`Delete ${g.name}`} onConfirm={() => store.deleteSavingsGoal(g.id)} />
+          <DelButton
+            label={`Delete ${g.name}`}
+            onConfirm={() => {
+              store.deleteSavingsGoal(g.id);
+              toast(`Goal "${g.name}" deleted.`);
+            }}
+          />
         </div>
       </div>
     );

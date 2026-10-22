@@ -179,7 +179,13 @@ export function AutoInvestPanel({ fx }: { fx: RatesForBase | null }) {
               {p.active === false ? 'Resume' : 'Pause'}
             </button>
           </div>
-          <DelButton label={`Delete plan ${p.name}`} onConfirm={() => store.deleteAutoInvest(p.id)} />
+          <DelButton
+            label={`Delete plan ${p.name}`}
+            onConfirm={() => {
+              store.deleteAutoInvest(p.id);
+              toast(`Plan "${p.name}" deleted.`);
+            }}
+          />
         </div>
       </div>
     );

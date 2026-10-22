@@ -55,6 +55,7 @@ describe('InvestmentsView account-card layout (mobile UX)', () => {
   });
 
   it('gives account-card chips and the deposit editor a coarse-pointer hit area', () => {
-    expect(themeSrc).toMatch(/\.acc-name button\.chip \{ min-height: 40px/);
+    // Task 010: bumped from 40px -> 44px (HIG minimum) in theme.css.
+    expect(themeSrc).toMatch(/\.acc-name button\.chip \{ min-height: 44px/);
   });
 });
