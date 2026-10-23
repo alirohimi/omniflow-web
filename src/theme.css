@@ -299,7 +299,7 @@ h1, h2, h3 { font-family: var(--font-display); }
 /* Section overlines: quiet, so the numbers below them lead */
 .section-title {
   font-family: var(--font-display);
-  font-size: 11px; font-weight: 700; margin: 24px 2px 2px;
+  font-size: 11px; font-weight: 700; margin: 28px 2px 12px;
   color: var(--muted); text-transform: uppercase; letter-spacing: 1px;
 }
 
@@ -797,7 +797,7 @@ button.chip { -webkit-tap-highlight-color: transparent; }
    tokens; touch targets >= 44px in the coarse-pointer media block. */
 .hist-filters {
   display: flex; flex-direction: column; gap: 8px;
-  margin: 2px 0 10px;
+  margin: 4px 0 12px;
   background: color-mix(in srgb, var(--bg-2) 72%, transparent);
   backdrop-filter: blur(8px);
   border: 1px solid var(--line); border-radius: 14px; padding: 10px;
@@ -840,7 +840,7 @@ button.chip { -webkit-tap-highlight-color: transparent; }
    .seg + .chip primitives; the row itself is just a flex gap wrapper so no
    extra visual treatment is needed. Coarse-pointer block bumps the touch
    targets to >= 44px (the .seg buttons and .chip.sm both get min-height). */
-.hist-sort { margin-top: 2px; }
+.hist-sort { margin-top: 8px; }
 @media (pointer: coarse) {
   .hist-cats .chip { min-height: 44px; }
   .hist-search { min-height: 52px; }
@@ -1128,7 +1128,7 @@ button.chip { -webkit-tap-highlight-color: transparent; }
   .brandbar .logo { width: 34px; height: 34px; font-size: 15px; }
   .content { padding: 10px 12px 96px; }
   .card { padding: 15px; margin: 10px 0; }
-  .section-title { margin-top: 20px; }
+  .section-title { margin-top: 24px; }
   .hero-num { font-size: 31px; letter-spacing: -0.9px; }
   .kpi { grid-template-columns: 1fr 1fr 1fr; gap: 7px; }
   .kpi .num { font-size: 16px; }

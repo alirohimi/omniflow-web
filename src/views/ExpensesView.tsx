@@ -863,7 +863,7 @@ export function ExpensesView() {
       )}
 
       <h2 className="section-title">History</h2>
-      <div className="row muted small" style={{ marginBottom: 6, justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="row muted small" style={{ marginBottom: 8, justifyContent: 'space-between', alignItems: 'center' }}>
         <span>
           {filtersActive
             ? `Showing ${visible.length} of ${sorted.length}`
