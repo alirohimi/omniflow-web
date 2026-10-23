@@ -545,6 +545,16 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
 // SalaryInputCard — declare a salary so the cashflow forecast uses real
 // income instead of the (sparse) logged Income rows. Mobile-first, themed
 // components only (.field / .seg / .btn primitives), touch targets >=44px.
+//
+// Task 011: UX rework of the period handling.
+//  - The saved figure is stored as a per-month EQUIVALENT (SalaryProfile
+//    contract), but the user may declare it in mo/wk/yr/daily. The input
+//    always shows the number in the SELECTED unit, so "yr 10000" and
+//    "wk 250" are two views of one value — no ≈-conversion shown, which
+//    previously read as a wrong amount when the unit was switched.
+//  - The figure is read-only while a salary is saved (editable-only draft
+//    confusion is gone): Save applies the edit, Remove clears it, and the
+//    action row sits directly under the field.
 // ============================================================================
 
 function SalaryInputCard({ baseCurrency, store }: {
@@ -553,90 +563,148 @@ function SalaryInputCard({ baseCurrency, store }: {
 }) {
   const sym = currencyInfo(baseCurrency).symbol;
   const salary = store.vault?.salary ?? null;
-  const [amount, setAmount] = useState(salary ? String(salary.amountPerMonth) : '');
-  const [period, setPeriod] = useState<SalaryPeriod>(salary?.period ?? 'monthly');
 
-  // Re-sync the draft when a saved value changes from another surface (or
-  // after this card saves) so the input never shows a stale figure.
+  // Draft state: the amount as the user types it, in the currently selected
+  // unit. When a saved figure exists and the unit changes, the draft is
+  // re-expressed in the new unit (rounded to sensible precision) so the box
+  // never silently keeps showing the per-month number under a "yr" label.
+  const [period, setPeriod] = useState<SalaryPeriod>(salary?.period ?? 'monthly');
+  const [amount, setAmount] = useState(() =>
+    salary ? humanize(unitAmount(salary.amountPerMonth, salary.period ?? 'monthly', salary.period ?? 'monthly')) : ''
+  );
+  // Whether the draft differs from the saved figure (drives the Save button).
+  const [dirty, setDirty] = useState(false);
+
+  /** Re-express the saved figure in unit `p` (used on save-sync + unit switch). */
+  const syncAmountToUnit = (p: SalaryPeriod) =>
+    salary ? String(humanize(unitAmount(salary.amountPerMonth, salary.period ?? 'monthly', p))) : '';
+
+  // Re-sync the draft only when the SAVED figure changes (e.g. this card
+  // just saved, or another surface changed it) — not on period switches.
   useEffect(() => {
-    setAmount(salary ? String(salary.amountPerMonth) : '');
-    setPeriod(salary?.period ?? 'monthly');
+    setAmount(syncAmountToUnit(period));
+    setDirty(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [salary]);
 
-  const canSave = Number(amount) > 0;
+  const switchPeriod = (p: SalaryPeriod) => {
+    setPeriod(p);
+    if (salary) {
+      // Re-express the saved value in the new unit so the input matches
+      // what will be saved. A unit switch is not an edit, so it does not
+      // mark the draft dirty.
+      setAmount(syncAmountToUnit(p));
+    }
+  };
+
+  const num = Number(amount);
+  const canSave = Number.isFinite(num) && num > 0 && amount.trim() !== '';
+
   const save = () => {
     if (!canSave) return;
     store.setSalary({
-      amountPerMonth: Number(amount),
+      amountPerMonth: periodToMonthly(num, period),
       period,
       label: 'Salary',
       updatedAt: Date.now(),
     });
+    setDirty(false);
   };
-  const clear = () => { store.setSalary(null); };
+  const clear = () => {
+    store.setSalary(null);
+    setAmount('');
+    setDirty(false);
+  };
 
-  const monthlyEquiv = canSave ? periodToMonthly(Number(amount), period) : 0;
+  const monthlyEquiv = canSave ? periodToMonthly(num, period) : 0;
+  const monthlyEquivLabel = (m: number) =>
+    m >= 100 ? Math.round(m).toLocaleString() : m.toFixed(2).replace(/\.00$/, '');
+
+  // Display the saved figure in its OWN unit (never ≈), plus the /mo
+  // equivalent as secondary context so the unit switch can't mislead.
+  const savedDisplay = salary
+    ? `${sym}${humanize(unitAmount(salary.amountPerMonth, salary.period ?? 'monthly', salary.period ?? 'monthly'))} ${salary.period === 'monthly' ? '/mo' : salary.period === 'weekly' ? '/wk' : salary.period === 'daily' ? '/day' : '/yr'}`
+    : '';
 
   return (
     <>
       <h2 className="section-title">Monthly income</h2>
       <div className="card">
-        <div className="row" style={{ gap: 10, alignItems: 'center' }}>
-          <label className="field grow">
-            <IWallet size={15} />
+        <label className="field">
+          <span className="field-label">
+            <IWallet size={15} /> Salary
+          </span>
+          <div className="row" style={{ gap: 8, alignItems: 'center' }}>
             <input
               type="number"
               inputMode="decimal"
               min="0"
               step="any"
+              data-salary-input
               placeholder="e.g. 5000"
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              aria-label="Monthly salary amount"
+              disabled={salary != null && !dirty}
+              onChange={(e) => { setAmount(e.target.value); setDirty(true); }}
+              aria-label={`Salary amount per ${period === 'monthly' ? 'month' : period === 'weekly' ? 'week' : period === 'daily' ? 'day' : 'year'}`}
             />
-          </label>
-          <div className="seg" role="tablist" aria-label="Salary period">
-            {([['monthly', 'mo'], ['weekly', 'wk'], ['yearly', 'yr']] as const).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                aria-pressed={period === id}
-                onClick={() => setPeriod(id)}
-              >
-                {label}
-              </button>
-            ))}
+            <div className="seg" role="tablist" aria-label="Salary period">
+              {([['monthly', 'mo'], ['weekly', 'wk'], ['yearly', 'yr']] as const).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={period === id}
+                  onClick={() => switchPeriod(id)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        </label>
 
-        {canSave ? (
-          <div className="row" style={{ gap: 10, marginTop: 10, alignItems: 'center' }}>
-            <span className="muted small grow">
-              ≈ {sym}{Math.round(monthlyEquiv).toLocaleString()}/mo
-              {salary ? '' : ' — saving uses this for the forecast'}
+        {salary ? (
+          <div className="row" style={{ gap: 10, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="small muted" style={{ flex: '1 1 180px' }}>
+              <span style={{ color: 'var(--text)', fontWeight: 600 }}>{savedDisplay}</span>
+              {' '}· ≈ {sym}{monthlyEquivLabel(salary.amountPerMonth)}/mo
             </span>
-            <button type="button" className="btn sm" onClick={save} aria-label="Save salary">
-              Save
-            </button>
-            {salary && (
-              <button type="button" className="btn ghost sm" onClick={clear} aria-label="Remove saved salary">
-                Remove
-              </button>
-            )}
-          </div>
-        ) : (
-          salary && (
-            <div className="row" style={{ gap: 10, marginTop: 10, alignItems: 'center' }}>
-              <span className="muted small grow">
-                {sym}{Math.round(salary.amountPerMonth).toLocaleString()}/{salary.period === 'monthly' ? 'mo' : salary.period === 'weekly' ? 'wk' : 'yr'} saved
-              </span>
+            <div className="row" style={{ gap: 8 }}>
+              {dirty && (
+                <button type="button" className="btn sm" onClick={save} aria-label="Save salary">
+                  Save
+                </button>
+              )}
               <button type="button" className="btn ghost sm" onClick={clear} aria-label="Remove saved salary">
                 Remove
               </button>
             </div>
-          )
-        )}
+          </div>
+        ) : canSave ? (
+          <div className="row" style={{ gap: 10, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="muted small" style={{ flex: '1 1 180px' }}>
+              ≈ {sym}{monthlyEquivLabel(monthlyEquiv)}/mo — saved to the forecast
+            </span>
+            <button type="button" className="btn sm" onClick={save} aria-label="Save salary">
+              Save
+            </button>
+          </div>
+        ) : null}
       </div>
     </>
   );
+}
+
+/** Express a stored per-month equivalent as a figure in the given unit.
+ *  The monthly equivalent is the single source of truth, so the raw figure
+ *  in unit `to` is perMonth / factor(to) (factor = periodToMonthly(1, to)).
+ *  The `from` unit only matters for what the user originally typed, which
+ *  already folded into `perMonth` at save time. */
+function unitAmount(perMonth: number, _from: SalaryPeriod, to: SalaryPeriod): number {
+  return perMonth / (periodToMonthly(1, to) || 1);
+}
+
+/** Round a unit amount to human-friendly precision (no float noise). */
+function humanize(n: number): string {
+  if (!Number.isFinite(n)) return '0';
+  return n >= 1000 ? Math.round(n).toLocaleString() : String(Math.round(n * 100) / 100);
 }

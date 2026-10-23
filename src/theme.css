@@ -396,6 +396,22 @@ label.field > span { display: block; margin-bottom: 6px; font-weight: 600; }
   .cols { grid-template-columns: 1fr 1fr 1fr; }
 }
 .cols > .field { margin: 0; }
+
+/* Compact labelled field header (icon + caption) used by salary card. */
+.field-label {
+  display: flex; align-items: center; gap: 5px;
+  margin-bottom: 6px; font-weight: 600; font-size: 12px;
+  color: var(--muted); letter-spacing: 0.2px;
+}
+.field-label .ico { color: var(--muted); flex: none; }
+/* Read-only value display (e.g. saved salary figure): keeps the input
+   shape so layout never jumps, but clearly signals "not editable". */
+input:disabled, select:disabled, textarea:disabled {
+  opacity: .75;
+  background: var(--bg-2);
+  color: var(--text);
+  cursor: default;
+}
 input, select, textarea {
   width: 100%;
   background: var(--bg-2);

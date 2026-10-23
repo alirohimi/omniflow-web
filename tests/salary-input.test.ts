@@ -41,8 +41,11 @@ describe('salary input (Task 005)', () => {
   it('gives the client an input on the dashboard to declare their salary', () => {
     // The card renders a themed amount field + a period segmented control
     // (mobile-first; .field / .seg primitives, not bare native controls).
+    // Task 011 rework: the field is a labelled group (".field" + .field-label
+    // header) and the period switcher sits inside the same row as the input.
     expect(viewSrc).toMatch(/SalaryInputCard/);
-    expect(viewSrc).toMatch(/<label className="field grow">/);
+    expect(viewSrc).toMatch(/<label className="field">/);
+    expect(viewSrc).toMatch(/field-label/);
     expect(viewSrc).toMatch(/inputMode="decimal"/);
     expect(viewSrc).toMatch(/aria-label="Salary period"/);
     // Saving + removing are both reachable.
