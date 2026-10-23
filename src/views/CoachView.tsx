@@ -271,8 +271,6 @@ export function CoachView() {
   const [pendingAction, setPendingAction] = useState<Action | null>(null);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [quickStartsOpen, setQuickStartsOpen] = useState(false);
-  const [armedClear, setArmedClear] = useState(false);
-  const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -302,9 +300,6 @@ export function CoachView() {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [coachMessages.length, activeCoachThread, pending]);
-
-  // Reset armed state on unmount.
-  useEffect(() => () => { if (clearTimer.current) clearTimeout(clearTimer.current); }, []);
 
   const pickImage = async (f: File | null) => {
     if (!f) return;
@@ -398,19 +393,6 @@ export function CoachView() {
     setPendingAction(null);
   };
 
-  const armClear = () => {
-    if (armedClear) {
-      store.clearActiveThread();
-      setArmedClear(false);
-      toast('Chat cleared.', 'ok');
-      if (clearTimer.current) clearTimeout(clearTimer.current);
-      return;
-    }
-    setArmedClear(true);
-    if (clearTimer.current) clearTimeout(clearTimer.current);
-    clearTimer.current = setTimeout(() => setArmedClear(false), 3000);
-  };
-
   if (!vault) return null;
 
   const hasMessages = coachMessages.length > 0;
@@ -443,17 +425,6 @@ export function CoachView() {
             <span style={{ display: 'inline-flex', transform: 'rotate(-90deg)' }}><IChevron size={13} /></span>
             Chats
             </button>
-          {/* Per-thread clear */}
-          {hasMessages && (
-            <button
-              className={`btn ghost sm ${armedClear ? 'danger' : ''}`}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 44, minHeight: 44 }}
-              onClick={armClear}
-            >
-              <IClose size={13} />
-              {armedClear ? 'Tap to clear' : 'Clear'}
-            </button>
-          )}
         </div>
       </div>
 
