@@ -158,7 +158,7 @@ const ADACODE_RELAY_URL: string =
   (typeof import.meta !== 'undefined' && import.meta.env
     ? import.meta.env.VITE_ADACODE_RELAY_URL
     : undefined) ??
-  'https://ijwpyikcbqdskuynwsuz.functions.supabase.co/adacode-relay';
+  'https://tewaulkfcrakeyedxunj.functions.supabase.co/adacode-relay';
 
 async function apiErrorBody(res: Response): Promise<string> {
   try {

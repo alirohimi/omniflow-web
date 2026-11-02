@@ -126,7 +126,7 @@ describe('adacode provider (OpenAI-compatible gateway via CORS relay)', () => {
     // The gateway omits CORS headers on actual responses, so the adacode
     // path must go through the stateless CORS-open relay (see categorize.ts
     // ADACODE_RELAY_URL comment). The relay is the single fetch target.
-    expect(url).toBe('https://ijwpyikcbqdskuynwsuz.functions.supabase.co/adacode-relay');
+    expect(url).toBe('https://tewaulkfcrakeyedxunj.functions.supabase.co/adacode-relay');
     expect(url).not.toContain('api.adacode.ai');
     expect(init!.headers.Authorization).toBe('Bearer sk-ada-test');
     expect(calls[0].body!.model).toBe('adacode-3.0-flash');

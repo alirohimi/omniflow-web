@@ -63,6 +63,13 @@ jobs:
           # RLS protects the data. Unset -> app builds in local-only mode.
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          # CORS-open LLM relay. When set, the adacode BYOK provider routes
+          # through this URL instead of the hardcoded (now-dead) Supabase
+          # Edge Function default in src/ai/categorize.ts. Set to
+          # https://tewaulkfcrakeyedxunj.functions.supabase.co/adacode-relay
+          # once that function is deployed. Unset -> falls back to the
+          # in-source default (which is the dead project, so LLM calls fail).
+          VITE_ADACODE_RELAY_URL: ${{ secrets.VITE_ADACODE_RELAY_URL }}
         run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
