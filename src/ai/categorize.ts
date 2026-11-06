@@ -278,9 +278,9 @@ export async function callLLM(
     // a stateless Supabase Edge Function that forwards server-side and
     // echoes CORS on every response. The user's key still transits the relay
     // per-request (HTTPS only); it is stored nowhere.
-    // Default model is claude-opus-4-6 (smartest available); override via
-    // prefs.llmModel (claude-*, gpt-*, gemini-*, deepseek-*, glm-*, qwen-*, adacode-*-flash…).
-    const model = cfg.model ?? 'claude-opus-4-6';
+    // Default model is adacode-3.0-flash; override via prefs.llmModel
+    // (claude-*, gpt-*, gemini-*, deepseek-*, glm-*, qwen-*, adacode-*-flash…).
+    const model = cfg.model ?? 'adacode-3.0-flash';
     const relayUrl = await getRelayUrl();
     const content: unknown = imgs.length === 0
       ? user

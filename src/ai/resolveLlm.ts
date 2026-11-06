@@ -44,7 +44,7 @@ const TESTING_PHASE_FALLBACK: LLMConfig | null = {
   apiKey: 'adaco...ey', // relay ignores the client key for auth; it holds its own secret
   // Smartest model on the adaCode gateway by default. Overridable per-user via
   // the coach model selector (prefs.llmModel).
-  model: 'claude-opus-4-6',
+  model: 'adacode-3.0-flash',
 };
 
 /**
