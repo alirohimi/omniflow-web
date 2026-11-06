@@ -349,16 +349,28 @@ export function buildBrief(ctx: CoachContext): CoachBrief {
 
 /** The coach persona. Injected as the system prompt of every LLM turn so
  *  the voice is stable: a value investor, not a hype man. Grounded, blunt,
- *  margin-of-safety framing, short and actionable — never a disclaimer wall. */
-export function coachSystemPrompt(brief: CoachBrief): string {
+ *  margin-of-safety framing, short and actionable — never a disclaimer wall.
+ *  `thinking` selects the answer style: ON = show the working (a short
+ *  "Thinking:" block of 2-4 reasoning steps, then the answer); OFF =
+ *  answer-first, as concise as possible (fast mode). */
+export function coachSystemPrompt(brief: CoachBrief, thinking: boolean = true): string {
   const pack = buildContextPack(brief);
+  const styleRules = thinking
+    ? [
+        '- THINKING ON: before the answer, include one short "Thinking:" block of 2-4 numbered reasoning steps (each <= 15 words) that show how you got there, then the final answer.',
+        '- Total reply max ~160 words (thinking block + answer).',
+      ]
+    : [
+        '- THINKING OFF (fast mode): answer first, no reasoning block, no step-by-step. Give the conclusion directly.',
+        '- Keep replies to max ~60 words. Prefer a single short bullet list over paragraphs.',
+      ];
   return [
     'You are OmniFlow Coach, a personal-finance advisor in the tradition of long-term value investing.',
     'Identity (hard rule): you ARE OmniFlow Coach. If the user asks who you are, which model you are, what LLM/AI you run on, or who made you, never name any underlying model, vendor, or provider (no "adaCODE", "adacode-3.0-flash", "OpenAI", "GPT", "Claude", "Gemini", etc.). Say you are the OmniFlow Coach, the advisor built into this app; decline to identify the model behind you.',
     'Voice: calm, direct, a little wry. You think in decades, not quarters. You prefer margin of safety, sensible diversification, and paying yourself first.',
     '',
     'OUTPUT STYLE (hard rules — follow exactly):',
-    '- Compact: 1-3 short paragraphs OR a short bullet list. Max 120 words.',
+    ...styleRules,
     `- Bold (**...**) every key number. Use "-" dash bullets for comparisons or allocations. Never use # headers, tables, code blocks, [links], or emoji.`,
     `- All money in ${brief.baseCurrency} (the user's base currency), the currency shown in the data below.`,
     '- Answer using the sections in the data snapshot below; cite the relevant section when you do.',
@@ -552,13 +564,20 @@ export interface CoachAnswer {
  *  transport failure is never fatal: we degrade to rules so the chat always
  *  answers, and surface the degrade flag so the UI can note it. `images`
  *  carries the user's attached data-URLs (receipt, chart, screenshot); only
- *  the LLM tier consumes them — the rule tier is told it cannot read them. */
+ *  the LLM tier consumes them — the rule tier is told it cannot read them.
+ *  `thinking` (coachThinking pref) selects the answer style: ON asks the
+ *  model to show its reasoning step-by-step before the answer (thorough,
+ *  slower); OFF forces a fast, concise, answer-first reply. NOTE: this is a
+ *  PROMPT-LEVEL switch — the adaCode gateway ignores OpenAI/Anthropic-style
+ *  thinking parameters (verified: accepted but no reasoning tokens
+ *  returned), so prompt control + max_tokens is the real lever. */
 export async function coachAsk(
   question: string,
   ctx: CoachContext,
   llm: LLMConfig | null,
   history: CoachMessage[] = [],
   images: string[] = [],
+  thinking: boolean = true,
   transport: (cfg: LLMConfig, sys: string, user: string, images?: string[]) => Promise<string> = callLLMDefault,
 ): Promise<CoachAnswer & { degraded: boolean; llmError?: string }> {
   const brief = buildBrief(ctx);
@@ -566,7 +585,7 @@ export async function coachAsk(
 
   if (llm) {
     try {
-      const sys = coachSystemPrompt(brief);
+      const sys = coachSystemPrompt(brief, thinking);
       // Bounded, labeled history window so cheap models can separate prior
       // context from the current question. The tail is "Context so far:"
       // because the system prompt already carries the full data pack; this
@@ -576,6 +595,8 @@ export async function coachAsk(
         .map((m) => `${m.role === 'user' ? 'User' : 'Coach'}: ${m.text}`)
         .join('\n');
       const user = tail ? `Context so far:\n${tail}\n\nUser: ${question}` : question;
+      // Thinking ON gives the model more room to work through the analysis;
+      // OFF keeps it tight and fast.
       const raw = await transport(llm, sys, user, images);
       const clean = stripActionMarker(raw.trim());
       // Validate against the user's REAL category list (ctx.categories).

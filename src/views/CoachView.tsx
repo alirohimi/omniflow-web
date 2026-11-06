@@ -267,7 +267,11 @@ export function CoachView() {
 
   const [draft, setDraft] = useState('');
   const [attach, setAttach] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
+  // "Thinking…" is backed by the provider's session-scoped pending registry
+  // (not local state), so it survives navigating to another menu and back:
+  // the LLM call keeps running in the background and the indicator
+  // re-appears on the chat while the answer is in flight.
+  const pending = store.coachPendingThreads.includes(activeCoachThread);
   const [pendingAction, setPendingAction] = useState<Action | null>(null);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [quickStartsOpen, setQuickStartsOpen] = useState(false);
@@ -311,6 +315,13 @@ export function CoachView() {
     setAttach(url);
   };
 
+  // Thinking mode (coachThinking pref, default ON). Persisted in the
+  // encrypted vault so it survives reloads and syncs across devices.
+  const coachThinking = store.vault?.prefs.coachThinking ?? true;
+  const toggleThinking = () => {
+    store.setPrefs({ coachThinking: !coachThinking });
+  };
+
   const send = async (text: string, image?: string) => {
     const q = text.trim();
     const img = image ?? attach;
@@ -319,7 +330,7 @@ export function CoachView() {
     setAttach(null);
     setPendingAction(null);
     store.pushCoachMessageTo(activeCoachThread, { role: 'user', text: q, image: img ?? undefined, at: Date.now() });
-    setPending(true);
+    store.markCoachPending(activeCoachThread);
     try {
       const activeLlm = llmAllowed ? store.llmConfig : null;
       const ans = await coachAsk(
@@ -328,6 +339,7 @@ export function CoachView() {
         activeLlm,
         coachMessages,
         img ? [img] : [],
+        coachThinking,
       );
       store.pushCoachMessageTo(activeCoachThread, {
         role: 'coach',
@@ -348,7 +360,7 @@ export function CoachView() {
         at: Date.now(),
       });
     } finally {
-      setPending(false);
+      store.clearCoachPending(activeCoachThread);
     }
   };
 
@@ -413,6 +425,21 @@ export function CoachView() {
                 ? 'LLM requires Pro — using on-device rules'
                 : 'ON-DEVICE RULES (free)'}
           </span>
+          {/* Thinking-mode toggle: ON = coach shows a short "Thinking:" block
+              of reasoning before the answer (thorough, slower); OFF = fast,
+              concise answer-first replies. Persisted in the encrypted vault. */}
+          <button
+            className={`chip sm ${coachThinking ? 'ok' : ''}`}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: 44, cursor: 'pointer' }}
+            onClick={toggleThinking}
+            aria-pressed={coachThinking}
+            title={coachThinking
+              ? 'Thinking mode ON — the coach shows its reasoning before answering. Tap for fast replies.'
+              : 'Fast mode — concise, answer-first replies. Tap to enable thinking.'}
+          >
+            <span style={{ opacity: 0.7, fontSize: 11 }}>⚡</span>
+            {coachThinking ? 'Thinking on' : 'Fast mode'}
+          </button>
         </div>
         <div className="row" style={{ gap: 4 }}>
           {/* Thread switcher trigger */}

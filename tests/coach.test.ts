@@ -115,11 +115,11 @@ describe('coach fallback (no key)', () => {
 });
 
 describe('coach orchestration', () => {
-  const llm: LLMConfig = { provider: 'openai', apiKey: 'test-key' };
+  const llm: LLMConfig = { provider: 'openai', apiKey: 'sk-test' };
 
   it('Tier 1: returns LLM answer when key present', async () => {
     const fake = async () => 'Invest with margin of safety.';
-    const a = await coachAsk('should I buy more', ctx(), llm, [], [], fake);
+    const a = await coachAsk('should I buy more', ctx(), llm, [], [], true, fake);
     expect(a.source).toBe('llm');
     expect(a.degraded).toBe(false);
     expect(a.text).toContain('margin of safety');
@@ -135,6 +135,7 @@ describe('coach orchestration', () => {
       llm,
       [],
       [],
+      true,
       fake,
     );
     expect(a.source).toBe('rules');
@@ -153,7 +154,7 @@ describe('coach orchestration', () => {
       got = images;
       return 'ok';
     };
-    await coachAsk('what does this receipt show?', ctx(), llm, [], ['data:image/jpeg;base64,AAA'], fake);
+    await coachAsk('what does this receipt show?', ctx(), llm, [], ['data:image/jpeg;base64,AAA'], true, fake);
     expect(got).toEqual(['data:image/jpeg;base64,AAA']);
   });
 
@@ -167,6 +168,7 @@ describe('coach orchestration', () => {
       llm,
       [],
       ['data:image/png;base64,AAA'],
+      true,
       fake,
     );
     expect(a.source).toBe('rules');
@@ -186,7 +188,7 @@ describe('coach orchestration', () => {
     // category from ctx.categories — it must surface as proposedAction.
     const marker = `[ACTION:{"action":"add_expense","amount":12.5,"currency":"USD","category":"Food","merchant":"Lau Pa Sat","paymentMethod":"card","date":"now"}]`;
     const fake = async (): Promise<string> => `Logged it. ${marker}`;
-    const a = await coachAsk('log 12.5 USD at Lau Pa Sat, food', ctx(), llm, [], [], fake);
+    const a = await coachAsk('log 12.5 USD at Lau Pa Sat, food', ctx(), llm, [], [], true, fake);
     expect(a.source).toBe('llm');
     expect(a.degraded).toBe(false);
     expect(a.proposedAction).toBeTruthy();
@@ -199,7 +201,7 @@ describe('coach orchestration', () => {
   it('add_expense with an unknown category is rejected with a reason, not silently dropped', async () => {
     const marker = `[ACTION:{"action":"add_expense","amount":10,"currency":"USD","category":"SpaceTravel","merchant":"X","paymentMethod":"card","date":"now"}]`;
     const fake = async (): Promise<string> => `Sure. ${marker}`;
-    const a = await coachAsk('log something', ctx(), llm, [], [], fake);
+    const a = await coachAsk('log something', ctx(), llm, [], [], true, fake);
     expect(a.proposedAction).toBeUndefined();
     // The rejection reason (with the valid category list) stays visible
     // in the answer text — the user learns what to fix. The transport
@@ -283,16 +285,23 @@ describe('coachSystemPrompt (cheap-model ready)', () => {
       expect(p).toContain(s);
   });
 
-  it('contains the few-shot exemplars and ACTION_CONTRACT', () => {
-    const p = coachSystemPrompt(sampleBrief());
+  it('thinking ON shows the reasoning style', () => {
+    const p = coachSystemPrompt(sampleBrief(), true);
+    expect(p).toContain('THINKING ON');
+    expect(p).toContain('Thinking:');
     expect(p).toContain('Example 1');
     expect(p).toContain('Example 2');
     expect(p).toContain('Example 3');
-    // The hard style rules are present:
-    expect(p).toContain('Max 120 words');
     expect(p).toContain('dash bullets');
-    // ACTION_CONTRACT is appended verbatim (its opening line):
     expect(p).toContain('[ACTION:');
+  });
+
+  it('thinking OFF (fast mode) forces concise answer-first style', () => {
+    const p = coachSystemPrompt(sampleBrief(), false);
+    expect(p).toContain('THINKING OFF');
+    expect(p).toContain('fast mode');
+    expect(p).toContain('max ~60 words');
+    expect(p).toContain('answer first');
   });
 
   it('no longer sends the raw JSON brief blob to the model', () => {
@@ -314,7 +323,7 @@ describe('coachAsk history window', () => {
       return 'ok';
     };
     const llm: LLMConfig = { provider: 'openai', apiKey: 'sk-test' };
-    await coachAsk('q', ctx(), llm, history, [], transport);
+    await coachAsk('q', ctx(), llm, history, [], true, transport);
     expect(captured).not.toBeNull();
     // Count how many history turns leaked into the payload.
     const leaks = (captured!.match(/turn \d+/g) ?? []).length;

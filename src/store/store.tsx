@@ -296,6 +296,14 @@ export interface VaultStore {
   /** Append to one specific thread (bounded: last 200). Bumps updatedAt. */
   pushCoachMessageTo: (threadId: string, msg: Omit<CoachMessage, 'id'>) => void;
   clearActiveThread: () => void; // clears the active thread's messages, keeps the thread
+  /** Session-scoped set of threads with an in-flight LLM call. In-memory
+   *  only (never persisted with the vault) so the "Thinking…" indicator
+   *  survives navigating away and back to the coach within the same
+   *  session. A page reload clears it — the user message persists, and
+   *  the coach simply has not answered yet (they can re-ask). */
+  coachPendingThreads: string[];
+  markCoachPending: (threadId: string) => void;
+  clearCoachPending: (threadId: string) => void;
 
   // Deprecated one release — thin wrappers over the active thread. Remove
   // after CoachView is confirmed migrated.
@@ -1711,6 +1719,20 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     });
   }, [persist]);
 
+  // ---- Session-scoped "in-flight coach call" tracking (never persisted) ----
+  // Backs the "Thinking…" indicator across menu navigation: the LLM call is
+  // owned by the view that started it, but this registry lives in the
+  // provider, so the indicator survives the view unmounting.
+  const [coachPendingThreads, setCoachPendingThreads] = useState<string[]>([]);
+  const markCoachPending = useCallback((threadId: string) => {
+    setCoachPendingThreads((prev) =>
+      prev.includes(threadId) ? prev : [...prev, threadId],
+    );
+  }, []);
+  const clearCoachPending = useCallback((threadId: string) => {
+    setCoachPendingThreads((prev) => prev.filter((id) => id !== threadId));
+  }, []);
+
   // ---- deprecated one-release wrappers over the active thread ----
   const pushCoachMessage = useCallback(
     (msg: Omit<CoachMessage, 'id'>) => {
@@ -1833,6 +1855,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setActiveCoachThread,
     pushCoachMessageTo,
     clearActiveThread,
+    coachPendingThreads,
+    markCoachPending,
+    clearCoachPending,
     // Deprecated one-release aliases over the active thread.
     coachLog,
     pushCoachMessage,

@@ -357,6 +357,11 @@ export interface UserPreferences {
    *  fall due within `billNoticeWindowDays`. */
   billReminders: boolean;
   billNoticeWindowDays?: number;
+  /** Coach "thinking mode". ON (default): the coach works through its
+   *  reasoning visibly before answering (longer, more thorough replies).
+   *  OFF: the coach answers fast and concise — no step-by-step analysis.
+   *  Persisted in the encrypted vault, so it syncs across devices. */
+  coachThinking?: boolean;
 }
 
 /** The encrypted-at-rest shape stored in the database. */
