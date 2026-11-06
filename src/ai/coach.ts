@@ -32,7 +32,7 @@ import type { RatesForBase } from '../services/fx';
 import type { PortfolioSummary } from './portfolio';
 import { spendOverLastDays } from './advisor';
 import type { LLMConfig } from './categorize';
-import { callLLM as callLLMDefault } from './categorize';
+import { callLLM as callLLMDefault, callLLM } from './categorize';
 import { currencyInfo } from '../domain/enums';
 import { computeEmergency } from '../insights/emergency';
 import {
