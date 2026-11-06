@@ -41,8 +41,10 @@ export interface ResolveArgs {
 // ---------------------------------------------------------------------------
 const TESTING_PHASE_FALLBACK: LLMConfig | null = {
   provider: 'adacode',
-  apiKey: 'adacode-relay-shared-key', // relay ignores the client key for auth; it holds its own secret
-  model: 'adacode-3.0-flash',
+  apiKey: 'adaco...ey', // relay ignores the client key for auth; it holds its own secret
+  // Smartest model on the adaCode gateway by default. Overridable per-user via
+  // the coach model selector (prefs.llmModel).
+  model: 'claude-opus-4-6',
 };
 
 /**

@@ -357,11 +357,13 @@ export function coachSystemPrompt(brief: CoachBrief, thinking: boolean = true): 
   const pack = buildContextPack(brief);
   const styleRules = thinking
     ? [
-        '- THINKING ON: before the answer, include one short "Thinking:" block of 2-4 numbered reasoning steps (each <= 15 words) that show how you got there, then the final answer.',
-        '- Total reply max ~160 words (thinking block + answer).',
+        '- THINKING ON: first output exactly one line "Thinking:", then on the next lines 2-4 SHORT numbered reasoning steps (each <= 10 words, no numbers/data inside the steps — just the decision logic, e.g. "check cushion", "cushion past target", "direct full amount"). Do NOT mix data values into the thinking steps.',
+        '- Then output a blank line, then the ANSWER section: a 1-3 bullet answer with the concrete numbers and recommendation.',
+        '- Hard rule: the "Thinking:" steps and the answer bullets must be visually separate — never one merged numbered list.',
+        '- Total reply max ~150 words.',
       ]
     : [
-        '- THINKING OFF (fast mode): answer first, no reasoning block, no step-by-step. Give the conclusion directly.',
+        '- THINKING OFF (fast mode): answer first, no "Thinking:" block, no step-by-step. Give the conclusion directly.',
         '- Keep replies to max ~60 words. Prefer a single short bullet list over paragraphs.',
       ];
   return [
@@ -376,7 +378,7 @@ export function coachSystemPrompt(brief: CoachBrief, thinking: boolean = true): 
     '- Answer using the sections in the data snapshot below; cite the relevant section when you do.',
     '- When they ask what to buy, give process (criteria, position sizing, when to act), not a single-stock call.',
     '- Flag concentrated positions, heavy crypto, or FX exposure ONLY when the data below shows it.',
-    '- No legal/tax advice; one line of "general education, not advice" only on a recommendation-adjacent answer.',
+    '- No legal/tax advice; the app footer already carries the "general education, not advice" note — do NOT repeat any disclaimer inside the answer.',
     '',
     "The data snapshot below is derived aggregates only — NOT the raw ledger. Ground every answer in it; never invent numbers that are not in it.",
     pack,
@@ -560,6 +562,10 @@ export interface CoachAnswer {
   proposedAction?: Action;
 }
 
+/** Bounded response size for a coach turn. Thinking ON needs headroom for
+ *  the reasoning block + a full answer; OFF keeps it tight and fast. */
+const COACH_MAX_TOKENS = { thinking: 768, fast: 384 } as const;
+
 /** Ask the coach. `llm` may be null (no key) -> pure rule engine. A
  *  transport failure is never fatal: we degrade to rules so the chat always
  *  answers, and surface the degrade flag so the UI can note it. `images`
@@ -596,8 +602,13 @@ export async function coachAsk(
         .join('\n');
       const user = tail ? `Context so far:\n${tail}\n\nUser: ${question}` : question;
       // Thinking ON gives the model more room to work through the analysis;
-      // OFF keeps it tight and fast.
-      const raw = await transport(llm, sys, user, images);
+      // OFF keeps it tight and fast. The default transport (categorize.callLLM)
+      // caps at 256 tokens — too small for a thinking-mode reply (the
+      // reasoning block + answer gets cut off mid-sentence). Wrap it with a
+      // thinking-aware cap; an injected test transport is called as-is.
+      const raw = transport === callLLMDefault
+        ? await callLLM(llm, sys, user, images, false, COACH_MAX_TOKENS[thinking ? 'thinking' : 'fast'])
+        : await transport(llm, sys, user, images);
       const clean = stripActionMarker(raw.trim());
       // Validate against the user's REAL category list (ctx.categories).
       // Threading it here — not defaulting to [] — is what lets

@@ -138,7 +138,7 @@ describe('adacode provider (OpenAI-compatible gateway via CORS relay)', () => {
     expect(url).toBe('https://tewaulkfcrakeyedxunj.functions.supabase.co/adacode-relay');
     expect(url).not.toContain('api.adacode.ai');
     expect(init!.headers.Authorization).toBe('Bearer sk-ada-test');
-    expect(calls[0].body!.model).toBe('adacode-3.0-flash');
+    expect(calls[0].body!.model).toBe('claude-opus-4-6');
     expect(calls[0].body!.messages).toEqual([
       { role: 'system', content: 'sys' },
       { role: 'user', content: 'user' },
