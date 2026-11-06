@@ -14,6 +14,7 @@ import { downloadCsv, expensesToCsv, holdingsToCsv } from '../services/exportCsv
 import { pnlToCsv, type ToBase } from '../insights';
 import { fxService } from '../services';
 import { fingerprintSecret } from '../security/vault';
+import { probeLlm, type ProbeResult } from '../lib/llmProbe';
 
 /**
  * Client-facing model label. There is exactly ONE AI config: the admin-set
@@ -66,6 +67,13 @@ export function SettingsView() {
   // admin does not re-type it and can read the active model.
   const [defKeyMasked, setDefKeyMasked] = useState(false);
   const [defBusy, setDefBusy] = useState(false);
+  // "Test key" probe — pings the active LLM config (typed values, or the
+  // stored key when the field is left blank) with a one-token call so the
+  // admin can see WHY a coach/categorizer call would fail (relay down,
+  // quota, invalid model) instead of silently falling back to the
+  // on-device rule engine.
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<ProbeResult | null>(null);
 
   // Re-sync the provider/model inputs when the saved row changes (e.g. right
   // after a successful save, or on first mount when a default already exists).
@@ -78,6 +86,22 @@ export function SettingsView() {
     setDefModel(def.model ?? '');
     setDefKeyMasked(def.provider !== 'none' && !!def.api_key);
   }, [store.defaultLlm]);
+
+  const runKeyTest = async () => {
+    // Resolve the config to test: typed values win; a blank key falls back
+    // to the stored platform-default key so the probe always tests what the
+    // coach would actually use.
+    const keySource = defKey.trim() || (store.defaultLlm && store.defaultLlm.provider !== 'none' ? store.defaultLlm.api_key : '');
+    if (defProvider === 'none' || !keySource) {
+      setTestResult({ ok: false, detail: defProvider === 'none' ? 'Provider is set to None (on-device rules) — nothing to test.' : 'Enter an API key (or set one as the platform default) to test.' });
+      return;
+    }
+    setTesting(true);
+    setTestResult(null);
+    const result = await probeLlm({ provider: defProvider, apiKey: keySource, model: defModel.trim() || undefined });
+    setTestResult(result);
+    setTesting(false);
+  };
 
   const myUserId = auth.user?.id ?? '';
 
@@ -458,7 +482,23 @@ export function SettingsView() {
                 {defProvider !== 'none' && !defKey.trim() && defKeyMasked && (
                   <span className="muted small">Key stays as-is (use the field above to rotate it).</span>
                 )}
+                {defProvider !== 'none' && (
+                  <button
+                    className="btn ghost sm"
+                    disabled={testing || (!defKey.trim() && !defKeyMasked)}
+                    onClick={() => void runKeyTest()}
+                  >
+                    {testing ? 'Testing…' : 'Test key'}
+                  </button>
+                )}
               </div>
+              {testResult && (
+                <p className="small" style={{ color: testResult.ok ? 'var(--ok, #2e7d32)' : 'var(--bad, #d33)' }}>
+                  {testResult.ok
+                    ? 'Key works — the AI advisor will answer with the LLM.'
+                    : `Key check failed: ${testResult.detail}`}
+                </p>
+              )}
             </div>
             <p className="muted small">
               Currently: {store.defaultLlm && store.defaultLlm.provider !== 'none'
