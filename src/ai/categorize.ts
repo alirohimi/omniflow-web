@@ -149,16 +149,11 @@ export async function categorizeByLLM(
 // 200 success carries zero access-control-allow-origin headers), so
 // browsers cannot read ANY response from it — Safari surfaces the failure
 // as an opaque "Load failed" and the provider's real error message never
-// reaches the UI. The relay is a stateless Supabase Edge Function that
-// forwards the request server-side and echoes CORS headers on every
-// response, success and error. It stores no secrets: the user's key only
-// transits it per-request. Override with VITE_ADACODE_RELAY_URL if you
-// deploy your own relay (e.g. on your own Supabase project).
-const ADACODE_RELAY_URL: string =
-  (typeof import.meta !== 'undefined' && import.meta.env
-    ? import.meta.env.VITE_ADACODE_RELAY_URL
-    : undefined) ??
-  'https://tewaulkfcrakeyedxunj.functions.supabase.co/adacode-relay';
+// reaches the UI. The relay forwards the request server-side and echoes CORS
+// headers on every response. The URL is resolved at runtime from
+// public/adacode-relay.json (deploy-time editable, no rebuild) with fallbacks
+// to VITE_ADACODE_RELAY_URL, then a hardcoded default. See adacodeRelay.ts.
+import { getRelayUrl } from './adacodeRelay';
 
 async function apiErrorBody(res: Response): Promise<string> {
   try {
@@ -286,6 +281,7 @@ export async function callLLM(
     // Default model is adacode-3.0-flash; override via prefs.llmModel
     // (claude-*, gpt-*, gemini-*, deepseek-*, glm-*, qwen-*, adacode-*-flash…).
     const model = cfg.model ?? 'adacode-3.0-flash';
+    const relayUrl = await getRelayUrl();
     const content: unknown = imgs.length === 0
       ? user
       : [
@@ -294,11 +290,11 @@ export async function callLLM(
         ];
     let res: Response;
     try {
-      res = await fetch(ADACODE_RELAY_URL, {
+      res = await fetch(relayUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${cfg.apiKey}`,
+          Authorization: `Bearer ${cfg.apiKey}`
         },
         body: JSON.stringify({
           model,
@@ -314,16 +310,17 @@ export async function callLLM(
     } catch (e) {
       // With the relay, provider errors are readable (ACAO: * on every
       // response), so a fetch rejection here means the relay itself was
-      // unreachable (network down, DNS, relay project disabled) — not a
+      // unreachable (network down, DNS, relay project paused) — not a
       // hidden provider 401/403. Surface the relay URL so the user can
       // diagnose it.
       const raw = e instanceof Error ? e.message : String(e);
       throw new Error(
         `adacode: relay unreachable ("${raw}") — the CORS-open relay at ` +
-          `${ADACODE_RELAY_URL} could not be reached. If you deploy your own ` +
-          `relay, set VITE_ADACODE_RELAY_URL and rebuild. Provider errors ` +
-          `(invalid key, unavailable model) now surface as normal adacode ` +
-          `responses, so any remaining failure is transport-side.`,
+          `${relayUrl} could not be reached (Supabase project paused, CORS, ` +
+          `or the function not deployed). To point the app at a working relay ` +
+          `WITHOUT a rebuild, edit public/adacode-relay.json in the deployed ` +
+          `site (or self-host: node tools/adacode-relay-node.cjs + tunnel). ` +
+          `Provider errors (invalid key, quota) surface as normal adacode responses.`,
       );
     }
     if (!res.ok) throw new Error(`adacode ${res.status}: ${await apiErrorBody(res)}`);

@@ -20,7 +20,16 @@ const CFG: Record<string, LLMConfig> = {
 function stubFetch() {
   const calls: Array<{ url: string; body: any; init?: any }> = [];
   const fn = vi.fn(async (url: any, init?: any) => {
-    calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : null, init });
+    const u = String(url);
+    // The adacode path first fetches the runtime relay config file
+    // (adacode-relay.json). Return a 404 so it is skipped (no network in
+    // tests) and the resolver falls back to the hardcoded relay URL. Record
+    // it separately so relay-behaviour assertions still look at the first
+    // NON-config call.
+    if (u.includes('adacode-relay.json')) {
+      return new Response('not found', { status: 404 });
+    }
+    calls.push({ url: u, body: init?.body ? JSON.parse(init.body) : null, init });
     return new Response(JSON.stringify({ text: 'ok', candidates: [{ content: { parts: [{ text: 'ok' }] } }], choices: [{ message: { content: 'ok' } }] }), { status: 200 });
   });
   vi.stubGlobal('fetch', fn);
