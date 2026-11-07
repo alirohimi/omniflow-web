@@ -101,8 +101,12 @@ export interface PortfolioPnl {
 /**
  * Aggregate P&L: live value (from the portfolio summary) vs total recorded
  * invested capital. `initialDepositBase` is cumulative — it holds the user's
- * manually-recorded starting balance AND every settled contribution (the
- * store bumps it on each addContribution), so the ledger never double-counts.
+ *  manually-recorded starting balance AND every settled contribution (the
+ *  store bumps it on each addContribution), so the ledger never double-counts.
+ *
+ *  Live quote is the single source of truth for account value. The previous
+ *  brokerValueBase override (a manual pasted number) was removed because it
+ *  could silently mask a real loss by overriding the live value.
  */
 export function portfolioPnl(
   summary: PortfolioSummary,
@@ -125,14 +129,13 @@ export function portfolioPnl(
 
   const lines: PnlAccount[] = (summary?.byAccount ?? []).map((l: AccountLine) => {
     const acc = accById.get(l.account.id) ?? l.account;
-    // The broker's own reported value (e.g. StashAway's "Current value") wins
-    // over the quote-derived value when set — managed/robo accounts value
-    // from fund NAVs net of fees that no live quote can reproduce.
-    const quoteValue = Number.isFinite(l.valueBase) ? l.valueBase : 0;
-    const valueBase =
-      Number.isFinite(acc.brokerValueBase) && (acc.brokerValueBase ?? 0) > 0
-        ? acc.brokerValueBase!
-        : quoteValue;
+    // Live quote is the single source of truth. The previous brokerValueBase
+    // (a manual pasted number) was removed: it could silently mask a real
+    // loss by overriding the live value, which is exactly what made the
+    // StashAway leg look artificially down. StashAway's value now comes from
+    // the index-tracked quote, so the live quote is already the correct
+    // reference — no manual override needed or wanted.
+    const valueBase = Number.isFinite(l.valueBase) ? l.valueBase : 0;
     let capitalBase =
       Number.isFinite(acc.initialDepositBase) && (acc.initialDepositBase ?? 0) > 0
         ? acc.initialDepositBase!
@@ -174,22 +177,10 @@ export function portfolioPnl(
   // the ones with a recorded deposit), so use those directly.
   //
   // The per-account lines above already use each account's brokerValueBase
-  // override (when set) instead of the quote-derived value, so the headline
-  // total must use the same effective value or it would show the broker's
-  // account as quote-valued while the table shows broker-valued — a silent
-  // inconsistency. Recompute the total value here with the overrides:
+  // Live quote is the source of truth (no more broker overrides), so the
+  // cost-basis total value is just the quote-derived total.
   const totalCostBase = Number.isFinite(summary.totalCostBase) ? summary.totalCostBase : 0;
-  // Base value = quote-derived total, adjusted for any broker overrides:
-  // for each account with a brokerValueBase, swap its QUOTE value (from the
-  // summary, before the override is applied in `lines`) for the broker value.
-  let costValueBase = Number.isFinite(summary.totalValueBase) ? summary.totalValueBase : 0;
-  const byId = new Map((summary?.byAccount ?? []).map((l) => [l.account.id, l]));
-  costValueBase = lines.reduce((s, l) => {
-    const ov = l.account.brokerValueBase;
-    if (!Number.isFinite(ov) || (ov ?? 0) <= 0) return s;
-    const quote = byId.get(l.account.id)?.valueBase ?? 0;
-    return s + ov! - quote;
-  }, costValueBase);
+  const costValueBase = Number.isFinite(summary.totalValueBase) ? summary.totalValueBase : 0;
   const totalCostPnlBase = totalCostBase > 0 ? costValueBase - totalCostBase : null;
   const totalCostReturnPct = totalCostBase > 0 ? (costValueBase - totalCostBase) / totalCostBase * 100 : null;
   const missingCostBasisCount = lines.filter((l) => l.costBase <= 0 && l.valueBase > 0).length;

@@ -481,6 +481,34 @@ export function InvestmentsView() {
           </div>
         )}
 
+        {/* Per-account P&L breakdown — shows each account's gain/loss
+            side by side so the user can see "StashAway −RM X · HATA ±RM Y"
+            instead of a blended aggregate that masks which leg is down. */}
+        {pnl && pnl.accounts.length > 0 && (
+          <div className="card" style={{ marginBottom: 14 }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Per-account P&L</div>
+            {pnl.accounts.map((l) => {
+              const neg = (l.costPnlBase ?? 0) < 0;
+              return (
+                <div key={l.account.id} className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600, fontSize: 14 }}>{l.account.platformName}</div>
+                  <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <div className="row" style={{ gap: 8, justifyContent: 'flex-end', alignItems: 'baseline' }}>
+                      <span style={{ color: neg ? 'var(--bad)' : 'var(--good)', fontWeight: 700, fontSize: 14 }}>
+                        {l.costPnlBase != null ? `${neg ? '−' : '+'}${formatMoney(Math.abs(l.costPnlBase!), base)}` : 'n/a'}
+                      </span>
+                      {l.costReturnPct != null && (
+                        <span className="small" style={{ color: neg ? 'var(--bad)' : 'var(--good)' }}>
+                          ({l.costReturnPct >= 0 ? '+' : '−'}{Math.abs(l.costReturnPct).toFixed(1)}%)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* Allocation by asset class — the single hero chart of the page:
             a smooth segmented bar with an interactive per-class breakdown.
             (Replaces the old stacked bar + separate donut pair.) */}
