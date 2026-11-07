@@ -289,12 +289,22 @@ export function InvestmentsView() {
   // Per-account total invested, keyed by account id (draft, base currency).
   const [costDrafts, setCostDrafts] = useState<Record<string, string>>({});
   const openCostBasis = () => {
-    // Seed the drafts from the current live cost basis so the user can see
-    // what's being proposed and adjust.
+    // Seed each account's "total invested" with the best known figure, in
+    // priority order: recorded starting capital -> settled contributions ->
+    // existing cost basis -> live value (last resort, labelled). Never seed
+    // live value as if it were the investment amount, or saving would make
+    // P&L read 0.00%.
     const seeds: Record<string, string> = {};
     for (const a of vault.accounts) {
+      const contribs = (vault.contributions ?? []).reduce((s, c) => c.accountId === a.id ? s + (Number.isFinite(c.amountBase) ? c.amountBase : 0) : s, 0);
+      const preferred =
+        (Number.isFinite(a.initialDepositBase) && (a.initialDepositBase ?? 0) > 0 ? a.initialDepositBase! : null)
+        ?? (contribs > 0 ? contribs : null)
+        ?? null;
       const line = live.portfolio?.byAccount.find((l) => l.account.id === a.id);
-      seeds[a.id] = line && line.costBase > 0 ? String(Math.round(line.costBase * 100) / 100) : '';
+      seeds[a.id] = preferred != null
+        ? String(Math.round(preferred * 100) / 100)
+        : (line && line.costBase > 0 ? String(Math.round(line.costBase * 100) / 100) : '');
     }
     setCostDrafts(seeds);
     setCostOpen(true);
@@ -1064,23 +1074,39 @@ export function InvestmentsView() {
           <div className="list" style={{ marginTop: 8 }}>
             {vault.accounts.map((a) => {
               const line = live.portfolio?.byAccount.find((l) => l.account.id === a.id);
+              const liveValue = line?.valueBase ?? 0;
+              // Live P&L preview: what the gain/loss will read as for this
+              // account with the entered total invested, before you save.
+              const entered = parseFloat((costDrafts[a.id] ?? '').trim());
+              const previewPnl = Number.isFinite(entered) && entered > 0 ? liveValue - entered : null;
+              const previewPct = previewPnl != null ? (previewPnl / entered) * 100 : null;
               return (
-                <div className="item" key={a.id}>
-                  <div className="grow">
-                    <div className="title">{a.platformName}</div>
-                    <div className="meta muted small">
-                      {a.accountType} · live value {formatMoney(line?.valueBase ?? 0, base)}
+                <div key={a.id} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '12px 14px', background: 'var(--bg-2)', border: '1px solid var(--line)', borderRadius: 13 }}>
+                  <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div className="title" style={{ fontWeight: 600, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.platformName}</div>
+                      <div className="small muted" style={{ marginTop: 2 }}>{a.accountType} · live value {formatMoney(liveValue, base)}</div>
                     </div>
                   </div>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    min={0}
-                    value={costDrafts[a.id] ?? ''}
-                    onChange={(e) => setCostDrafts((d) => ({ ...d, [a.id]: e.target.value }))}
-                    placeholder="Total invested"
-                    aria-label={`Total invested for ${a.platformName}`}
-                  />
+                  <label className="field" style={{ width: '100%', marginBottom: 0 }}>
+                    <span>Total invested ({base})</span>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min={0}
+                      value={costDrafts[a.id] ?? ''}
+                      onChange={(e) => setCostDrafts((d) => ({ ...d, [a.id]: e.target.value }))}
+                      placeholder="e.g. 30000"
+                      aria-label={`Total invested for ${a.platformName}`}
+                      style={{ width: '100%' }}
+                    />
+                  </label>
+                  {previewPnl != null && (
+                    <div className="small" style={{ color: previewPnl < 0 ? 'var(--bad)' : previewPnl > 0 ? 'var(--good)' : 'var(--text-2, #9aa4b8)' }}>
+                      → P&amp;L will read {previewPnl >= 0 ? '+' : '−'}{formatMoney(Math.abs(previewPnl), base)}
+                      {previewPct != null ? ` (${previewPct >= 0 ? '+' : '−'}${Math.abs(previewPct).toFixed(1)}%)` : ''}
+                    </div>
+                  )}
                 </div>
               );
             })}
