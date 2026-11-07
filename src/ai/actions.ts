@@ -39,6 +39,11 @@ export interface ProposedHolding {
   currency: string; // ISO 4217, the currency the holding is denominated in
   units: number;
   entryPrice: number; // average entry price, in `currency`
+  /** Optional: the user's recorded cost basis for this lot (in `currency`).
+   *  When present the store keeps it verbatim so P&L (value − cost) stays
+   *  1:1 with the broker. When absent, the store falls back to the current
+   *  price at add-time, so that lot's P&L starts at 0. */
+  averageEntryPrice?: number;
 }
 
 /** The original create_portfolio action (kept for tests/imports). */
