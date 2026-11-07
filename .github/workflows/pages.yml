@@ -55,7 +55,11 @@ jobs:
         # suite now at 20 files the default pool (one worker per CPU)
         # spawns too many heavy workers for a 4-core runner even at 8 GB.
         # Two forked workers keeps memory flat while still parallelizing.
-        run: npx vitest run --testTimeout=30000 --pool=forks --poolOptions.forks.maxForks=2
+        # --retry=2 re-runs any failing test up to 3x total: the real-provider
+        # happy-dom vault tests (store.tsx) intermittently lose a setState race
+        # on slow runners ("window is not defined" after teardown), which a
+        # single retry clears without hiding a real failure.
+        run: npx vitest run --testTimeout=30000 --pool=forks --poolOptions.forks.maxForks=2 --retry=2
       - name: Typecheck + build
         env:
           BASE_URL: ${{ env.PAGES_BASE }}
