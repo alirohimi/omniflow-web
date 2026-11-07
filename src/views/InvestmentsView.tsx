@@ -451,6 +451,116 @@ export function InvestmentsView() {
           </div>
         ) : null}
 
+        {/* ================= PERFORMANCE =================
+            The "am I gaining or losing money?" section. Three parts:
+              1) A big GAIN / LOSS headline from total cost-basis P&L
+                 (value − sum of all entry costs), matching a broker.
+              2) A per-account P&L breakdown (value, cost, P&L, return %).
+              3) A cost-basis audit: any holding with a missing entry price
+                 is what makes the number read green when it should be red.
+        */}
+        {(() => {
+          const costPnl = pnl?.totalCostPnlBase;
+          const costRet = pnl?.totalCostReturnPct;
+          const totalValue = live.portfolio?.totalValueBase ?? 0;
+          const totalCost = live.portfolio?.totalCostBase ?? 0;
+
+          // Per-account lines for the breakdown table.
+          const accountRows = (live.portfolio?.byAccount ?? [])
+            .filter((a) => a.valueBase > 0)
+            .map((a) => {
+              const cost = a.costBase;
+              const pnlAbs = a.valueBase - cost;
+              const ret = cost > 0 ? (pnlAbs / cost) * 100 : null;
+              return { id: a.account.id, name: a.account.platformName, value: a.valueBase, cost, pnlAbs, ret };
+            })
+            .sort((x, y) => y.pnlAbs - x.pnlAbs);
+
+          // Cost-basis audit: non-par holdings with no recorded entry price.
+          const auditGaps = vault.holdings
+            .filter((h) => h.assetClass !== 'cash' && h.assetClass !== 'mmf')
+            .filter((h) => !(Number.isFinite(h.averageEntryPrice) && h.averageEntryPrice > 0))
+            .map((h) => ({ symbol: h.symbol, units: h.units }));
+
+          const isLoss = costPnl != null && costPnl < 0;
+          const isGain = costPnl != null && costPnl > 0;
+
+          return (
+            <div style={{ marginTop: 18 }}>
+              <h2 className="section-title">Performance</h2>
+
+              {/* Headline card: the single most important number. */}
+              <div className="card" style={{ marginBottom: 10 }}>
+                <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <div>
+                    <div className="small muted">GAIN / LOSS vs. total cost</div>
+                    {costPnl != null ? (
+                      <div style={{ fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 800, letterSpacing: '-0.5px', marginTop: 4, color: isLoss ? 'var(--bad)' : isGain ? 'var(--good)' : 'var(--text)' }}>
+                        {isLoss ? '▼ Losing' : isGain ? '▲ Gaining' : '— Breakeven'}
+                        <span style={{ fontSize: 18, marginLeft: 8, fontWeight: 700 }}>
+                          {isLoss ? '−' : isGain ? '+' : ''}{formatMoney(Math.abs(costPnl), base)}
+                        </span>
+                        {costRet != null && (
+                          <span className="muted" style={{ fontSize: 14, marginLeft: 6, fontWeight: 600 }}>
+                            ({costRet >= 0 ? '+' : '−'}{Math.abs(costRet).toFixed(1)}%)
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="muted" style={{ fontSize: 16, marginTop: 4 }}>No cost basis recorded yet</div>
+                    )}
+                    <div className="small muted" style={{ marginTop: 6 }}>
+                      Value {formatMoney(totalValue, base)} · Cost {formatMoney(totalCost, base)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Actionable fix when the audit finds gaps (the usual reason
+                    for a false "green"). */}
+                {auditGaps.length > 0 && costPnl != null && (
+                  <div className="row small" style={{ marginTop: 12, gap: 8, flexWrap: 'wrap', alignItems: 'center', padding: 10, borderRadius: 10, background: 'var(--bad-soft, rgba(239,68,68,0.12))', border: '1px solid color-mix(in srgb, var(--bad) 30%, transparent)' }}>
+                    <span style={{ fontWeight: 600, color: 'var(--bad)' }}>⚠ {auditGaps.length} holding{auditGaps.length === 1 ? '' : 's'} missing entry price</span>
+                    <span className="muted grow">
+                      {auditGaps.slice(0, 4).map((g) => g.symbol).join(', ')}{auditGaps.length > 4 ? ` +${auditGaps.length - 4} more` : ''}
+                    </span>
+                    <span className="muted">— set their "Entry price" under Accounts → holdings to make this accurate.</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Per-account P&L table. */}
+              {accountRows.length > 0 && (
+                <div className="card">
+                  <div style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 700, marginBottom: 8 }}>Per account</div>
+                  {accountRows.map((r) => {
+                    const neg = r.pnlAbs < 0;
+                    return (
+                      <div key={r.id} className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
+                          <div className="small muted">value {formatMoney(r.value, base)} · cost {formatMoney(r.cost, base)}</div>
+                        </div>
+                        <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          <div className="row" style={{ gap: 6, justifyContent: 'flex-end', alignItems: 'baseline' }}>
+                            <span style={{ color: neg ? 'var(--bad)' : 'var(--good)', fontWeight: 700, fontSize: 15 }}>
+                              {neg ? '−' : '+'}{formatMoney(Math.abs(r.pnlAbs), base)}
+                            </span>
+                            {r.ret != null && (
+                              <span className="small" style={{ color: neg ? 'var(--bad)' : 'var(--good)' }}>
+                                ({r.ret >= 0 ? '+' : '−'}{Math.abs(r.ret).toFixed(1)}%)
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {(() => {
           const withDep = live.portfolio?.byAccount.filter((a) => a.depositBase != null && a.valueBase > 0) ?? [];
           if (withDep.length === 0) return null;
