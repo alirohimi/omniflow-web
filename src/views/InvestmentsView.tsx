@@ -25,7 +25,7 @@ import {
 } from '../insights';
 import { valueInBase } from '../ai/portfolio';
 import type { AccountLine } from '../ai/portfolio';
-import { CURRENCIES, currencyInfo, formatMoney } from '../domain/enums';
+import { CURRENCIES, currencyInfo, formatMoney, FAMED_STRATEGIES } from '../domain/enums';
 import { ThemedSelect } from '../components/ThemedSelect';
 import { IRefresh, IPlus, IPencil, IDots, ICheck } from '../icons';
 import type { InvestmentAccount, InvestmentHolding } from '../domain/types';
@@ -466,6 +466,56 @@ export function InvestmentsView() {
           )}
           <button className="btn ghost sm" onClick={live.refresh} disabled={live.loading}><IRefresh size={16} /> Refresh</button>
         </div>
+      </div>
+
+      {/* ---- Portfolio strategy + target allocation -------------------------
+          The user picks a famous strategy (or "my own targets") and that
+          target drives both the rebalance engine and the coach's new-money
+          advice. Persisted in prefs.coachStrategy / prefs.targetAllocation. */}
+      <h2 className="section-title">Strategy & targets</h2>
+      <div className="card">
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span className="chip sm">Strategy</span>
+          <ThemedSelect
+            value={vault.prefs.coachStrategy ?? '60-40'}
+            onChange={(v: string) => store.setPrefs({ coachStrategy: v })}
+            options={(Object.values(FAMED_STRATEGIES)).map((s) => ({ value: s.key, label: s.name }))}
+            aria-label="Portfolio strategy"
+          />
+        </div>
+        {(() => {
+          const key = vault.prefs.coachStrategy ?? '60-40';
+          const strat = FAMED_STRATEGIES[key as keyof typeof FAMED_STRATEGIES];
+          if (!strat) return null;
+          if (key === 'custom') {
+            const custom = vault.prefs.targetAllocation ?? {};
+            const entries = Object.entries(custom);
+            return (
+              <div style={{ marginTop: 10 }}>
+                <div className="small muted">Your custom targets (edit in Settings → Target allocation)</div>
+                {entries.length > 0 ? (
+                  <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                    {entries.map(([cls, w]) => (
+                      <span key={cls} className="chip sm">{cls} {Math.round(w * 100)}%</span>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="small muted" style={{ marginTop: 4 }}>No custom targets set yet — pick a strategy above to get started.</div>
+                )}
+              </div>
+            );
+          }
+          return (
+            <div style={{ marginTop: 10 }}>
+              <div className="small muted">{strat.blurb}</div>
+              <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                {Object.entries(strat.allocation).map(([cls, w]) => (
+                  <span key={cls} className="chip sm ok">{cls} {Math.round(w * 100)}%</span>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       <Disclosure id="accounts" title={`Accounts${vault.accounts.length ? ` (${vault.accounts.length})` : ''}`}>
