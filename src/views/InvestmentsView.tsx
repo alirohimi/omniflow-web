@@ -488,20 +488,61 @@ export function InvestmentsView() {
           const strat = FAMED_STRATEGIES[key as keyof typeof FAMED_STRATEGIES];
           if (!strat) return null;
           if (key === 'custom') {
-            const custom = vault.prefs.targetAllocation ?? {};
-            const entries = Object.entries(custom);
             return (
               <div style={{ marginTop: 10 }}>
-                <div className="small muted">Your custom targets (edit in Settings → Target allocation)</div>
-                {entries.length > 0 ? (
-                  <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
-                    {entries.map(([cls, w]) => (
-                      <span key={cls} className="chip sm">{cls} {Math.round(w * 100)}%</span>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="small muted" style={{ marginTop: 4 }}>No custom targets set yet — pick a strategy above to get started.</div>
-                )}
+                <div className="small muted" style={{ marginBottom: 8 }}>
+                  Set your target weights per asset class (sums to 100%).
+                  These drive the rebalance engine and the coach's new-money advice.
+                </div>
+                {(() => {
+                  const custom = vault.prefs.targetAllocation ?? {};
+                  // All known asset classes — show every row so the user can
+                  // add/remove by setting 0 or a value.
+                  const allClasses = [...ASSET_CLASSES] as readonly string[];
+                  return (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8 }}>
+                      {allClasses.map((cls) => {
+                        const cur = custom[cls] != null ? Math.round((custom[cls] as number) * 100) : 0;
+                        return (
+                          <label key={cls} className="field" style={{ marginBottom: 0 }}>
+                            <span style={{ textTransform: 'capitalize' }}>{cls}</span>
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              min={0}
+                              max={100}
+                              value={cur === 0 ? '' : cur}
+                              placeholder="0"
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                const v = raw === '' ? undefined : Number(raw) / 100;
+                                const next = { ...custom };
+                                if (v === undefined || Number.isNaN(v)) delete next[cls];
+                                else next[cls] = Math.max(0, Math.min(1, v));
+                                store.setPrefs({ targetAllocation: next });
+                              }}
+                              style={{ width: '100%' }}
+                            />
+                          </label>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+                {(() => {
+                  const custom = vault.prefs.targetAllocation ?? {};
+                  const total = Object.values(custom).reduce((s, w) => s + (Number.isFinite(w) ? w : 0), 0);
+                  const totalPct = Math.round(total * 100);
+                  return (
+                    <div style={{ marginTop: 8 }} className={`small ${totalPct === 100 ? 'pos' : totalPct === 0 ? 'muted' : 'neg'}`}>
+                      {totalPct === 0
+                        ? 'No targets set — set at least one class above.'
+                        : totalPct === 100
+                          ? 'Targets sum to 100% — saved.'
+                          : `Targets currently sum to ${totalPct}% — the rebalance engine normalises automatically, but 100% is cleanest.`}
+                    </div>
+                  );
+                })()}
               </div>
             );
           }
