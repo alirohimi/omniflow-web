@@ -6,6 +6,10 @@ import type {
   UserPreferences,
   AutoInvestPeriod,
 } from './types';
+import { FAMED_STRATEGIES } from './types';
+
+// Re-export so callers can import everything from enums (one import site).
+export { FAMED_STRATEGIES };
 
 export const DEFAULT_PREFS: UserPreferences = {
   baseCurrency: 'MYR',

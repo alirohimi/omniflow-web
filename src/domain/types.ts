@@ -362,7 +362,59 @@ export interface UserPreferences {
    *  OFF: the coach answers fast and concise — no step-by-step analysis.
    *  Persisted in the encrypted vault, so it syncs across devices. */
   coachThinking?: boolean;
+  /** Portfolio strategy the user wants the coach to follow when advising
+   *  allocation of new money. One of the FAMED_STRATEGIES keys, or
+   *  'custom' (in which case `targetAllocation` is used as the target).
+   *  The coach grounds its "where should I put RM X" answers in this. */
+  coachStrategy?: string;
 }
+
+/** Well-known portfolio strategies the user can pick from in the Coach.
+ *  Each carries a name, a short rationale the coach can quote, and a target
+ *  allocation by asset class. 'custom' means "use the user's own
+ *  targetAllocation from prefs instead". These are the options the coach
+ *  is told to anchor its new-money advice to — so it stops guessing a
+ *  target out of thin air. */
+export const FAMED_STRATEGIES = {
+  '60-40': {
+    key: '60-40',
+    name: '60/40 (Sixty-Forty)',
+    blurb: '60% global equities / 40% bonds — the classic balanced risk mix.',
+    allocation: { equity: 0.6, bond: 0.4 },
+  },
+  'all-equity': {
+    key: 'all-equity',
+    name: 'All-Equity Growth',
+    blurb: '100% stocks for maximum long-run growth; more volatility.',
+    allocation: { equity: 0.9, cash: 0.1 },
+  },
+  'conservative': {
+    key: 'conservative',
+    name: 'Conservative Income',
+    blurb: 'Mostly bonds + cash, small equity slice — capital preservation first.',
+    allocation: { equity: 0.2, bond: 0.6, cash: 0.2 },
+  },
+  'bogle': {
+    key: 'bogle',
+    name: 'Bogle Three-Fund',
+    blurb: 'Total-market stock, total-market bond, international — low cost, fully diversified.',
+    allocation: { equity: 0.7, bond: 0.2, international: 0.1 },
+  },
+  'crypto-tilt': {
+    key: 'crypto-tilt',
+    name: 'Crypto Tilt',
+    blurb: 'Equities heavy with a 5-10% crypto satellite for long-term upside.',
+    allocation: { equity: 0.85, crypto: 0.1, cash: 0.05 },
+  },
+  'custom': {
+    key: 'custom',
+    name: 'My Own Targets',
+    blurb: 'Use the allocation weights you set in Settings → Portfolio targets.',
+    allocation: {},
+  },
+} as const;
+
+export type FamedStrategyKey = keyof typeof FAMED_STRATEGIES;
 
 /** The encrypted-at-rest shape stored in the database. */
 export interface VaultBlob {

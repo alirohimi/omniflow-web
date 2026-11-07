@@ -33,7 +33,7 @@ import type { PortfolioSummary } from './portfolio';
 import { spendOverLastDays } from './advisor';
 import type { LLMConfig } from './categorize';
 import { callLLM as callLLMDefault, callLLM } from './categorize';
-import { currencyInfo } from '../domain/enums';
+import { currencyInfo, FAMED_STRATEGIES } from '../domain/enums';
 import { computeEmergency } from '../insights/emergency';
 import {
   ACTION_CONTRACT,
@@ -94,6 +94,19 @@ export interface CoachBrief {
   /** Exact category names available to the user — the only valid values for
    *  `category` in add_expense / edit_expense actions. */
   categories: string[];
+  /** The portfolio strategy the user picked in the Coach (FAMED_STRATEGIES
+   *  key or 'custom'). Absent = no strategy set, coach shouldn't assume a
+   *  target. */
+  strategy?: {
+    key: string;
+    name: string;
+    blurb: string;
+    /** Target allocation by asset class (fractions summing to ~1). Empty for
+     *  'custom' — the user's own targetAllocation from prefs is used instead. */
+    target: Record<string, number>;
+    /** When strategy is 'custom', the user's own targetAllocation weights. */
+    userTargets?: Record<string, number>;
+  };
   // Emergency-reserve facts (separate line from the portfolio). Absent when
   // the view didn't compute it (offline FX + no spend). The coach treats the
   // whole block as optional and never invents numbers when it's missing.
@@ -192,6 +205,23 @@ export function buildContextPack(brief: CoachBrief, history?: CoachMessage[]): s
       lines.push(`Liquid: ${fmtMoney(e.liquidValue, cur)} · Invested: ${fmtMoney(e.investedValue, cur)}`);
   }
   lines.push('');
+
+  // ## PORTFOLIO STRATEGY — the target the coach should anchor new-money
+  // advice to. Present only when the user picked one; the coach must use
+  // THIS allocation, not invent its own.
+  const st = brief.strategy;
+  if (st) {
+    lines.push('## YOUR STRATEGY (target allocation for new money)');
+    lines.push(`Strategy: ${st.name} — ${st.blurb}`);
+    const targets = st.key === 'custom' ? (st.userTargets ?? {}) : st.target;
+    const entries = Object.entries(targets);
+    lines.push(
+      entries.length > 0
+        ? `Targets: ${entries.map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(' | ')}`
+        : 'Targets: not set yet — treat new money as flexible and recommend a sensible split',
+    );
+    lines.push('');
+  }
 
   // ## RECENT
   lines.push('## RECENT');
@@ -344,7 +374,26 @@ export function buildBrief(ctx: CoachContext): CoachBrief {
     // against the same list (threaded in by coachAsk).
     categories: categories.map((c) => c.name),
     emergency: emergencyBrief,
+    // Portfolio strategy (FAMED_STRATEGIES key or 'custom'). The coach is told
+    // to anchor new-money advice to this target allocation — so it stops
+    // inventing a target out of thin air.
+    strategy: buildStrategyBrief(prefs),
   };
+}
+
+/** Resolve the user's coach strategy pref into the brief's `strategy` shape.
+ *  'custom' means "use my own targetAllocation weights" — the userTargets
+ *  field carries those. Absent / unknown key -> undefined (no strategy). */
+function buildStrategyBrief(prefs: UserPreferences): CoachBrief['strategy'] {
+  const key = prefs.coachStrategy;
+  if (!key) return undefined;
+  if (key === 'custom') {
+    const userTargets = prefs.targetAllocation ?? {};
+    return { key: 'custom', name: 'My Own Targets', blurb: 'User-defined allocation targets.', target: {}, userTargets };
+  }
+  const s = FAMED_STRATEGIES[key as keyof typeof FAMED_STRATEGIES];
+  if (!s) return undefined;
+  return { key: s.key, name: s.name, blurb: s.blurb, target: { ...s.allocation } };
 }
 
 /** The coach persona. Injected as the system prompt of every LLM turn so
@@ -357,14 +406,14 @@ export function coachSystemPrompt(brief: CoachBrief, thinking: boolean = true): 
   const pack = buildContextPack(brief);
   const styleRules = thinking
     ? [
-        '- THINKING ON: first output exactly one line "Thinking:", then on the next lines 2-4 SHORT numbered reasoning steps (each <= 10 words, no numbers/data inside the steps — just the decision logic, e.g. "check cushion", "cushion past target", "direct full amount"). Do NOT mix data values into the thinking steps.',
-        '- Then output a blank line, then the ANSWER section: a 1-3 bullet answer with the concrete numbers and recommendation.',
-        '- Hard rule: the "Thinking:" steps and the answer bullets must be visually separate — never one merged numbered list.',
-        '- Total reply max ~150 words.',
+        '- THINKING ON: start with the single line "Thinking:", then 2-3 reasoning steps. Each step is ONE short phrase (<= 8 words), describing only the *decision logic* — e.g. "check cushion status", "cushion past target", "direct new money to strategy split". NEVER put numbers, percentages, or amounts in a thinking step.',
+        '- After a blank line, give the ANSWER: 1-3 dash bullets with the concrete numbers and the recommendation. All data values live ONLY in the answer, never in the thinking steps.',
+        '- The thinking block and the answer are two visually separate parts — never one merged numbered list.',
+        '- Total reply max ~140 words (thinking steps + answer).',
       ]
     : [
-        '- THINKING OFF (fast mode): answer first, no "Thinking:" block, no step-by-step. Give the conclusion directly.',
-        '- Keep replies to max ~60 words. Prefer a single short bullet list over paragraphs.',
+        '- THINKING OFF (fast mode): no "Thinking:" block. Give the conclusion directly in 1-3 dash bullets.',
+        '- Keep replies to max ~50 words.',
       ];
   return [
     'You are OmniFlow Coach, a personal-finance advisor in the tradition of long-term value investing.',
@@ -376,6 +425,7 @@ export function coachSystemPrompt(brief: CoachBrief, thinking: boolean = true): 
     `- Bold (**...**) every key number. Use "-" dash bullets for comparisons or allocations. Never use # headers, tables, code blocks, [links], or emoji.`,
     `- All money in ${brief.baseCurrency} (the user's base currency), the currency shown in the data below.`,
     '- Answer using the sections in the data snapshot below; cite the relevant section when you do.',
+    '- When they ask where to put new money, FIRST check the "## YOUR STRATEGY" section (if present) and use its target allocation as the goal — do not invent a target allocation. If no strategy section is present, recommend a sensible split and say to pick a strategy so future advice follows it.',
     '- When they ask what to buy, give process (criteria, position sizing, when to act), not a single-stock call.',
     '- Flag concentrated positions, heavy crypto, or FX exposure ONLY when the data below shows it.',
     '- No legal/tax advice; the app footer already carries the "general education, not advice" note — do NOT repeat any disclaimer inside the answer.',

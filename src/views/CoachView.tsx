@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
 import { coachAsk, applyAction as applyAiAction, type Action, type ActionStore } from '../ai';
+import { FAMED_STRATEGIES } from '../domain/enums';
 import type { CoachContext } from '../ai/coach';
 import type { CoachThread } from '../domain/types';
 import { ICoach, IClose, IImage, IPlus, IChevron, IPencil, IX, ICheck } from '../icons';
@@ -322,6 +323,16 @@ export function CoachView() {
     store.setPrefs({ coachThinking: !coachThinking });
   };
 
+  // Portfolio strategy picker (FAMED_STRATEGIES). The coach grounds its
+  // new-money advice in the target allocation of the picked strategy.
+  const coachStrategy = store.vault?.prefs.coachStrategy ?? '60-40';
+  const [strategyOpen, setStrategyOpen] = useState(false);
+  const setStrategy = (key: string) => {
+    store.setPrefs({ coachStrategy: key });
+    setStrategyOpen(false);
+  };
+  const strategyName = FAMED_STRATEGIES[coachStrategy as keyof typeof FAMED_STRATEGIES]?.name ?? coachStrategy;
+
   const send = async (text: string, image?: string) => {
     const q = text.trim();
     const img = image ?? attach;
@@ -430,16 +441,44 @@ export function CoachView() {
               concise answer-first replies. Persisted in the encrypted vault. */}
           <button
             className={`chip sm ${coachThinking ? 'ok' : ''}`}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: 44, cursor: 'pointer' }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
             onClick={toggleThinking}
             aria-pressed={coachThinking}
             title={coachThinking
               ? 'Thinking mode ON — the coach shows its reasoning before answering. Tap for fast replies.'
               : 'Fast mode — concise, answer-first replies. Tap to enable thinking.'}
           >
-            <span style={{ opacity: 0.7, fontSize: 11 }}>⚡</span>
-            {coachThinking ? 'Thinking on' : 'Fast mode'}
+            <span style={{ opacity: 0.7, fontSize: 13, lineHeight: 1 }}>⚡</span>
+            {coachThinking ? 'Thinking' : 'Fast'}
           </button>
+          {/* Strategy picker: the target allocation the coach anchors its
+              new-money advice to. Click to open the dropdown. */}
+          <div style={{ position: 'relative' }}>
+            <button
+              className="chip sm"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+              onClick={() => setStrategyOpen((o) => !o)}
+              aria-expanded={strategyOpen}
+              title="Portfolio strategy — the target allocation the coach follows for new money"
+            >
+              <span style={{ opacity: 0.7, fontSize: 12, lineHeight: 1 }}>◉</span>
+              {strategyName}
+            </button>
+            {strategyOpen && (
+              <div style={{ position: 'absolute', top: '100%', left: 0, zIndex: 20, marginTop: 6, background: 'var(--surface-2, #1e293b)', border: '1px solid var(--border, #334155)', borderRadius: 10, padding: 6, minWidth: 200, boxShadow: '0 8px 24px rgba(0,0,0,.4)' }}>
+                {Object.values(FAMED_STRATEGIES).map((s) => (
+                  <div
+                    key={s.key}
+                    onClick={() => setStrategy(s.key)}
+                    style={{ padding: '8px 10px', borderRadius: 8, cursor: 'pointer', background: s.key === coachStrategy ? 'var(--accent-bg, rgba(59,130,246,.15))' : 'transparent' }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text, #fff)' }}>{s.name}</div>
+                    <div style={{ fontSize: 11, color: 'var(--muted, #94a3b8)', marginTop: 2 }}>{s.blurb}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         <div className="row" style={{ gap: 4 }}>
           {/* Thread switcher trigger */}

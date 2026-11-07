@@ -300,8 +300,8 @@ describe('coachSystemPrompt (cheap-model ready)', () => {
     const p = coachSystemPrompt(sampleBrief(), false);
     expect(p).toContain('THINKING OFF');
     expect(p).toContain('fast mode');
-    expect(p).toContain('max ~60 words');
-    expect(p).toContain('answer first');
+    expect(p).toContain('max ~50 words');
+    expect(p).toContain('directly in 1-3 dash bullets');
   });
 
   it('no longer sends the raw JSON brief blob to the model', () => {
