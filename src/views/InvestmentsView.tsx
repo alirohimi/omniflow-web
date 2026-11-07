@@ -280,6 +280,63 @@ export function InvestmentsView() {
     setDepFocusId(focusAccountId ?? null);
     setDepOpen(true);
   };
+
+  // ---- Set cost basis fast path ---------------------------------------------
+  // Enter total invested per account (from StashAway's "Total invested"), and
+  // it back-fills each holding's entry price proportionally by current value,
+  // so cost-basis P&L matches the broker without editing every row.
+  const [costOpen, setCostOpen] = useState(false);
+  // Per-account total invested, keyed by account id (draft, base currency).
+  const [costDrafts, setCostDrafts] = useState<Record<string, string>>({});
+  const openCostBasis = () => {
+    // Seed the drafts from the current live cost basis so the user can see
+    // what's being proposed and adjust.
+    const seeds: Record<string, string> = {};
+    for (const a of vault.accounts) {
+      const line = live.portfolio?.byAccount.find((l) => l.account.id === a.id);
+      seeds[a.id] = line && line.costBase > 0 ? String(Math.round(line.costBase * 100) / 100) : '';
+    }
+    setCostDrafts(seeds);
+    setCostOpen(true);
+  };
+
+  /** Save the fast path: set initialDepositBase + distribute total invested
+   *  across each account's holdings as entry prices (proportional to their
+   *  current value, so the sum of holding costs ≈ the total invested). */
+  const saveCostBasis = async () => {
+    let touched = 0;
+    for (const a of vault.accounts) {
+      const raw = (costDrafts[a.id] ?? '').trim();
+      if (raw === '') continue;
+      const totalInvested = parseFloat(raw);
+      if (!Number.isFinite(totalInvested) || totalInvested <= 0) continue;
+      // 1) Drive the capital-based P&L from the broker's "total invested".
+      store.updateAccount(a.id, { initialDepositBase: totalInvested });
+      // 2) Distribute across non-par holdings by current value so the
+      //    cost-basis P&L matches too. Par (cash/MMF) rows keep entry = 1.
+      const lines = live.portfolio?.byAccount.find((l) => l.account.id === a.id)?.lines ?? [];
+      const distributable = lines.filter(
+        (l) => !isParClass(l.holding.assetClass) && l.valueBase > 0 && Number.isFinite(l.holding.units) && l.holding.units > 0,
+      );
+      const totalDistValue = distributable.reduce((s, l) => s + l.valueBase, 0);
+      if (totalDistValue > 0) {
+        for (const l of distributable) {
+          // This holding's share of the total invested, in its currency.
+          const shareBase = (l.valueBase / totalDistValue) * totalInvested;
+          const h = l.holding;
+          const toCur = h.holdingCurrency === base ? 1 : (live.fx ? fxService.toBase(1, h.holdingCurrency, live.fx) : NaN);
+          const shareLocal = Number.isFinite(toCur) && toCur > 0 ? shareBase / toCur : 0;
+          const entryPerUnit = h.units > 0 ? shareLocal / h.units : 0;
+          if (Number.isFinite(entryPerUnit) && entryPerUnit > 0) {
+            store.updateHolding(h.id, { averageEntryPrice: Math.round(entryPerUnit * 100) / 100 });
+            touched++;
+          }
+        }
+      }
+    }
+    setCostOpen(false);
+    toast(touched > 0 ? `Cost basis set · ${touched} holding${touched === 1 ? '' : 's'} updated` : 'Cost basis saved');
+  };
   // When opened focused on a specific account, scroll it into view + focus it.
   useEffect(() => {
     if (!depOpen || !depFocusId) return;
@@ -516,14 +573,23 @@ export function InvestmentsView() {
                 </div>
 
                 {/* Actionable fix when the audit finds gaps (the usual reason
-                    for a false "green"). */}
-                {auditGaps.length > 0 && costPnl != null && (
+                    for a false "green" or 0.00% reading). */}
+                {auditGaps.length > 0 && (
                   <div className="row small" style={{ marginTop: 12, gap: 8, flexWrap: 'wrap', alignItems: 'center', padding: 10, borderRadius: 10, background: 'var(--bad-soft, rgba(239,68,68,0.12))', border: '1px solid color-mix(in srgb, var(--bad) 30%, transparent)' }}>
                     <span style={{ fontWeight: 600, color: 'var(--bad)' }}>⚠ {auditGaps.length} holding{auditGaps.length === 1 ? '' : 's'} missing entry price</span>
                     <span className="muted grow">
                       {auditGaps.slice(0, 4).map((g) => g.symbol).join(', ')}{auditGaps.length > 4 ? ` +${auditGaps.length - 4} more` : ''}
                     </span>
-                    <span className="muted">— set their "Entry price" under Accounts → holdings to make this accurate.</span>
+                    <button className="btn sm" onClick={() => openCostBasis()}>Set cost basis from broker</button>
+                  </div>
+                )}
+                {/* Fast-path button always available so you can (re)sync your
+                    real StashAway/Broker "total invested" at any time. */}
+                {vault.accounts.length > 0 && (
+                  <div className="row small" style={{ marginTop: 10, gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button className="btn ghost sm" onClick={() => openCostBasis()}>
+                      Use my broker's "total invested" (StashAway) instead of per-holding entry prices
+                    </button>
                   </div>
                 )}
               </div>
@@ -975,6 +1041,53 @@ export function InvestmentsView() {
           </div>
           <div className="row" style={{ marginTop: 14 }}>
             <button className="btn sm" style={{ flex: 1 }} onClick={() => setDepOpen(false)}>Done</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Set cost basis fast path — enter your broker's "total invested" per
+          account; it back-fills each holding's entry price proportionally so
+          cost-basis P&L matches StashAway without editing every row. */}
+      {costOpen && (
+        <Modal title="Set cost basis from broker" onClose={() => setCostOpen(false)}>
+          <p className="small muted" style={{ marginTop: 0 }}>
+            Enter your broker's <b>total invested</b> for each account (StashAway's
+            "Total invested" / "Purchases"). It updates the P&amp;L immediately and
+            back-fills your holdings' entry prices in proportion to their value —
+            no need to edit each row. Leave a field blank to skip that account.
+          </p>
+          {vault.accounts.length === 0 && (
+            <div className="row small muted" style={{ marginBottom: 8 }}>
+              Create an account first — cost basis is set per account.
+            </div>
+          )}
+          <div className="list" style={{ marginTop: 8 }}>
+            {vault.accounts.map((a) => {
+              const line = live.portfolio?.byAccount.find((l) => l.account.id === a.id);
+              return (
+                <div className="item" key={a.id}>
+                  <div className="grow">
+                    <div className="title">{a.platformName}</div>
+                    <div className="meta muted small">
+                      {a.accountType} · live value {formatMoney(line?.valueBase ?? 0, base)}
+                    </div>
+                  </div>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    value={costDrafts[a.id] ?? ''}
+                    onChange={(e) => setCostDrafts((d) => ({ ...d, [a.id]: e.target.value }))}
+                    placeholder="Total invested"
+                    aria-label={`Total invested for ${a.platformName}`}
+                  />
+                </div>
+              );
+            })}
+          </div>
+          <div className="row" style={{ marginTop: 14, gap: 8 }}>
+            <button className="btn sm" style={{ flex: 1 }} onClick={() => void saveCostBasis()}>Save cost basis</button>
+            <button className="btn ghost sm" onClick={() => setCostOpen(false)}>Cancel</button>
           </div>
         </Modal>
       )}

@@ -70,6 +70,11 @@ export interface PnlAccount {
   capitalBase: number;
   pnlBase: number | null;
   returnPct: number | null;
+  /** P&L measured against this account's own cost basis (sum of holdings'
+   *  entry costs) — shows each account's gain/loss separately. */
+  costBase: number;
+  costPnlBase: number | null;
+  costReturnPct: number | null;
 }
 
 export interface PortfolioPnl {
@@ -87,6 +92,10 @@ export interface PortfolioPnl {
   accounts: PnlAccount[];
   /** Count of accounts still missing a recorded initial balance. */
   missingCapitalCount: number;
+  /** Count of accounts with live value but no entry cost recorded — these
+   *  drag the cost-basis P&L toward 0 and are the usual cause of a false
+   *  "breakeven" reading. */
+  missingCostBasisCount: number;
 }
 
 /**
@@ -124,12 +133,22 @@ export function portfolioPnl(
     // Fall back to the ledger when no manual balance was recorded.
     if (capitalBase === 0) capitalBase = capFromContribs.get(acc.id) ?? 0;
     const hasCapital = capitalBase > 0;
+    // Per-account P&L is measured against the same total cost basis the
+    // summary computes, so each account shows its own gain/loss — a user
+    // with StashAway down and a 401k up sees both, not a blended 0.00%.
+    const accCost = Number.isFinite(l.costBase) ? l.costBase : 0;
+    const hasCost = accCost > 0;
+    const costPnlBase = hasCost ? valueBase - accCost : null;
+    const costReturnPct = hasCost ? ((valueBase - accCost) / accCost) * 100 : null;
     return {
       account: acc,
       valueBase,
       capitalBase,
       pnlBase: hasCapital ? valueBase - capitalBase : null,
       returnPct: hasCapital ? ((valueBase - capitalBase) / capitalBase) * 100 : null,
+      costBase: accCost,
+      costPnlBase,
+      costReturnPct,
     };
   });
 
@@ -150,6 +169,7 @@ export function portfolioPnl(
   const costValueBase = Number.isFinite(summary.totalValueBase) ? summary.totalValueBase : 0;
   const totalCostPnlBase = totalCostBase > 0 ? costValueBase - totalCostBase : null;
   const totalCostReturnPct = totalCostBase > 0 ? (costValueBase - totalCostBase) / totalCostBase * 100 : null;
+  const missingCostBasisCount = lines.filter((l) => l.costBase <= 0 && l.valueBase > 0).length;
 
   return {
     totalValueBase,
@@ -161,6 +181,7 @@ export function portfolioPnl(
     totalCostReturnPct,
     accounts: lines,
     missingCapitalCount,
+    missingCostBasisCount,
   };
 }
 

@@ -206,6 +206,32 @@ describe('portfolioPnl', () => {
     expect(pnl.totalCostBase).toBe(0);
     expect(pnl.totalCostPnlBase).toBeNull();
     expect(pnl.totalCostReturnPct).toBeNull();
+    expect(pnl.missingCostBasisCount).toBe(1); // has value, no cost
+  });
+
+  it('per-account cost P&L shows each account separately (no blended 0.00%)', () => {
+    // StashAway is DOWN on cost; 401k is UP on cost. Each must show its own
+    // gain/loss — the old blend (total value vs total capital) masked this.
+    const s: InvestmentAccount = { id: 's', platformName: 'StashAway', accountType: 'robo', baseCurrencyValue: 0, lastUpdated: NOW };
+    const f: InvestmentAccount = { id: 'f', platformName: '401k', accountType: 'robo', baseCurrencyValue: 0, lastUpdated: NOW };
+    const summary = fakeSummary(
+      [
+        { id: 's', value: 90_000, cost: 100_000 }, // −10k (down 10%)
+        { id: 'f', value: 120_000, cost: 100_000 }, // +20k (up 20%)
+      ],
+      { value: 210_000, cost: 200_000 },
+    );
+    const pnl = portfolioPnl(summary, [s, f], []);
+    const sLine = pnl.accounts.find((a) => a.account.id === 's')!;
+    const fLine = pnl.accounts.find((a) => a.account.id === 'f')!;
+    expect(sLine.costBase).toBe(100_000);
+    expect(sLine.costPnlBase).toBe(-10_000);
+    expect(sLine.costReturnPct).toBeCloseTo(-10, 5);
+    expect(fLine.costPnlBase).toBe(20_000);
+    expect(fLine.costReturnPct).toBeCloseTo(20, 5);
+    // Total cost-basis P&L still correct: 210k − 200k = +10k (+5%)
+    expect(pnl.totalCostPnlBase).toBe(10_000);
+    expect(pnl.totalCostReturnPct).toBeCloseTo(5, 5);
   });
 });
 
