@@ -112,6 +112,33 @@ describe('MarketDataService.quote — crypto (coingecko)', () => {
     expect(r.source).toBe('cache');
     expect(r.note).toContain('network down');
   });
+
+  it('a MYR-denominated crypto holding is priced directly in MYR (btcmyr)', async () => {
+    const f = mockFetchJson({ bitcoin: { myr: 307_481.2, usd: 75_706, usd_24h_change: -0.8 } });
+    const r = await svc.quote(h({ holdingCurrency: 'MYR' }));
+    expect(r.ok).toBe(true);
+    expect(r.price).toBe(307_481.2);
+    expect(r.currency).toBe('MYR');
+    expect(r.source).toBe('coingecko');
+    // The request asks for MYR (+USD fallback) in the same call.
+    expect(String(f.mock.calls[0][0])).toContain('vs_currencies=myr%2Cusd');
+  });
+
+  it('a USD crypto holding still prices in USD (no MYR lookup)', async () => {
+    const f = mockFetchJson({ bitcoin: { usd: 75_706, usd_24h_change: 0.2 } });
+    const r = await svc.quote(h({ holdingCurrency: 'USD' }));
+    expect(r.price).toBe(75_706);
+    expect(r.currency).toBe('USD');
+    expect(String(f.mock.calls[0][0])).toContain('vs_currencies=usd');
+    expect(String(f.mock.calls[0][0])).not.toContain('myr');
+  });
+
+  it('MYR price missing → falls back to the USD figure from the same cell', async () => {
+    const f = mockFetchJson({ bitcoin: { usd: 75_706 } });
+    const r = await svc.quote(h({ holdingCurrency: 'MYR' }));
+    expect(r.price).toBe(75_706);
+    expect(r.currency).toBe('USD'); // held USD, will be FX-converted to MYR
+  });
 });
 
 describe('MarketDataService.quote — equity (yahoo)', () => {
@@ -149,6 +176,26 @@ describe('MarketDataService.quote — equity (yahoo)', () => {
     expect(r.ok).toBe(true);
     expect(r.price).toBe(40_000);
     expect(r.note).toContain('yahoo 502');
+  });
+
+  it('a StashAway CSPX sleeve fetches the S&P 500 index, not a US spot proxy', async () => {
+    const f = mockFetchJson(yahooBody(5_600, 'USD'));
+    const r = await svc.quote(h({ assetClass: 'etf', symbol: 'CSPX', holdingCurrency: 'USD' }));
+    expect(r.ok).toBe(true);
+    expect(r.price).toBe(5_600);
+    // The UI keeps the user's symbol; the fetch went to the reference index.
+    expect(r.symbol).toBe('CSPX');
+    expect(String(f.mock.calls[0][0])).toContain('%5EGSPC');
+    expect(r.note).toContain('tracked ^GSPC index');
+  });
+
+  it('a StashAway GLDM gold sleeve fetches the gold spot reference (GC=F)', async () => {
+    const f = mockFetchJson(yahooBody(4_074.9, 'USD'));
+    const r = await svc.quote(h({ assetClass: 'gold', symbol: 'GLDM', holdingCurrency: 'USD' }));
+    expect(r.ok).toBe(true);
+    expect(r.price).toBe(4_074.9);
+    expect(String(f.mock.calls[0][0])).toContain('GC%3DF');
+    expect(r.symbol).toBe('GLDM');
   });
 });
 

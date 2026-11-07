@@ -28,6 +28,18 @@ const COINGECKO_COIN_MAP: Record<string, string> = {
   DOGE: 'dogecoin',
 };
 
+/** StashAway model-portfolio instrument -> underlying index that the ETF
+ *  actually tracks. StashAway prices each model sleeve off these broad
+ *  index levels (daily, ~once a day), so the app's live quote must
+ *  reference the SAME index — not a US-listed spot proxy that trades in a
+ *  different currency on different hours. Values fetched here feed the
+ *  crypto/ETF quote path; the PWA polls them on the same 60s cadence. */
+const STASHAWAY_INDEX_MAP: Record<string, string> = {
+  CSPX:  '^GSPC', // S&P 500 (Developed Market / US sleeve)
+  GLDM:  'GC=F',  // Gold (commodity sleeve)
+  GLD:   'GC=F',  // user may type either gold ticker
+};
+
 /** Per-fetch wall clock. A junk symbol (or a flaky network) must never be
  *  allowed to hang the whole batch: after this many ms the request aborts
  *  and we fall back to the stored price. */
@@ -65,7 +77,10 @@ export class MarketDataService {
   constructor(private readonly fx: CurrencyExchangeService) {}
 
   /** Resolve the "best effort" price for a holding.
-   *  - crypto: live CoinGecko (USD). On failure, holding.currentPriceLocal.
+   *  - crypto: live CoinGecko in the holding's OWN currency when the FX
+   *    table covers it directly (e.g. a MYR-denominated BTC -> MYR,
+   *    1 decimal, exactly what the Malaysian exchanges show); otherwise
+   *    USD + FX conversion. On failure, holding.currentPriceLocal.
    *  - equity/etf: Yahoo (attempted). On failure, holding.currentPriceLocal.
    *  - cash/mmf: price = 1 (the unit IS the value), currency = holding's.
    */
@@ -84,15 +99,27 @@ export class MarketDataService {
     try {
       switch (h.assetClass) {
         case 'crypto':
-          return await this.cryptoQuote(h.symbol);
+          return await this.cryptoQuote(h.symbol, h.holdingCurrency);
         case 'equity-us':
         case 'equity-local':
         case 'etf':
-          return await this.yahooQuote(h.symbol, h.holdingCurrency);
+          // StashAway model sleeves (CSPX, GLDM, …) price off the BROAD
+          // INDEX their UCITS fund tracks — the same reference the fund's
+          // daily NAV uses. Fetch THAT index so our live quote tracks the
+          // same thing (minimal drift = fund fee + FX only, no instrument
+          // mismatch). Unknown symbols fall through to the raw ticker.
+          const idx = STASHAWAY_INDEX_MAP[h.symbol.toUpperCase()] ?? h.symbol;
+          return await this.yahooQuote(idx, h.holdingCurrency, h.symbol);
         case 'gold':
-          // Gold spot via Yahoo Finance ticker 'GC=F' (front-month COMEX futures,
-          // a close proxy for spot). User types a symbol like "GC=F" or "GLD".
-          return await this.yahooQuote(h.symbol === 'GOLD' || h.symbol === 'GLD' ? 'GC=F' : h.symbol, h.holdingCurrency);
+          // Gold: track the spot reference the StashAway gold sleeve uses.
+          // 'GC=F' = front-month COMEX gold futures (close proxy for spot).
+          // A user who types GLD/GLDM/GOLD gets the same gold reference so
+          // the quote lines up with the fund's daily NAV (drift = fee only).
+          {
+            const g = STASHAWAY_INDEX_MAP[h.symbol.toUpperCase()]
+              ?? (h.symbol === 'GOLD' || h.symbol === 'GLD' || h.symbol === 'GLDM' ? 'GC=F' : h.symbol);
+            return await this.yahooQuote(g, h.holdingCurrency, h.symbol === g ? undefined : h.symbol);
+          }
         case 'cash':
         case 'mmf':
           return {
@@ -115,31 +142,42 @@ export class MarketDataService {
     }
   }
 
-  private async cryptoQuote(symbol: string): Promise<QuoteResult> {
+  private async cryptoQuote(symbol: string, holdingCurrency?: string): Promise<QuoteResult> {
     const coin = COINGECKO_COIN_MAP[symbol.toUpperCase()] ?? symbol.toLowerCase();
+    // Price in the holding's own currency when CoinGecko covers it directly
+    // (a MYR-denominated BTC -> MYR, 1 decimal — exactly what the local
+    // exchanges show). USD is the fallback, converted via the FX table.
+    // CoinGecko's MYR endpoint rounds to 1 decimal; that's the intended
+    // precision for a ringgit display, not an error to "fix".
+    const prefer = (holdingCurrency && holdingCurrency.toUpperCase() !== 'USD')
+      ? holdingCurrency.toUpperCase()
+      : null;
+    const vs = prefer ? `${prefer.toLowerCase()},usd` : 'usd';
     const res = await fetchWithTimeout(
-      `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(coin)}&vs_currencies=usd&include_24hr_change=true`,
+      `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(coin)}&vs_currencies=${encodeURIComponent(vs)}&include_24hr_change=true`,
     );
     if (!res.ok) throw new Error(`coingecko ${res.status}`);
     const j = await res.json();
     const key = Object.keys(j)[0];
-    const price = j[key]?.usd;
-    if (typeof price !== 'number') throw new Error('coingecko: no usd price');
+    const cell = j[key];
+    const localPrice = prefer ? cell?.[prefer.toLowerCase()] : undefined;
+    const price = typeof localPrice === 'number' ? localPrice : cell?.usd;
+    if (typeof price !== 'number') throw new Error('coingecko: no price');
     return {
       ok: true,
       symbol,
       assetClass: 'crypto',
       price,
-      currency: 'USD',
+      currency: typeof localPrice === 'number' ? prefer! : 'USD',
       source: 'coingecko',
       asOf: Date.now(),
-      note: j[key]?.usd_24h_change !== undefined
-        ? `24h change ${j[key].usd_24h_change}%`
+      note: cell?.usd_24h_change !== undefined
+        ? `24h change ${cell.usd_24h_change}%`
         : undefined,
     };
   }
 
-  private async yahooQuote(symbol: string, holdingCurrency: string): Promise<QuoteResult> {
+  private async yahooQuote(symbol: string, holdingCurrency: string, displaySymbol?: string): Promise<QuoteResult> {
     const res = await fetchWithTimeout(
       `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`,
       { headers: { Accept: 'application/json' } },
@@ -150,14 +188,19 @@ export class MarketDataService {
     const price = meta?.regularMarketPrice;
     if (typeof price !== 'number') throw new Error('yahoo: no regularMarketPrice');
     const cur = meta.currency || holdingCurrency || 'USD';
+    // Report the holding's symbol (e.g. 'CSPX') so the UI shows what the user
+    // entered; the fetch may have used a reference index ('^GSPC') behind it.
     return {
       ok: true,
-      symbol,
+      symbol: displaySymbol ?? symbol,
       assetClass: 'equity-us',
       price,
       currency: cur,
       source: 'yahoo',
       asOf: meta.regularMarketTime ? meta.regularMarketTime * 1000 : Date.now(),
+      note: displaySymbol && displaySymbol !== symbol
+        ? `tracked ${symbol} index`
+        : undefined,
     };
   }
 
