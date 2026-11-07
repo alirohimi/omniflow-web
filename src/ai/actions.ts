@@ -25,7 +25,7 @@ export const ACCOUNT_TYPES = ['broker', 'robo', 'crypto', 'cash', 'other'] as co
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
 
 export const ASSET_CLASSES: AssetClass[] = [
-  'equity-us', 'equity-local', 'etf', 'crypto', 'cash', 'mmf',
+  'equity-us', 'equity-local', 'etf', 'crypto', 'gold', 'cash', 'mmf',
 ];
 
 export const PAYMENT_METHODS: PaymentMethod[] = [
@@ -617,7 +617,7 @@ export const ACTION_CONTRACT: string = [
   '2. EDIT SPEND — [ACTION:{"action":"edit_expense","targetId":"<the expense id from the data snapshot>","patches":{"<field>":<value>}}] where field is one of: amount(number) | currency(ISO) | category(existing name) | merchant(string) | paymentMethod(enum) | note(string) | date(ISO or "now")',
   '3. DELETE SPEND — [ACTION:{"action":"delete_expense","targetId":"<the expense id from the data snapshot>"}]',
   '4. ADJUST A HOLDING — [ACTION:{"action":"holding_patch","targetId":"<the holding id from the data snapshot>","patches":{"<field>":<value>}}] where field is one of: units(number) | entryPrice(number) | symbol(ticker) | assetClass(enum) | currency(ISO)',
-  '5. NEW PORTFOLIO — [ACTION:{"action":"create_portfolio","platformName":"<name>","accountType":"<one of: broker|robo|crypto|cash|other>","holdings":[{"symbol":"<ticker>","assetClass":"<one of: equity-us|equity-local|etf|crypto|cash|mmf>","currency":"<ISO>","units":<number>,"entryPrice":<number>}]}]',
+  '5. NEW PORTFOLIO — [ACTION:{"action":"create_portfolio","platformName":"<name>","accountType":"<one of: broker|robo|crypto|cash|other>","holdings":[{"symbol":"<ticker>","assetClass":"<one of: equity-us|equity-local|etf|crypto|gold|cash|mmf>","currency":"<ISO>","units":<number>,"entryPrice":<number>}]}]',
   '',
   'Rules for every marker: valid JSON only; numbers as numbers (no quotes); use the ids exactly as listed in the data snapshot (recentExpenses / openHoldings). For edits and deletes you MUST reference an existing id from the snapshot — never invent one. When the user\'s request is ambiguous (which expense? which holding?), ask ONE clarifying question instead of guessing. Never emit [ACTION:] for analysis, questions, or advice about data that already exists. One marker per reply.',
 ].join('\n');

@@ -89,6 +89,10 @@ export class MarketDataService {
         case 'equity-local':
         case 'etf':
           return await this.yahooQuote(h.symbol, h.holdingCurrency);
+        case 'gold':
+          // Gold spot via Yahoo Finance ticker 'GC=F' (front-month COMEX futures,
+          // a close proxy for spot). User types a symbol like "GC=F" or "GLD".
+          return await this.yahooQuote(h.symbol === 'GOLD' || h.symbol === 'GLD' ? 'GC=F' : h.symbol, h.holdingCurrency);
         case 'cash':
         case 'mmf':
           return {

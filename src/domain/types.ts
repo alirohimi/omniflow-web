@@ -10,6 +10,7 @@ export type AssetClass =
   | 'equity-local'
   | 'etf'
   | 'crypto'
+  | 'gold'
   | 'cash'
   | 'mmf';
 

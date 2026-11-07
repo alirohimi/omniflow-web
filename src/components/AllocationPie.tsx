@@ -32,6 +32,7 @@ const CLASS_COLORS: Record<string, string> = {
   'equity-local': '#a78bfa',
   etf: '#34d399',
   crypto: '#fbbf24',
+  gold: '#e6b422',
   cash: '#38bdf8',
   mmf: '#22d3ee',
 };
@@ -47,6 +48,7 @@ const CLASS_LABELS: Record<string, string> = {
   'equity-local': 'Local Stocks',
   etf: 'ETFs',
   crypto: 'Crypto',
+  gold: 'Gold',
   cash: 'Cash',
   mmf: 'Money Market',
 };

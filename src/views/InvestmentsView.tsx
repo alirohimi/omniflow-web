@@ -30,7 +30,7 @@ import { ThemedSelect } from '../components/ThemedSelect';
 import { IRefresh, IPlus, IPencil, IDots, ICheck } from '../icons';
 import type { InvestmentAccount, InvestmentHolding } from '../domain/types';
 
-const ASSET_CLASSES = ['equity-us', 'equity-local', 'etf', 'crypto', 'cash', 'mmf'] as const;
+const ASSET_CLASSES = ['equity-us', 'equity-local', 'etf', 'crypto', 'gold', 'cash', 'mmf'] as const;
 /** Cash / MMF rows: single "amount" input, symbol + price pinned to the par
  *  convention (symbol = class name, price = 1) so value = amount · FX. */
 const PAR_CLASSES: InvestmentHolding['assetClass'][] = ['cash', 'mmf'];
