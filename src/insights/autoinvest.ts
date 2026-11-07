@@ -77,6 +77,12 @@ export interface PortfolioPnl {
   totalCapitalBase: number;
   totalPnlBase: number | null;
   totalReturnPct: number | null;
+  /** P&L against TOTAL COST BASIS (sum of every holding's entry cost) — the
+   *  number that matches a broker like StashAway 1:1 (total value − total
+   *  invested cost, across all purchases). Primary "am I up or down?" figure. */
+  totalCostBase: number;
+  totalCostPnlBase: number | null;
+  totalCostReturnPct: number | null;
   /** Accounts that have any recorded capital (manual or via contributions). */
   accounts: PnlAccount[];
   /** Count of accounts still missing a recorded initial balance. */
@@ -136,11 +142,23 @@ export function portfolioPnl(
   const totalReturnPct = totalCapitalBase > 0 ? (totalPnlBase! / totalCapitalBase) * 100 : null;
   const missingCapitalCount = lines.filter((l) => l.pnlBase == null && l.valueBase > 0).length;
 
+  // P&L against TOTAL COST BASIS — matches a broker (StashAway) 1:1: total
+  // value minus the sum of every holding's entry cost. `summary` already
+  // carries totalCostBase + totalValueBase (across ALL holdings, not just
+  // the ones with a recorded deposit), so use those directly.
+  const totalCostBase = Number.isFinite(summary.totalCostBase) ? summary.totalCostBase : 0;
+  const costValueBase = Number.isFinite(summary.totalValueBase) ? summary.totalValueBase : 0;
+  const totalCostPnlBase = totalCostBase > 0 ? costValueBase - totalCostBase : null;
+  const totalCostReturnPct = totalCostBase > 0 ? (costValueBase - totalCostBase) / totalCostBase * 100 : null;
+
   return {
     totalValueBase,
     totalCapitalBase,
     totalPnlBase,
     totalReturnPct,
+    totalCostBase,
+    totalCostPnlBase,
+    totalCostReturnPct,
     accounts: lines,
     missingCapitalCount,
   };

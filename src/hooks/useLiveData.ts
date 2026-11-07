@@ -4,7 +4,7 @@
 // quotes for all holdings, then exposes a computed portfolio summary.
 // ============================================================================
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import type { QuoteSnapshot } from '../domain/types';
 import { fxService, marketDataService, type RatesForBase } from '../services';
 import { buildPortfolio, type PortfolioSummary } from '../ai/portfolio';
@@ -31,6 +31,15 @@ export function useLiveData(): LiveData {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0); // manual refresh trigger
+
+  // Realtime: auto-poll every 60s so the portfolio tracks live market moves
+  // (this is what makes it 1:1 with the broker's own refresh). Manual
+  // refresh + content-hash changes still re-fetch immediately.
+  const refresh = useCallback(() => setTick((t) => t + 1), []);
+  useEffect(() => {
+    const id = setInterval(refresh, 60_000);
+    return () => clearInterval(id);
+  }, [refresh]);
 
   // Content hash: editing a holding (units/price) keeps the array length
   // the same, so keying the effect on `holdings.length` (the old dep) left
@@ -83,6 +92,6 @@ export function useLiveData(): LiveData {
     portfolio,
     loading,
     error,
-    refresh: () => setTick((t) => t + 1),
+    refresh,
   };
 }

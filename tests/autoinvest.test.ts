@@ -106,7 +106,7 @@ describe('autoInvestMonthlyTotal', () => {
 });
 
 describe('portfolioPnl', () => {
-  function fakeSummary(accounts: Array<{ id: string; value: number; cost: number }>): PortfolioSummary {
+  function fakeSummary(accounts: Array<{ id: string; value: number; cost: number }>, totals?: { value: number; cost: number }): PortfolioSummary {
     const byAccount: AccountLine[] = accounts.map((a) => {
       const inv: InvestmentAccount = {
         id: a.id, platformName: a.id, accountType: 'broker',
@@ -119,7 +119,10 @@ describe('portfolioPnl', () => {
       };
     });
     return {
-      baseCurrency: 'MYR', totalValueBase: 1, totalCostBase: 1, totalReturnPct: null,
+      baseCurrency: 'MYR',
+      totalValueBase: totals?.value ?? 1,
+      totalCostBase: totals?.cost ?? 1,
+      totalReturnPct: null,
       byAssetClass: [], byAccount, liveQuoteCount: 0, staleQuoteCount: 0, uncounted: 0,
     };
   }
@@ -172,6 +175,37 @@ describe('portfolioPnl', () => {
     expect(pnl.totalPnlBase).toBeNull();
     expect(pnl.totalReturnPct).toBeNull();
     expect(pnl.missingCapitalCount).toBe(1);
+  });
+
+  it('computes P&L against total cost basis (the 1:1 broker figure)', () => {
+    // Real scenario: user paid 60k total across all purchases, portfolio is
+    // now worth 55k → broker shows −5k (−8.3%). The cost-basis P&L must
+    // reflect that, regardless of what initialDepositBase was recorded as.
+    const acc: InvestmentAccount = {
+      id: 'acc-1', platformName: 'StashAway', accountType: 'robo',
+      baseCurrencyValue: 0, lastUpdated: NOW, initialDepositBase: 20_000,
+    };
+    const summary = fakeSummary([{ id: 'acc-1', value: 55_000, cost: 60_000 }], { value: 55_000, cost: 60_000 });
+    const pnl = portfolioPnl(summary, [acc], []);
+    // Cost-basis figure: 55k − 60k = −5k (−8.33%)
+    expect(pnl.totalCostBase).toBe(60_000);
+    expect(pnl.totalCostPnlBase).toBe(-5_000);
+    expect(pnl.totalCostReturnPct).toBeCloseTo(-8.3333, 3);
+    // Starting-capital figure is still computed separately (20k deposit):
+    expect(pnl.totalPnlBase).toBe(35_000);
+    expect(pnl.totalReturnPct).toBeCloseTo(175, 5);
+  });
+
+  it('cost-basis P&L is null when no cost basis exists yet', () => {
+    const acc: InvestmentAccount = {
+      id: 'acc-1', platformName: 'StashAway', accountType: 'robo',
+      baseCurrencyValue: 0, lastUpdated: NOW,
+    };
+    const summary = fakeSummary([{ id: 'acc-1', value: 5_000, cost: 0 }], { value: 5_000, cost: 0 });
+    const pnl = portfolioPnl(summary, [acc], []);
+    expect(pnl.totalCostBase).toBe(0);
+    expect(pnl.totalCostPnlBase).toBeNull();
+    expect(pnl.totalCostReturnPct).toBeNull();
   });
 });
 

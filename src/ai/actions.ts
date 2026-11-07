@@ -243,6 +243,10 @@ function parseCreatePortfolio(d: Record<string, unknown>): { action?: Action; re
       currency: (hh.currency as string).trim().toUpperCase(),
       units: hh.units,
       entryPrice: hh.entryPrice,
+      // Optional: the user's cost basis for this lot. Drives the 1:1 P&L
+      // (value − cost). Omit if unknown — the store will fall back to the
+      // current price at add-time (P&L = 0 for that lot).
+      averageEntryPrice: isNum(hh.averageEntryPrice) ? hh.averageEntryPrice : undefined,
     });
   }
 
@@ -574,32 +578,58 @@ export function applyAction(store: ActionStore, a: Action, fx?: RatesForBase): s
  *  skip duplicate holdings. */
 export function applyCreatePortfolio(store: ActionStore, a: CreatePortfolioAction): string {
   const accounts = store.getAccounts();
-  const holdings = store.getHoldings();
   const existing = accounts.find((x) => x.platformName.toLowerCase() === a.platformName.toLowerCase());
   const accountId = existing ? existing.id : store.addAccount({ platformName: a.platformName, accountType: a.accountType });
 
+  // Track lots we've merged this run so a later line can chain onto the
+  // same updated units/cost instead of re-reading stale store state.
+  const merged = new Map<string, { units: number; cost: number }>();
   let added = 0;
-  let skipped = 0;
+  let mergedCount = 0;
   for (const h of a.holdings) {
-    const dup = holdings.some(
-      (x) => x.accountId === accountId && x.symbol === h.symbol && x.units === h.units && x.averageEntryPrice === h.entryPrice,
+    // Look for an existing lot in the store: same account + symbol + currency.
+    const prior = store.getHoldings().find(
+      (x) => x.accountId === accountId && x.symbol === h.symbol && x.holdingCurrency === h.currency,
     );
-    if (dup) { skipped++; continue; }
+    const newCost = Number.isFinite(h.entryPrice) ? h.entryPrice : 0;
+
+    if (prior) {
+      const priorUnits = Number.isFinite(prior.units) ? prior.units : 0;
+      const priorCost = Number.isFinite(prior.averageEntryPrice) ? prior.averageEntryPrice : 0;
+      const totalUnits = priorUnits + h.units;
+      const avg = totalUnits > 0 ? (priorUnits * priorCost + h.units * newCost) / totalUnits : newCost;
+      // Identical re-apply of a lot that's already been merged — no-op.
+      const m = merged.get(prior.id);
+      if (m && m.units === totalUnits && Math.abs(m.cost - avg) < 1e-9) {
+        mergedCount++;
+        continue;
+      }
+      store.updateHolding(prior.id, {
+        units: totalUnits,
+        averageEntryPrice: avg,
+      });
+      merged.set(prior.id, { units: totalUnits, cost: avg });
+      mergedCount++;
+      continue;
+    }
+
     store.addHolding({
       accountId,
       symbol: h.symbol,
       assetClass: h.assetClass,
       holdingCurrency: h.currency,
       units: h.units,
-      averageEntryPrice: h.entryPrice,
+      averageEntryPrice: newCost,
+      currentPriceLocal: newCost,
+      currentPriceBase: newCost,
     });
     added++;
   }
 
   const bits: string[] = [];
-  bits.push(existing ? 'used existing "' + existing.platformName + '"' : 'created "' + a.platformName + '" (' + a.accountType + ')');
-  if (added > 0) bits.push('added ' + added + ' holding' + (added === 1 ? '' : 's'));
-  if (skipped > 0) bits.push('skipped ' + skipped + ' duplicate' + (skipped === 1 ? '' : 's'));
+  bits.push(existing ? 'used existing "' + a.platformName + '"' : 'created "' + a.platformName + '" (' + a.accountType + ')');
+  if (added > 0) bits.push('added ' + added + ' new holding' + (added === 1 ? '' : 's'));
+  if (mergedCount > 0) bits.push('merged ' + mergedCount + ' new lot' + (mergedCount === 1 ? '' : 's') + ' into existing position');
   return bits.join(', ');
 }
 

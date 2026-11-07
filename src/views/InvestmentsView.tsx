@@ -351,7 +351,19 @@ export function InvestmentsView() {
             <div className="pf-hero-lbl">Total value · {base}</div>
             <div className="pf-hero-num">{formatMoney(live.portfolio?.totalValueBase ?? 0, base)}</div>
             <div className="pf-hero-delta">
-              {pnl && pnl.totalPnlBase != null ? (
+              {pnl && pnl.totalCostPnlBase != null ? (
+                <span className={`pf-delta ${pnl.totalCostPnlBase >= 0 ? 'up' : 'down'}`}>
+                  {pnl.totalCostPnlBase >= 0 ? '▲' : '▼'}{' '}
+                  {Math.abs(pnl.totalCostPnlBase) > 0
+                    ? `${pnl.totalCostPnlBase >= 0 ? '+' : '−'}${formatMoney(Math.abs(pnl.totalCostPnlBase), base)}`
+                    : 'Breakeven'}
+                  {pnl.totalCostReturnPct != null ? (
+                    <span className="pf-delta-pct">
+                      {pnl.totalCostReturnPct >= 0 ? '+' : '−'}{Math.abs(pnl.totalCostReturnPct).toFixed(1)}%
+                    </span>
+                  ) : null}
+                </span>
+              ) : pnl && pnl.totalPnlBase != null ? (
                 <span className={`pf-delta ${pnl.totalPnlBase >= 0 ? 'up' : 'down'}`}>
                   {pnl.totalPnlBase >= 0 ? '▲' : '▼'}{' '}
                   {Math.abs(pnl.totalPnlBase) > 0
@@ -364,7 +376,7 @@ export function InvestmentsView() {
                   ) : null}
                 </span>
               ) : (
-                <span className="muted small">No starting capital recorded yet</span>
+                <span className="muted small">No cost basis recorded yet</span>
               )}
             </div>
           </div>

@@ -189,7 +189,10 @@ function fakeStore(initial: { accounts?: InvestmentAccount[]; holdings?: Investm
     deleteExpense: () => {},
     getExpenses: () => expenses,
     getCategories: () => categories,
-    updateHolding: () => {},
+    updateHolding: (id, patch) => {
+      const idx = holdings.findIndex((h) => h.id === id);
+      if (idx >= 0) holdings[idx] = { ...holdings[idx], ...patch };
+    },
     addedAccounts,
     addedHoldings,
   };
@@ -214,7 +217,7 @@ describe('applyCreatePortfolio', () => {
     expect(s.getHoldings()).toHaveLength(2);
     expect(s.getHoldings()[0].accountId).toBe(s.getAccounts()[0].id);
     expect(summary).toContain('created "Luno"');
-    expect(summary).toContain('added 2 holdings');
+    expect(summary).toContain('added 2 new holdings');
   });
 
   it('reuses an existing same-named account (case-insensitive) and skips dupes', () => {
@@ -235,13 +238,13 @@ describe('applyCreatePortfolio', () => {
     };
     const summary = applyCreatePortfolio(s, a);
     expect(s.getAccounts()).toHaveLength(1); // no second account
-    expect(s.getHoldings()).toHaveLength(2);  // only ETH added
+    expect(s.getHoldings()).toHaveLength(2);  // BTC merged in place, ETH added
     expect(summary).toContain('used existing');
-    expect(summary).toContain('added 1 holding');
-    expect(summary).toContain('skipped 1 duplicate');
+    expect(summary).toContain('added 1 new holding');
+    expect(summary).toContain('merged 1 new lot');
   });
 
-  it('treats same-symbol-different-lot as a new holding', () => {
+  it('merges a new same-symbol lot, weight-averaging the cost basis', () => {
     const s = fakeStore({
       accounts: [{ id: 'acc-luno', platformName: 'Luno', accountType: 'crypto', baseCurrencyValue: 0, lastUpdated: 0 } as never],
       holdings: [
@@ -255,6 +258,13 @@ describe('applyCreatePortfolio', () => {
       holdings: [{ symbol: 'BTC', assetClass: 'crypto', currency: 'USD', units: 0.2, entryPrice: 100000 }], // new lot
     };
     applyCreatePortfolio(s, a);
-    expect(s.getHoldings()).toHaveLength(2);
+    const btc = s.getHoldings().find((x) => x.symbol === 'BTC')!;
+    // 0.1 @ 90k + 0.2 @ 100k = 0.3 units; avg = (0.1*90000 + 0.2*100000)/0.3
+    expect(btc.units).toBeCloseTo(0.3);
+    expect(btc.averageEntryPrice).toBeCloseTo((0.1 * 90000 + 0.2 * 100000) / 0.3, 6);
+    // Only ONE BTC row — no duplicate.
+    expect(s.getHoldings().filter((x) => x.symbol === 'BTC')).toHaveLength(1);
+    // No separate addHolding call was made for BTC (it was merged, not added).
+    expect(s.addedHoldings.filter((id) => id === 'h-BTC')).toHaveLength(0);
   });
 });
