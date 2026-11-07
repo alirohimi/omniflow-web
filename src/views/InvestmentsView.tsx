@@ -1061,8 +1061,8 @@ export function InvestmentsView() {
       {costOpen && (
         <Modal title="Set cost basis from broker" onClose={() => setCostOpen(false)}>
           <p className="small muted" style={{ marginTop: 0 }}>
-            Enter your broker's <b>total invested</b> for each account (StashAway's
-            "Total invested" / "Purchases"). It updates the P&amp;L immediately and
+            Enter your broker's <b>total invested</b> for each account — StashAway's{" "}
+            <b>Net deposits</b> (NOT the current value). It updates the P&amp;L immediately and
             back-fills your holdings' entry prices in proportion to their value —
             no need to edit each row. Leave a field blank to skip that account.
           </p>
@@ -1105,6 +1105,15 @@ export function InvestmentsView() {
                     <div className="small" style={{ color: previewPnl < 0 ? 'var(--bad)' : previewPnl > 0 ? 'var(--good)' : 'var(--text-2, #9aa4b8)' }}>
                       → P&amp;L will read {previewPnl >= 0 ? '+' : '−'}{formatMoney(Math.abs(previewPnl), base)}
                       {previewPct != null ? ` (${previewPct >= 0 ? '+' : '−'}${Math.abs(previewPct).toFixed(1)}%)` : ''}
+                    </div>
+                  )}
+                  {/* Guard: entering (nearly) the live value makes P&L read
+                      ~0% — the exact mistake that masks a real loss. StashAway
+                      users should use their "Net deposits" figure instead. */}
+                  {Number.isFinite(entered) && entered > 0 && liveValue > 0 && Math.abs(entered - liveValue) / liveValue < 0.005 && (
+                    <div className="small" style={{ color: 'var(--warn, #d97706)', fontWeight: 600 }}>
+                      ⚠ This equals the live value — P&L would read 0%. Use your broker's
+                      {' '}<b>Net deposits / total invested</b> instead.
                     </div>
                   )}
                 </div>
