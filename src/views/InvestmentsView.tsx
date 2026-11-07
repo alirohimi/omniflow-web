@@ -504,6 +504,7 @@ export function InvestmentsView() {
                       )}
                     </div>
                   </div>
+                </div>
               );
             })}
           </div>
