@@ -476,10 +476,12 @@ textarea { resize: vertical; min-height: 44px; }
 .tsel-caret { color: var(--muted); display: grid; place-items: center; flex: none; }
 .tsel-menu {
   list-style: none;
-  margin: 6px 0 0; padding: 6px;
-  position: absolute; left: 0; right: 0; top: 100%;
-  z-index: 60;
-  max-height: 280px; overflow-y: auto;
+  margin: 0; padding: 6px;
+  /* Position is set inline (fixed) via the portal; these are the visual
+     styling only. The fixed positioning + body portal is what keeps the
+     menu above every other card/section. */
+  z-index: 100;
+  max-height: min(280px, 60vh); overflow-y: auto;
   background: var(--card-2);
   backdrop-filter: blur(18px) saturate(160%);
   -webkit-backdrop-filter: blur(18px) saturate(160%);
