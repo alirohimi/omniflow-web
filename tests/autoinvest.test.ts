@@ -233,6 +233,54 @@ describe('portfolioPnl', () => {
     expect(pnl.totalCostPnlBase).toBe(10_000);
     expect(pnl.totalCostReturnPct).toBeCloseTo(5, 5);
   });
+
+  it('brokerValueBase override wins over the quote value (per-account + headline)', () => {
+    // StashAway's own "Current value" (37,827.57) differs from the quote
+    // derivation (39,632.57). When the user pastes the broker number, it
+    // must drive BOTH the per-account P&L and the headline total — no
+    // silent mix of quote-based and broker-based figures.
+    const s: InvestmentAccount = {
+      id: 's', platformName: 'StashAway', accountType: 'robo',
+      baseCurrencyValue: 0, lastUpdated: NOW,
+      initialDepositBase: 39_253.39,
+      brokerValueBase: 37_827.57, // StashAway's own figure
+    };
+    const c: InvestmentAccount = {
+      id: 'c', platformName: 'Cash', accountType: 'cash',
+      baseCurrencyValue: 0, lastUpdated: NOW, initialDepositBase: 4_000,
+    };
+    const summary = fakeSummary(
+      [
+        { id: 's', value: 39_632.57, cost: 39_253.39 }, // quote-derived value
+        { id: 'c', value: 4_000, cost: 4_000 },
+      ],
+      { value: 43_632.57, cost: 43_253.39 },
+    );
+    const pnl = portfolioPnl(summary, [s, c], []);
+    const sLine = pnl.accounts.find((a) => a.account.id === 's')!;
+    // Per-account P&L uses the broker value: 37,827.57 − 39,253.39
+    expect(sLine.valueBase).toBe(37_827.57);
+    expect(sLine.costPnlBase).toBeCloseTo(37_827.57 - 39_253.39, 2);
+    // Headline total also swaps in the broker value:
+    // quote total 43,632.57 − 39,632.57 (overridden) + 37,827.57
+    expect(pnl.totalCostPnlBase).toBeCloseTo(
+      (43_632.57 - 39_632.57 + 37_827.57) - 43_253.39, 2,
+    );
+  });
+
+  it('no override -> quote value is used unchanged (regression)', () => {
+    const s: InvestmentAccount = {
+      id: 's', platformName: 'StashAway', accountType: 'robo',
+      baseCurrencyValue: 0, lastUpdated: NOW, initialDepositBase: 39_253.39,
+    };
+    const summary = fakeSummary(
+      [{ id: 's', value: 39_632.57, cost: 39_253.39 }],
+      { value: 39_632.57, cost: 39_253.39 },
+    );
+    const pnl = portfolioPnl(summary, [s], []);
+    expect(pnl.accounts[0].valueBase).toBe(39_632.57);
+    expect(pnl.totalCostPnlBase).toBeCloseTo(39_632.57 - 39_253.39, 2);
+  });
 });
 
 // ---- real-provider test: addContribution bumps account capital ----

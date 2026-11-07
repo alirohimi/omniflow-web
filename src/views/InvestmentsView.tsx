@@ -288,6 +288,8 @@ export function InvestmentsView() {
   const [costOpen, setCostOpen] = useState(false);
   // Per-account total invested, keyed by account id (draft, base currency).
   const [costDrafts, setCostDrafts] = useState<Record<string, string>>({});
+  // Per-account "current value from broker" override (draft, base currency).
+  const [brokerValueDrafts, setBrokerValueDrafts] = useState<Record<string, string>>({});
   const openCostBasis = () => {
     // Seed each account's "total invested" with the best known figure, in
     // priority order: recorded starting capital -> settled contributions ->
@@ -295,6 +297,7 @@ export function InvestmentsView() {
     // live value as if it were the investment amount, or saving would make
     // P&L read 0.00%.
     const seeds: Record<string, string> = {};
+    const bseeds: Record<string, string> = {};
     for (const a of vault.accounts) {
       const contribs = (vault.contributions ?? []).reduce((s, c) => c.accountId === a.id ? s + (Number.isFinite(c.amountBase) ? c.amountBase : 0) : s, 0);
       const preferred =
@@ -305,8 +308,15 @@ export function InvestmentsView() {
       seeds[a.id] = preferred != null
         ? String(Math.round(preferred * 100) / 100)
         : (line && line.costBase > 0 ? String(Math.round(line.costBase * 100) / 100) : '');
+      // Seed the broker-value override from the existing override if any,
+      // else leave blank (quotes stay the source of truth).
+      bseeds[a.id] =
+        Number.isFinite(a.brokerValueBase) && (a.brokerValueBase ?? 0) > 0
+          ? String(Math.round(a.brokerValueBase! * 100) / 100)
+          : '';
     }
     setCostDrafts(seeds);
+    setBrokerValueDrafts(bseeds);
     setCostOpen(true);
   };
 
@@ -317,13 +327,24 @@ export function InvestmentsView() {
     let touched = 0;
     for (const a of vault.accounts) {
       const raw = (costDrafts[a.id] ?? '').trim();
-      if (raw === '') continue;
+      const brokerRaw = (brokerValueDrafts[a.id] ?? '').trim();
       const totalInvested = parseFloat(raw);
+      const brokerValue = parseFloat(brokerRaw);
+      // Persist the "current value from broker" override when provided;
+      // clear it when the field is emptied. This makes the P&L use the
+      // broker's own number instead of the quote-derived value.
+      if (brokerRaw !== '' || (a.brokerValueBase != null && brokerRaw === '')) {
+        store.updateAccount(a.id, {
+          brokerValueBase: Number.isFinite(brokerValue) && brokerValue > 0 ? brokerValue : undefined,
+        });
+      }
+      if (raw === '') continue;
       if (!Number.isFinite(totalInvested) || totalInvested <= 0) continue;
       // 1) Drive the capital-based P&L from the broker's "total invested".
       store.updateAccount(a.id, { initialDepositBase: totalInvested });
-      // 2) Distribute across non-par holdings by current value so the
-      //    cost-basis P&L matches too. Par (cash/MMF) rows keep entry = 1.
+      // 2) Distribute the total invested across non-par holdings in
+      //    proportion to their value, so the sum of holding costs ≈ the
+      //    total invested. Par (cash/MMF) rows keep entry = 1.
       const lines = live.portfolio?.byAccount.find((l) => l.account.id === a.id)?.lines ?? [];
       const distributable = lines.filter(
         (l) => !isParClass(l.holding.assetClass) && l.valueBase > 0 && Number.isFinite(l.holding.units) && l.holding.units > 0,
@@ -1075,10 +1096,15 @@ export function InvestmentsView() {
             {vault.accounts.map((a) => {
               const line = live.portfolio?.byAccount.find((l) => l.account.id === a.id);
               const liveValue = line?.valueBase ?? 0;
-              // Live P&L preview: what the gain/loss will read as for this
-              // account with the entered total invested, before you save.
+              // P&L preview uses the broker value override when set, else the
+              // live quote-derived value — mirroring exactly what saving will
+              // produce in the Performance section.
               const entered = parseFloat((costDrafts[a.id] ?? '').trim());
-              const previewPnl = Number.isFinite(entered) && entered > 0 ? liveValue - entered : null;
+              const brokerRaw = (brokerValueDrafts[a.id] ?? '').trim();
+              const brokerValue = parseFloat(brokerRaw);
+              const valueUsed = Number.isFinite(brokerValue) && brokerValue > 0 ? brokerValue : liveValue;
+              const valueLabel = Number.isFinite(brokerValue) && brokerValue > 0 ? 'broker value' : 'live value';
+              const previewPnl = Number.isFinite(entered) && entered > 0 ? valueUsed - entered : null;
               const previewPct = previewPnl != null ? (previewPnl / entered) * 100 : null;
               return (
                 <div key={a.id} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '12px 14px', background: 'var(--bg-2)', border: '1px solid var(--line)', borderRadius: 13 }}>
@@ -1101,16 +1127,35 @@ export function InvestmentsView() {
                       style={{ width: '100%' }}
                     />
                   </label>
+                  <label className="field" style={{ width: '100%', marginBottom: 0 }}>
+                    <span>Current value from broker ({base}) — optional, overrides live quotes</span>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min={0}
+                      value={brokerValueDrafts[a.id] ?? ''}
+                      onChange={(e) => setBrokerValueDrafts((d) => ({ ...d, [a.id]: e.target.value }))}
+                      placeholder={`e.g. ${a.accountType === 'robo' ? "37827 (StashAway's 'Current value')" : String(liveValue.toFixed(2))}`}
+                      aria-label={`Current value from broker for ${a.platformName}`}
+                      style={{ width: '100%' }}
+                    />
+                    {Number.isFinite(brokerValue) && brokerValue > 0 && (
+                      <div className="small muted" style={{ marginTop: 4 }}>
+                        Live quote {formatMoney(liveValue, base)} · difference {brokerValue >= liveValue ? '+' : '−'}{formatMoney(Math.abs(brokerValue - liveValue), base)} ({liveValue > 0 ? Math.abs((brokerValue - liveValue) / liveValue * 100).toFixed(1) : '—'}%)
+                      </div>
+                    )}
+                  </label>
                   {previewPnl != null && (
                     <div className="small" style={{ color: previewPnl < 0 ? 'var(--bad)' : previewPnl > 0 ? 'var(--good)' : 'var(--text-2, #9aa4b8)' }}>
-                      → P&amp;L will read {previewPnl >= 0 ? '+' : '−'}{formatMoney(Math.abs(previewPnl), base)}
+                      → P&L will read {previewPnl >= 0 ? '+' : '−'}{formatMoney(Math.abs(previewPnl), base)}
                       {previewPct != null ? ` (${previewPct >= 0 ? '+' : '−'}${Math.abs(previewPct).toFixed(1)}%)` : ''}
+                      <span className="muted"> using {valueLabel}</span>
                     </div>
                   )}
                   {/* Guard: entering (nearly) the live value makes P&L read
                       ~0% — the exact mistake that masks a real loss. StashAway
                       users should use their "Net deposits" figure instead. */}
-                  {Number.isFinite(entered) && entered > 0 && liveValue > 0 && Math.abs(entered - liveValue) / liveValue < 0.005 && (
+                  {!Number.isFinite(brokerValue) && Number.isFinite(entered) && entered > 0 && liveValue > 0 && Math.abs(entered - liveValue) / liveValue < 0.005 && (
                     <div className="small" style={{ color: 'var(--warn, #d97706)', fontWeight: 600 }}>
                       ⚠ This equals the live value — P&L would read 0%. Use your broker's
                       {' '}<b>Net deposits / total invested</b> instead.

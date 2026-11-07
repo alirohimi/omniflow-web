@@ -125,7 +125,14 @@ export function portfolioPnl(
 
   const lines: PnlAccount[] = (summary?.byAccount ?? []).map((l: AccountLine) => {
     const acc = accById.get(l.account.id) ?? l.account;
-    const valueBase = Number.isFinite(l.valueBase) ? l.valueBase : 0;
+    // The broker's own reported value (e.g. StashAway's "Current value") wins
+    // over the quote-derived value when set — managed/robo accounts value
+    // from fund NAVs net of fees that no live quote can reproduce.
+    const quoteValue = Number.isFinite(l.valueBase) ? l.valueBase : 0;
+    const valueBase =
+      Number.isFinite(acc.brokerValueBase) && (acc.brokerValueBase ?? 0) > 0
+        ? acc.brokerValueBase!
+        : quoteValue;
     let capitalBase =
       Number.isFinite(acc.initialDepositBase) && (acc.initialDepositBase ?? 0) > 0
         ? acc.initialDepositBase!
@@ -165,8 +172,24 @@ export function portfolioPnl(
   // value minus the sum of every holding's entry cost. `summary` already
   // carries totalCostBase + totalValueBase (across ALL holdings, not just
   // the ones with a recorded deposit), so use those directly.
+  //
+  // The per-account lines above already use each account's brokerValueBase
+  // override (when set) instead of the quote-derived value, so the headline
+  // total must use the same effective value or it would show the broker's
+  // account as quote-valued while the table shows broker-valued — a silent
+  // inconsistency. Recompute the total value here with the overrides:
   const totalCostBase = Number.isFinite(summary.totalCostBase) ? summary.totalCostBase : 0;
-  const costValueBase = Number.isFinite(summary.totalValueBase) ? summary.totalValueBase : 0;
+  // Base value = quote-derived total, adjusted for any broker overrides:
+  // for each account with a brokerValueBase, swap its QUOTE value (from the
+  // summary, before the override is applied in `lines`) for the broker value.
+  let costValueBase = Number.isFinite(summary.totalValueBase) ? summary.totalValueBase : 0;
+  const byId = new Map((summary?.byAccount ?? []).map((l) => [l.account.id, l]));
+  costValueBase = lines.reduce((s, l) => {
+    const ov = l.account.brokerValueBase;
+    if (!Number.isFinite(ov) || (ov ?? 0) <= 0) return s;
+    const quote = byId.get(l.account.id)?.valueBase ?? 0;
+    return s + ov! - quote;
+  }, costValueBase);
   const totalCostPnlBase = totalCostBase > 0 ? costValueBase - totalCostBase : null;
   const totalCostReturnPct = totalCostBase > 0 ? (costValueBase - totalCostBase) / totalCostBase * 100 : null;
   const missingCostBasisCount = lines.filter((l) => l.costBase <= 0 && l.valueBase > 0).length;

@@ -69,6 +69,15 @@ export interface InvestmentAccount {
    *  holdings' summed cost basis — matching what the user actually put in.
    *  Optional so old encrypted blobs heal cleanly. */
   initialDepositBase?: number;
+  /** Optional: the broker's OWN reported current value for this account,
+   *  in base currency (e.g. StashAway's "Current value" key figure).
+   *  Managed/robo accounts (StashAway) value from fund NAVs net of fees —
+   *  a live-quote derivation can never match that to the ringgit, so the
+   *  user can paste the broker's number and it becomes the authoritative
+   *  value for P&L. Live quotes keep running in the background for
+   *  reference; this override simply wins when set. `null`/absent = use
+   *  the quote-derived value. */
+  brokerValueBase?: number;
 }
 
 /** A holding inside an account. */
