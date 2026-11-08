@@ -506,9 +506,18 @@ export function InvestmentsView() {
               const pnlVal = l.pnlBase != null ? l.pnlBase : l.costPnlBase;
               const retPct = l.pnlBase != null ? l.returnPct : l.costReturnPct;
               const neg = (pnlVal ?? 0) < 0;
+              // Flag accounts falling back to cost basis — their "Total
+              // invested" isn't set, so the number shown is the fund NAV
+              // cost, not the broker's cash cost (the real loss).
+              const usingFallback = l.pnlBase == null;
               return (
                 <div key={l.account.id} className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
-                  <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600, fontSize: 14 }}>{l.account.platformName}</div>
+                  <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600, fontSize: 14 }}>
+                    {l.account.platformName}
+                    {usingFallback && l.costPnlBase != null && (
+                      <span className="small" style={{ color: 'var(--warn, #d4a76a)', marginLeft: 6, fontWeight: 500 }}>· est.</span>
+                    )}
+                  </div>
                   <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <div className="row" style={{ gap: 8, justifyContent: 'flex-end', alignItems: 'baseline' }}>
                       <span style={{ color: neg ? 'var(--bad)' : 'var(--good)', fontWeight: 700, fontSize: 14 }}>
