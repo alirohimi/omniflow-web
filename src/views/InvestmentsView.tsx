@@ -562,17 +562,6 @@ export function InvestmentsView() {
           const totalValue = live.portfolio?.totalValueBase ?? 0;
           const totalCost = live.portfolio?.totalCostBase ?? 0;
 
-          // Per-account lines for the breakdown table.
-          const accountRows = (live.portfolio?.byAccount ?? [])
-            .filter((a) => a.valueBase > 0)
-            .map((a) => {
-              const cost = a.costBase;
-              const pnlAbs = a.valueBase - cost;
-              const ret = cost > 0 ? (pnlAbs / cost) * 100 : null;
-              return { id: a.account.id, name: a.account.platformName, value: a.valueBase, cost, pnlAbs, ret };
-            })
-            .sort((x, y) => y.pnlAbs - x.pnlAbs);
-
           // Cost-basis audit: non-par holdings with no recorded entry price.
           const auditGaps = vault.holdings
             .filter((h) => h.assetClass !== 'cash' && h.assetClass !== 'mmf')
@@ -634,35 +623,6 @@ export function InvestmentsView() {
                 )}
               </div>
 
-              {/* Per-account P&L table. */}
-              {accountRows.length > 0 && (
-                <div className="card">
-                  <div style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 700, marginBottom: 8 }}>Per account</div>
-                  {accountRows.map((r) => {
-                    const neg = r.pnlAbs < 0;
-                    return (
-                      <div key={r.id} className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
-                          <div className="small muted">value {formatMoney(r.value, base)} · cost {formatMoney(r.cost, base)}</div>
-                        </div>
-                        <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                          <div className="row" style={{ gap: 6, justifyContent: 'flex-end', alignItems: 'baseline' }}>
-                            <span style={{ color: neg ? 'var(--bad)' : 'var(--good)', fontWeight: 700, fontSize: 15 }}>
-                              {neg ? '−' : '+'}{formatMoney(Math.abs(r.pnlAbs), base)}
-                            </span>
-                            {r.ret != null && (
-                              <span className="small" style={{ color: neg ? 'var(--bad)' : 'var(--good)' }}>
-                                ({r.ret >= 0 ? '+' : '−'}{Math.abs(r.ret).toFixed(1)}%)
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
             </div>
           );
         })()}
