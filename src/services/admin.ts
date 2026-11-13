@@ -22,6 +22,31 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabase, isCloudEnabled } from './supabase';
 import type { LLMProvider } from '../domain/types';
+import { VAULT_TABLE } from './cloudVault';
+
+/**
+ * Table names are configurable (VITE_OWNIFLOW_TABLES, JSON) so the same code
+ * can run against a renamed local schema or another deployment without edits:
+ *   VITE_OWNIFLOW_TABLES='{"admins":"x_admins","members":"x_members","llmPolicy":"x_llm","llmDefault":"x_llm_def"}'
+ */
+const T = {
+  admins: 'omniflow_admins',
+  members: 'omniflow_members',
+  llmPolicy: 'omniflow_llm_policy',
+  llmDefault: 'omniflow_llm_default',
+};
+const rawTables = import.meta.env.VITE_OWNIFLOW_TABLES as string | undefined;
+if (rawTables && rawTables.trim().startsWith('{')) {
+  try {
+    const parsed = JSON.parse(rawTables) as Partial<typeof T>;
+    // Assign only known keys — ignore typos silently.
+    for (const k of Object.keys(parsed) as (keyof typeof T)[]) {
+      if (k in T && parsed[k]) T[k] = parsed[k];
+    }
+  } catch {
+    console.warn('[admin] VITE_OWNIFLOW_TABLES is not valid JSON; using defaults');
+  }
+}
 
 /** A registered member (directory row). No financial data, by design. */
 export interface MemberRow {
@@ -56,7 +81,6 @@ export interface VaultSyncRow {
 function schemaMissing(err: { message?: string }): boolean {
   const m = (err.message ?? '').toLowerCase();
   return (
-    m.includes('relation "public.omniflow_') ||
     m.includes('does not exist') ||
     m.includes('pgrst205') ||
     m.includes('pgrst204')
@@ -73,7 +97,7 @@ export async function upsertSelfMember(
 ): Promise<boolean> {
   if (!isCloudEnabled()) return false;
   const sb: SupabaseClient = getSupabase()!;
-  const { error } = await sb.from('omniflow_members').upsert({
+  const { error } = await sb.from(T.members).upsert({
     user_id: userId,
     email: email.toLowerCase(),
     display_name: displayName,
@@ -93,7 +117,7 @@ export async function isAdmin(userId: string): Promise<boolean> {
   if (!isCloudEnabled()) return false;
   const sb = getSupabase()!;
   const { data, error } = await sb
-    .from('omniflow_admins')
+    .from(T.admins)
     .select('user_id')
     .eq('user_id', userId)
     .maybeSingle();
@@ -108,7 +132,7 @@ export async function isAdmin(userId: string): Promise<boolean> {
 export async function listAdminIds(): Promise<string[]> {
   if (!isCloudEnabled()) return [];
   const sb = getSupabase()!;
-  const { data, error } = await sb.from('omniflow_admins').select('user_id');
+  const { data, error } = await sb.from(T.admins).select('user_id');
   if (error) {
     if (!schemaMissing(error)) console.warn('[admin] listAdminIds:', error.message);
     return [];
@@ -120,7 +144,7 @@ export async function listAdminIds(): Promise<string[]> {
 export async function grantAdmin(actorUserId: string, targetUserId: string): Promise<boolean> {
   if (!isCloudEnabled()) return false;
   const sb = getSupabase()!;
-  const { error } = await sb.from('omniflow_admins').upsert({
+  const { error } = await sb.from(T.admins).upsert({
     user_id: targetUserId,
     created_by: actorUserId,
   });
@@ -135,7 +159,7 @@ export async function grantAdmin(actorUserId: string, targetUserId: string): Pro
 export async function revokeAdmin(actorUserId: string, targetUserId: string): Promise<boolean> {
   if (!isCloudEnabled()) return false;
   const sb = getSupabase()!;
-  const { error } = await sb.from('omniflow_admins').delete().eq('user_id', targetUserId);
+  const { error } = await sb.from(T.admins).delete().eq('user_id', targetUserId);
   if (error) {
     console.warn('[admin] revoke:', error.message);
     return false;
@@ -149,7 +173,7 @@ export async function revokeAdmin(actorUserId: string, targetUserId: string): Pr
 export async function listMembers(): Promise<MemberRow[]> {
   if (!isCloudEnabled()) return [];
   const sb = getSupabase()!;
-  const { data, error } = await sb.from('omniflow_members').select(
+  const { data, error } = await sb.from(T.members).select(
     'user_id, display_name, email, last_seen_at',
   );
   if (error) {
@@ -164,7 +188,7 @@ export async function listVaultSync(): Promise<VaultSyncRow[]> {
   if (!isCloudEnabled()) return [];
   const sb = getSupabase()!;
   const { data, error } = await sb
-    .from('omniflow_vaults')
+    .from(VAULT_TABLE)
     .select('user_id, created_at, updated_at')
     .order('updated_at', { ascending: false });
   if (error) {
@@ -185,7 +209,7 @@ export async function getMyLlmPolicy(userId: string): Promise<LlmPolicyRow | und
   if (!isCloudEnabled()) return undefined;
   const sb = getSupabase()!;
   const { data, error } = await sb
-    .from('omniflow_llm_policy')
+    .from(T.llmPolicy)
     .select('user_id, provider, api_key, model, key_finger, updated_at')
     .eq('user_id', userId)
     .maybeSingle();
@@ -211,7 +235,7 @@ export async function setLlmPolicy(
 ): Promise<boolean> {
   if (!isCloudEnabled()) return false;
   const sb = getSupabase()!;
-  const { error } = await sb.from('omniflow_llm_policy').upsert({
+  const { error } = await sb.from(T.llmPolicy).upsert({
     user_id: targetUserId,
     provider,
     api_key: apiKey,
@@ -244,7 +268,7 @@ export async function listPolicies(): Promise<PolicySummary[]> {
   if (!isCloudEnabled()) return [];
   const sb = getSupabase()!;
   const { data, error } = await sb
-    .from('omniflow_llm_policy')
+    .from(T.llmPolicy)
     .select('user_id, provider, key_finger, model, updated_at');
   if (error) {
     if (!schemaMissing(error)) console.warn('[admin] listPolicies:', error.message);
@@ -257,7 +281,7 @@ export async function listPolicies(): Promise<PolicySummary[]> {
 export async function clearLlmPolicy(actorUserId: string, targetUserId: string): Promise<boolean> {
   if (!isCloudEnabled()) return false;
   const sb = getSupabase()!;
-  const { error } = await sb.from('omniflow_llm_policy').delete().eq('user_id', targetUserId);
+  const { error } = await sb.from(T.llmPolicy).delete().eq('user_id', targetUserId);
   if (error) {
     console.warn('[admin] clearLlmPolicy:', error.message);
     return false;
@@ -287,7 +311,7 @@ export async function getDefaultLlm(userId: string): Promise<DefaultLlmRow | und
   if (!isCloudEnabled()) return undefined;
   const sb = getSupabase()!;
   const { data, error } = await sb
-    .from('omniflow_llm_default')
+    .from(T.llmDefault)
     .select('provider, api_key, model, key_finger, updated_at')
     .eq('row_id', 'default')
     .maybeSingle();
@@ -309,7 +333,7 @@ export async function setDefaultLlm(
 ): Promise<boolean> {
   if (!isCloudEnabled()) return false;
   const sb = getSupabase()!;
-  const { error } = await sb.from('omniflow_llm_default').upsert({
+  const { error } = await sb.from(T.llmDefault).upsert({
     row_id: 'default',
     provider,
     api_key: apiKey,
@@ -344,7 +368,7 @@ export async function applyDefaultLlmToUser(
 export async function wipeMemberVault(actorUserId: string, targetUserId: string): Promise<boolean> {
   if (!isCloudEnabled()) return false;
   const sb = getSupabase()!;
-  const { error } = await sb.from('omniflow_vaults').delete().eq('user_id', targetUserId);
+  const { error } = await sb.from(VAULT_TABLE).delete().eq('user_id', targetUserId);
   if (error) {
     console.warn('[admin] wipeMemberVault:', error.message);
     return false;

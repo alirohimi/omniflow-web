@@ -9,7 +9,10 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "db:start": "colima start >/dev/null 2>&1 || docker info >/dev/null 2>&1; supabase start",
+    "db:stop": "supabase stop",
+    "db:reset": "supabase stop >/dev/null 2>&1; supabase start"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",

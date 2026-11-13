@@ -10,6 +10,8 @@
 .env
 .env.local
 .env.*.local
+# project-local supabase CLI env (generated: .anonymizer_key, .service_role_key)
+supabase/.env
 
 # local Supabase CLI link (never commit)
 .supabase/

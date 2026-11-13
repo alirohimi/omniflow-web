@@ -1,12 +1,14 @@
 // ============================================================================
 // OmniFlow — Supabase client (per-user encrypted vault rows in Postgres).
 //
-// When VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY are configured the app
-// enables email accounts (Supabase Auth) and persists each user's *encrypted*
-// vault blob to a per-user Postgres row (omniflow_vaults, RLS-scoped to
-// auth.uid()). That DB row is the ONLY persisted copy of user data — there is
-// no local storage layer. When the env vars are missing (local dev), the app
-// still runs, but the vault is in-memory only: nothing is written to disk.
+// Any PostgREST + JWT-auth backend (hosted Supabase, a local supabase start
+// stack, a standalone Postgres + GoTrue/Keycloak, …) works here. Configure
+// via VITE_SUPABASE_URL (auth URL) + VITE_SUPABASE_ANON_KEY, or override the
+// rest base with VITE_SUPABASE_REST_URL (local stacks split these: auth on
+// /auth/v1, PostgREST on /rest/v1 under the same origin).
+//
+// When no endpoint is configured (local dev) the app still runs, but the
+// vault is in-memory only: nothing is written to disk.
 //
 // The DB stores only AES-GCM ciphertext + salt + iv. No plaintext financial
 // data ever reaches Supabase; the passphrase stays device-local.
@@ -16,18 +18,33 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+// Optional override of the PostgREST base (default: the auth URL above).
+// Needed when auth and REST live on different origins/ports (some local stacks).
+const restUrlOverride = (import.meta.env.VITE_SUPABASE_REST_URL as string | undefined)?.trim() || undefined;
 
 // Tolerate a one-letter-missing "htps://" typo in the configured URL and
 // normalize it to a valid https scheme — so a single dropped character in a
-// CI secret can never silently disable the whole cloud layer.
+// CI secret can never silently disable the whole cloud layer. (Local
+// http:// endpoints — e.g. a supabase start stack — are allowed too.)
 const normUrl = (() => {
   const raw = (url ?? '').trim();
   return /^htps:\//i.test(raw) ? raw.replace(/^htps:/i, 'https:') : raw;
 })();
 
-/** True when a Supabase endpoint is configured (enables Auth + cloud vault sync). */
+/**
+ * True when a Supabase-compatible endpoint is configured (enables Auth +
+ * cloud vault sync). Accepts http and https; must be a real hostname.
+ */
 export const isCloudEnabled = (): boolean =>
-  !!normUrl && !!anonKey && /^https:\/\/(www\.)?/.test(normUrl) && normUrl.includes('.');
+  !!normUrl && !!anonKey && /^https?:\/\/(www\.)?/.test(normUrl) && normUrl.includes('.');
+
+/** Base URL the PostgREST API lives at (raw keepalive upserts). */
+export function cloudRestUrl(): string | undefined {
+  if (restUrlOverride) return restUrlOverride.replace(/\/+$/, '');
+  if (!normUrl) return undefined;
+  // Hosted Supabase serves auth and rest on the same origin.
+  return normUrl;
+}
 
 let _client: SupabaseClient | null = null;
 
@@ -35,7 +52,9 @@ let _client: SupabaseClient | null = null;
 export function getSupabase(): SupabaseClient | null {
   if (!isCloudEnabled()) return null;
   if (!_client) {
-    _client = createClient(normUrl!, anonKey!, {
+    const restUrl = cloudRestUrl() ?? undefined;
+    _client = createClient(normUrl, anonKey!, {
+      ...(restUrl ? { rest: { url: restUrl } } : {}),
       auth: {
         persistSession: true,
         autoRefreshToken: true,
@@ -59,5 +78,7 @@ export function getSupabase(): SupabaseClient | null {
  */
 export function cloudEndpoints(): { url: string; anonKey: string } | null {
   if (!isCloudEnabled()) return null;
-  return { url: normUrl, anonKey: anonKey! };
+  const r = cloudRestUrl();
+  if (!r) return null;
+  return { url: r, anonKey: anonKey! };
 }

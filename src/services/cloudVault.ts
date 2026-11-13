@@ -13,6 +13,16 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { VaultCipher } from '../security/vault';
 import { cloudEndpoints, getSupabase, isCloudEnabled } from './supabase';
 
+/**
+ * The per-user table that carries the encrypted vault blob. Configurable so a
+ * project renamed the schema or points the stack at another deployment can
+ * switch without touching client code.
+ */
+export const VAULT_TABLE = import.meta.env.VITE_OWNIFLOW_VAULT_TABLE?.trim() || 'omniflow_vaults';
+
+/** Raw PostgREST path for the vault table, used by the keepalive flush. */
+const VAULT_REST_PATH = `/rest/v1/${VAULT_TABLE}`;
+
 interface VaultRow {
   user_id: string;
   v: number;
@@ -33,7 +43,7 @@ export async function fetchCloudVaultStrict(userId: string): Promise<VaultCipher
   if (!isCloudEnabled()) return undefined;
   const sb: SupabaseClient = getSupabase()!;
   const { data, error } = await sb
-    .from('omniflow_vaults')
+    .from(VAULT_TABLE)
     .select('v, salt, iv, body')
     .eq('user_id', userId)
     .maybeSingle();
@@ -58,7 +68,7 @@ export async function fetchCloudVault(userId: string): Promise<VaultCipher | und
   if (!isCloudEnabled()) return undefined;
   const sb: SupabaseClient = getSupabase()!;
   const { data, error } = await sb
-    .from('omniflow_vaults')
+    .from(VAULT_TABLE)
     .select('v, salt, iv, body')
     .eq('user_id', userId)
     .maybeSingle();
@@ -77,7 +87,7 @@ export async function fetchCloudVault(userId: string): Promise<VaultCipher | und
 export async function saveCloudVault(userId: string, cipher: VaultCipher): Promise<boolean> {
   if (!isCloudEnabled()) return false;
   const sb: SupabaseClient = getSupabase()!;
-  const { error } = await sb.from('omniflow_vaults').upsert({
+  const { error } = await sb.from(VAULT_TABLE).upsert({
     user_id: userId,
     v: cipher.v,
     salt: cipher.salt,
@@ -96,7 +106,7 @@ export async function saveCloudVault(userId: string, cipher: VaultCipher): Promi
 export async function deleteCloudVault(userId: string): Promise<void> {
   if (!isCloudEnabled()) return;
   const sb: SupabaseClient = getSupabase()!;
-  const { error } = await sb.from('omniflow_vaults').delete().eq('user_id', userId);
+  const { error } = await sb.from(VAULT_TABLE).delete().eq('user_id', userId);
   if (error) console.warn('[cloudVault] delete:', error.message);
 }
 
@@ -143,7 +153,7 @@ export function flushVaultKeepalive(
   const ep = endpoints === undefined ? cloudEndpoints() : endpoints;
   if (!ep || !accessToken) return; // cloud off, or nothing we can authenticate with
   try {
-    void fetch(`${ep.url}/rest/v1/omniflow_vaults`, {
+    void fetch(`${ep.url}${VAULT_REST_PATH}`, {
       method: 'POST',
       keepalive: true,
       headers: {

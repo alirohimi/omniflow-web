@@ -67,6 +67,8 @@ jobs:
           # RLS protects the data. Unset -> app builds in local-only mode.
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          # Optional: override PostgREST base when auth+REST differ (local stacks).
+          VITE_SUPABASE_REST_URL: ${{ secrets.VITE_SUPABASE_REST_URL }}
           # CORS-open LLM relay. When set, the adacode BYOK provider routes
           # through this URL instead of the hardcoded (now-dead) Supabase
           # Edge Function default in src/ai/categorize.ts. Set to
