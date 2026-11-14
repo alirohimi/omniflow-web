@@ -1027,9 +1027,24 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         if (clean.initialDepositBase != null && (!Number.isFinite(clean.initialDepositBase) || clean.initialDepositBase <= 0)) {
           delete clean.initialDepositBase;
         }
+        // A caller may intentionally clear the broker-value override by
+        // passing brokerValueBase: undefined (removed by withoutUndefined)
+        // or a non-positive number. Detect that from the ORIGINAL patch so
+        // the previous override is deleted rather than left stale.
+        const wantsClearBroker =
+          patch.brokerValueBase !== undefined &&
+          !(Number.isFinite(patch.brokerValueBase) && (patch.brokerValueBase ?? 0) > 0);
         const next = {
           ...prev,
-          accounts: prev.accounts.map((a) => (a.id === id ? { ...a, ...clean, lastUpdated: Date.now() } : a)),
+          accounts: prev.accounts.map((a) => {
+            if (a.id !== id) return a;
+            const merged = { ...a, ...clean, lastUpdated: Date.now() };
+            if (wantsClearBroker) delete merged.brokerValueBase;
+            if (clean.brokerValueBase != null && (!Number.isFinite(clean.brokerValueBase) || clean.brokerValueBase <= 0)) {
+              delete merged.brokerValueBase;
+            }
+            return merged;
+          }),
           updatedAt: Date.now(),
         };
         void persist(next);

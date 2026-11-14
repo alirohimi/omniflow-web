@@ -140,6 +140,56 @@ describe('portfolioPnl', () => {
     expect(pnl.missingCapitalCount).toBe(0);
   });
 
+  it('prefers the broker value (brokerValueBase) over the live quote for P&L', () => {
+    // Real scenario: StashAway Monthly Portofolio. Live quote says 39,643.51
+    // MYR but the broker displays 37,827.57 MYR (FX / fund-NAV drift). The
+    // user records the broker value; P&L must use 37,827.57, NOT the quote.
+    const acc: InvestmentAccount = {
+      id: 'acc-1', platformName: 'Stashaway Monthly Portofolio', accountType: 'robo',
+      baseCurrencyValue: 39_643.51, lastUpdated: NOW,
+      initialDepositBase: 6_000,
+      brokerValueBase: 37_827.57,
+    };
+    const summary = fakeSummary([{ id: 'acc-1', value: 39_643.51, cost: 0 }]);
+    const pnl = portfolioPnl(summary, [acc], []);
+    // The per-account line valueBase must be the broker value.
+    const line = pnl.accounts.find((l) => l.account.id === 'acc-1')!;
+    expect(line.valueBase).toBe(37_827.57);
+    // totalPnlBase = brokerValue(37,827.57) − deposit(6,000) = 31,827.57.
+    expect(pnl.totalCapitalBase).toBe(6_000);
+    expect(pnl.totalPnlBase).toBeCloseTo(31_827.57, 4);
+    expect(pnl.totalReturnPct).toBeCloseTo((31_827.57 / 6_000) * 100, 3);
+  });
+
+  it('falls back to the live quote when no broker value is recorded', () => {
+    const acc: InvestmentAccount = {
+      id: 'acc-1', platformName: 'Stashaway Monthly Portofolio', accountType: 'robo',
+      baseCurrencyValue: 39_643.51, lastUpdated: NOW,
+      initialDepositBase: 6_000,
+      // No brokerValueBase → use the live quote value from the summary line.
+    };
+    const summary = fakeSummary([{ id: 'acc-1', value: 39_643.51, cost: 0 }]);
+    const pnl = portfolioPnl(summary, [acc], []);
+    const line = pnl.accounts.find((l) => l.account.id === 'acc-1')!;
+    expect(line.valueBase).toBe(39_643.51);
+    expect(pnl.totalPnlBase).toBeCloseTo(33_643.51, 4);
+  });
+
+  it('a non-positive brokerValueBase is ignored (treated as unset)', () => {
+    const acc: InvestmentAccount = {
+      id: 'acc-1', platformName: 'Luno', accountType: 'broker',
+      baseCurrencyValue: 0, lastUpdated: NOW,
+      initialDepositBase: 10_000,
+      brokerValueBase: 0,
+    };
+    const summary = fakeSummary([{ id: 'acc-1', value: 12_000, cost: 0 }]);
+    const pnl = portfolioPnl(summary, [acc], []);
+    const line = pnl.accounts.find((l) => l.account.id === 'acc-1')!;
+    // 0 is not > 0, so it's ignored → quote value 12,000 is used.
+    expect(line.valueBase).toBe(12_000);
+    expect(pnl.totalPnlBase).toBe(2_000);
+  });
+
   it('falls back to the contribution ledger when no manual balance is set', () => {
     const acc: InvestmentAccount = {
       id: 'acc-1', platformName: 'Luno', accountType: 'broker',

@@ -129,13 +129,17 @@ export function portfolioPnl(
 
   const lines: PnlAccount[] = (summary?.byAccount ?? []).map((l: AccountLine) => {
     const acc = accById.get(l.account.id) ?? l.account;
-    // Live quote is the single source of truth. The previous brokerValueBase
-    // (a manual pasted number) was removed: it could silently mask a real
-    // loss by overriding the live value, which is exactly what made the
-    // StashAway leg look artificially down. StashAway's value now comes from
-    // the index-tracked quote, so the live quote is already the correct
-    // reference — no manual override needed or wanted.
-    const valueBase = Number.isFinite(l.valueBase) ? l.valueBase : 0;
+    // Live quote is the source of truth for the account value, UNLESS the
+    // user has recorded the broker's own current value for this account
+    // (brokerValueBase). The broker value is authoritative: it matches the
+    // app the user actually reconciles against (StashAway), and it stays
+    // exact even when our live quote / FX rate / fund-NAV prices drift.
+    const quoteValue = Number.isFinite(l.valueBase) ? l.valueBase : 0;
+    const brokerValue =
+      Number.isFinite(acc.brokerValueBase) && (acc.brokerValueBase ?? 0) > 0
+        ? acc.brokerValueBase!
+        : null;
+    const valueBase = brokerValue ?? quoteValue;
     let capitalBase =
       Number.isFinite(acc.initialDepositBase) && (acc.initialDepositBase ?? 0) > 0
         ? acc.initialDepositBase!
@@ -172,13 +176,12 @@ export function portfolioPnl(
   const missingCapitalCount = lines.filter((l) => l.pnlBase == null && l.valueBase > 0).length;
 
   // P&L against TOTAL COST BASIS — matches a broker (StashAway) 1:1: total
-  // value minus the sum of every holding's entry cost. `summary` already
-  // carries totalCostBase + totalValueBase (across ALL holdings, not just
-  // the ones with a recorded deposit), so use those directly.
-  //
-  // The per-account lines above already use each account's brokerValueBase
-  // Live quote is the source of truth (no more broker overrides), so the
-  // cost-basis total value is just the quote-derived total.
+  // value minus the sum of every holding's entry cost. This is the
+  // FALLBACK figure, shown only when no account has a recorded initial
+  // deposit / broker value. `summary` carries totalCostBase + totalValueBase
+  // across ALL holdings. Where the user has set a broker value per account,
+  // the primary P&L (totalPnlBase above) already uses it, so this fallback
+  // rarely renders.
   const totalCostBase = Number.isFinite(summary.totalCostBase) ? summary.totalCostBase : 0;
   const costValueBase = Number.isFinite(summary.totalValueBase) ? summary.totalValueBase : 0;
   const totalCostPnlBase = totalCostBase > 0 ? costValueBase - totalCostBase : null;

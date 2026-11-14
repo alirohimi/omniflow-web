@@ -122,6 +122,12 @@ export function healVault(blob: VaultBlob): { blob: VaultBlob; changed: boolean 
         typeof a.initialDepositBase === 'number' && Number.isFinite(a.initialDepositBase) && a.initialDepositBase > 0
           ? a.initialDepositBase
           : undefined,
+      // Broker's own current value for this account (optional override).
+      // Normalize like initialDepositBase: keep only positive finite numbers.
+      brokerValueBase:
+        typeof a.brokerValueBase === 'number' && Number.isFinite(a.brokerValueBase) && a.brokerValueBase > 0
+          ? a.brokerValueBase
+          : undefined,
     };
   });
 

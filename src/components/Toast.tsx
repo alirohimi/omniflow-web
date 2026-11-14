@@ -12,7 +12,7 @@ import {
   type ReactNode,
 } from 'react';
 
-type Kind = 'ok' | 'err';
+type Kind = 'ok' | 'err' | 'warn';
 interface Item { id: number; msg: string; kind: Kind }
 
 const Ctx = createContext<{ toast: (msg: string, kind?: Kind) => void }>({
@@ -28,10 +28,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const toast = useCallback((msg: string, kind: Kind = 'ok') => {
     const id = ++idRef.current;
     setItems((p) => [...p, { id, msg, kind }]);
-    // Errors need to be read + acted on; auto-dismiss faster for informational toasts.
+    // Errors + warnings need to be read + acted on; auto-dismiss slower
+    // for those, faster for informational toasts.
     window.setTimeout(
       () => setItems((p) => p.filter((t) => t.id !== id)),
-      kind === 'err' ? 5000 : 2400,
+      kind === 'err' || kind === 'warn' ? 6000 : 2400,
     );
   }, []);
 
@@ -40,7 +41,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div className="toasts" aria-live="polite">
         {items.map((t) => (
-          <div key={t.id} className={`toast${t.kind === 'err' ? ' err' : ''}`}>
+          <div key={t.id} className={`toast${t.kind === 'err' ? ' err' : t.kind === 'warn' ? ' warn' : ''}`}>
             {t.msg}
           </div>
         ))}

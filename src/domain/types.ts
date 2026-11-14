@@ -69,6 +69,13 @@ export interface InvestmentAccount {
    *  holdings' summed cost basis — matching what the user actually put in.
    *  Optional so old encrypted blobs heal cleanly. */
   initialDepositBase?: number;
+  /** Optional: the account's current value exactly as the broker displays it,
+   *  in base currency (e.g. StashAway's "Current value" for this account).
+   *  When set, P&L uses THIS value instead of the live-quote-derived value,
+   *  so the P&L matches the broker 1:1 even when our live quote / FX rate /
+   *  fund-NAV prices drift from the broker's own daily valuation.
+   *  Optional so old encrypted blobs heal cleanly. */
+  brokerValueBase?: number;
 }
 
 /** A holding inside an account. */
