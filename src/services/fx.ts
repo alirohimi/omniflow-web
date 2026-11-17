@@ -41,7 +41,7 @@ export interface RatesForBase {
   /** units of `code` per 1 unit of base. rates[code] = 1 base = rates[code] code. */
   rates: Record<string, number>;
   asOf: number;
-  source: 'er-api' | 'frankfurter' | 'cache' | 'offline';
+  source: 'er-api' | 'frankfurter' | 'daily' | 'cache' | 'offline';
 }
 
 /** Pure: convert `amount` in `from` to `to` using units-of-`to`-per-1-`from`. */
@@ -105,23 +105,72 @@ async function fetchFrankfurter(base: string): Promise<RatesForBase> {
 
 export class CurrencyExchangeService {
   private cache: RatesForBase | null = null;
+  /** Daily-anchored FX snapshot: one rate set per UTC trading day, shared
+   *  across the session (in-memory) and surviving a page reload via
+   *  sessionStorage (keyed by UTC date). This mirrors how a broker like
+   *  StashAway prices an account: a single FX rate per day, not a live spot
+   *  that re-fetches every 60s and drifts intraday. Within a day the FX is
+   *  stable, so the portfolio value doesn't wander minute-to-minute; it only
+   *  resets at the UTC day boundary. */
+  private dailyCache: { day: string; base: string; rates: RatesForBase } | null = null;
 
   private remember(r: RatesForBase) {
     this.cache = r; // session-only: never written to local storage
   }
 
-  /** Fetch freshest rates for `base`, trying er-api then frankfurter.
-   *  Falls back to the in-session rate set (flagged source='cache') if the
-   *  network fails, so a session never hard-breaks offline.
-   *  NEVER throws: as a last resort it returns the static OFFLINE_FALLBACK
-   *  approximations (source='offline') so KPI panels always render. The
-   *  UI shows the source so users know when rates are approximate. */
+  /** UTC calendar day key (YYYY-MM-DD). One FX snapshot per day, matching a
+   *  broker's daily pricing cadence. */
+  private static dayKey(now = new Date()): string {
+    return now.toISOString().slice(0, 10);
+  }
+
+  private loadDaily(base: string): RatesForBase | null {
+    const day = CurrencyExchangeService.dayKey();
+    if (this.dailyCache && this.dailyCache.day === day && this.dailyCache.base === base) {
+      return this.dailyCache.rates;
+    }
+    try {
+      const raw = sessionStorage.getItem(`omniflow.fx.daily.${day}.${base.toUpperCase()}`);
+      if (raw) {
+        const parsed: RatesForBase = JSON.parse(raw);
+        if (parsed && typeof parsed.rates === 'object' && Object.keys(parsed.rates).length > 0) {
+          this.dailyCache = { day, base, rates: parsed };
+          return parsed;
+        }
+      }
+    } catch {
+      /* sessionStorage unavailable (SSR/tests/private mode) — in-memory only */
+    }
+    return null;
+  }
+
+  private storeDaily(rates: RatesForBase, base: string) {
+    const day = CurrencyExchangeService.dayKey();
+    this.dailyCache = { day, base, rates };
+    try {
+      sessionStorage.setItem(`omniflow.fx.daily.${day}.${base.toUpperCase()}`, JSON.stringify(rates));
+    } catch {
+      /* best-effort: in-memory daily cache still applies for this session */
+    }
+  }
+
+  /** Fetch rates for `base`, preferring today's daily-anchored snapshot.
+   *  Within a UTC trading day the same FX set is reused (so the portfolio
+   *  value is stable and tracks a broker's one-rate-per-day model); a new
+   *  fetch only happens on the first call of the day or when both live
+   *  endpoints fail. Falls back to the in-session rate set, then to the
+   *  static OFFLINE_FALLBACK approximations. NEVER throws. */
   async latest(base: string): Promise<RatesForBase> {
+    const daily = this.loadDaily(base);
+    if (daily) {
+      return { ...daily, source: 'daily' };
+    }
     const errors: string[] = [];
     for (const fn of [() => fetchER(base), () => fetchFrankfurter(base)]) {
       try {
         const r = await fn();
         this.remember(r);
+        this.storeDaily(r, base);
         return r;
       } catch (e) {
         errors.push(e instanceof Error ? e.message : String(e));

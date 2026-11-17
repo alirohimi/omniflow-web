@@ -749,7 +749,7 @@ export function InvestmentsView() {
         {live.error && <div className="small neg" style={{ marginTop: 10 }}>{live.error}</div>}
         <div className="row small muted" style={{ marginTop: 10 }}>
           <span>
-            FX: {live.fxSource === 'offline' ? 'offline (cached/approx)' : (live.fxSource ?? '…')} · live {live.portfolio?.liveQuoteCount ?? 0} · cached {live.portfolio?.staleQuoteCount ?? 0}
+            FX: {live.fxSource === 'offline' ? 'offline (cached/approx)' : live.fxSource === 'daily' ? 'daily (broker-anchored)' : (live.fxSource ?? '…')} · live {live.portfolio?.liveQuoteCount ?? 0} · cached {live.portfolio?.staleQuoteCount ?? 0}
           </span>
           {live.portfolio && live.portfolio.uncounted > 0 && (
             <span style={{ color: 'var(--text-2, #9aa4b8)' }}> · {live.portfolio.uncounted} uncounted</span>
