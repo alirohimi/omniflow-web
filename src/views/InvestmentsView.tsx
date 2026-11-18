@@ -974,7 +974,28 @@ export function InvestmentsView() {
                       <span className="val">
                         {formatMoney(line.valueBase, base)}
                         {Number.isFinite(a.brokerValueBase) && (a.brokerValueBase ?? 0) > 0 && (
-                          <span title="P&L uses your broker's value for this account" style={{ marginLeft: 6, fontSize: 11, color: 'var(--warn)' }}>broker</span>
+                          <>
+                            <span title="P&L uses your broker's value for this account" style={{ marginLeft: 6, fontSize: 11, color: 'var(--warn)' }}>broker</span>
+                            {/* Clear the pasted broker value so P&L falls back
+                                to the live quote vs your invested cost. The user
+                                often only knows what they invested, not the
+                                broker's current value — this one-tap control
+                                (the in-app equivalent of editing the vault)
+                                removes the stale override. */}
+                            <button
+                              type="button"
+                              className="chip sm"
+                              title="Clear broker value (use live price vs your invested amount)"
+                              aria-label={`Clear broker value for ${a.platformName}`}
+                              onClick={() => {
+                                store.updateAccount(a.id, { brokerValueBase: undefined });
+                                toast(`${a.platformName}: broker value cleared — P&L now uses the live price vs your invested amount.`, 'ok');
+                              }}
+                              style={{ marginLeft: 4, cursor: 'pointer', opacity: 0.8 }}
+                            >
+                              ✕
+                            </button>
+                          </>
                         )}
                       </span>
                     ) : (

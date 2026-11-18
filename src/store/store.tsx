@@ -1028,11 +1028,13 @@ export function VaultProvider({ children }: { children: ReactNode }) {
           delete clean.initialDepositBase;
         }
         // A caller may intentionally clear the broker-value override by
-        // passing brokerValueBase: undefined (removed by withoutUndefined)
-        // or a non-positive number. Detect that from the ORIGINAL patch so
-        // the previous override is deleted rather than left stale.
+        // passing brokerValueBase: undefined (a present-but-undefined key, as
+        // the "clear broker value" button does) or a non-positive number.
+        // Detect that from the ORIGINAL patch via `in` (an explicit
+        // `brokerValueBase: undefined` is still an OWN key, so `in` is true),
+        // so the previous override is deleted rather than left stale.
         const wantsClearBroker =
-          patch.brokerValueBase !== undefined &&
+          'brokerValueBase' in patch &&
           !(Number.isFinite(patch.brokerValueBase) && (patch.brokerValueBase ?? 0) > 0);
         const next = {
           ...prev,

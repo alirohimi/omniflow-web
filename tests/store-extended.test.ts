@@ -379,6 +379,34 @@ describe('extended-entity CRUD (budgets/recurring/liabilities/assets/dividends/d
     await unmount();
   });
 
+  it('updateAccount({ brokerValueBase: undefined }) clears a stale broker override', async () => {
+    const { storeRef, unmount } = await unlockFreshVault('user-broker-clear');
+    const store = storeRef.current!;
+
+    await act(async () => {
+      const accId = store.addAccount({ platformName: 'HATA', accountType: 'crypto', initialDepositBase: 7104.68 });
+      store.updateAccount(accId, { brokerValueBase: 7271.66 });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    let v = storeRef.current!.vault!;
+    const accId = v.accounts[0].id;
+    expect(v.accounts[0].brokerValueBase).toBe(7271.66);
+
+    // The "clear broker value" button on an account row triggers exactly this:
+    // a non-positive / undefined brokerValueBase must DELETE the key, leaving
+    // P&L to fall back to the live quote vs the invested cost — not keep the
+    // stale 7271.66 hiding the real number.
+    await act(async () => {
+      store.updateAccount(accId, { brokerValueBase: undefined });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    v = storeRef.current!.vault!;
+    expect(v.accounts[0].brokerValueBase).toBeUndefined();
+    // ...and the recorded invested cost is untouched.
+    expect(v.accounts[0].initialDepositBase).toBe(7104.68);
+    await unmount();
+  });
+
   it('extended entities survive the encrypted cloud persist round-trip', async () => {
     const USER = 'user-ext-rt';
     const { storeRef, unmount } = await unlockFreshVault(USER);
