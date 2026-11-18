@@ -45,6 +45,26 @@ const STASHAWAY_INDEX_MAP: Record<string, string> = {
  *  and we fall back to the stored price. */
 const FETCH_TIMEOUT_MS = 12_000;
 
+/** Strip a trailing ISO-currency code from a crypto symbol to recover the
+ *  underlying coin. HATA (and other MYR exchanges) name their products
+ *  "<COIN><CURRENCY>" — e.g. `BTCMYR`, `ETHMYR`, `SOLUSD` — which is NOT a
+ *  valid CoinGecko id. Without this the crypto quote path fetched the
+ *  literal junk id (`btcmyr`) and got no price, so the holding silently fell
+ *  back to its stale stored price and diverged from the real coin. This maps
+ *  the FX-suffixed form back to the base coin so the live quote tracks the
+ *  real asset (and prices it in the holding's currency directly). Returns
+ *  the input unchanged when it has no recognised currency suffix. */
+const CURRENCY_SUFFIX = /(MYR|USD|EUR|SGD|JPY|GBP|CNY|HKD|IDR|AUD|CAD)\b$/;
+function baseCoin(symbol: string): string {
+  const up = symbol.toUpperCase();
+  const m = up.match(CURRENCY_SUFFIX);
+  if (m) {
+    const base = up.slice(0, m.index);
+    if (base.length >= 1) return base;
+  }
+  return up;
+}
+
 async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
@@ -143,7 +163,13 @@ export class MarketDataService {
   }
 
   private async cryptoQuote(symbol: string, holdingCurrency?: string): Promise<QuoteResult> {
-    const coin = COINGECKO_COIN_MAP[symbol.toUpperCase()] ?? symbol.toLowerCase();
+    // Resolve the underlying coin: `BTC`/`ETH` map by name; a currency-
+    // suffixed form like `BTCMYR` is stripped to its base coin first. The
+    // base coin (or the raw symbol as a last resort) is then used as the
+    // CoinGecko id when no named mapping exists.
+    const base = baseCoin(symbol);
+    const coin =
+      COINGECKO_COIN_MAP[base] ?? COINGECKO_COIN_MAP[symbol.toUpperCase()] ?? symbol.toLowerCase();
     // Price in the holding's own currency when CoinGecko covers it directly
     // (a MYR-denominated BTC -> MYR, 1 decimal — exactly what the local
     // exchanges show). USD is the fallback, converted via the FX table.
@@ -255,3 +281,5 @@ export class MarketDataService {
 // Note: the app wires a single MarketDataService instance to fxService in
 // services/index.ts (`marketDataService`). Do NOT import the class here
 // and construct a second instance — that is the bug this file used to ship.
+
+export { baseCoin };

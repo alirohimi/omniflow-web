@@ -7,7 +7,7 @@
 // ============================================================================
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { MarketDataService } from '../src/services/marketData';
+import { MarketDataService, baseCoin } from '../src/services/marketData';
 import { CurrencyExchangeService } from '../src/services/fx';
 import type { InvestmentHolding } from '../src/domain/types';
 
@@ -84,6 +84,26 @@ describe('MarketDataService.quote — crypto (coingecko)', () => {
     const f = mockFetchJson({ dogecoin: { usd: 0.12 } });
     await svc.quote(h({ symbol: 'DOGE' }));
     expect(String(f.mock.calls[0][0])).toContain('ids=dogecoin');
+  });
+
+  it('baseCoin strips a currency suffix to the underlying coin', () => {
+    expect(baseCoin('BTCMYR')).toBe('BTC');
+    expect(baseCoin('ETHMYR')).toBe('ETH');
+    expect(baseCoin('SOLUSD')).toBe('SOL');
+    // No suffix → unchanged (upper-cased).
+    expect(baseCoin('BTC')).toBe('BTC');
+    expect(baseCoin('doge')).toBe('DOGE');
+  });
+
+  it('a MYR-denominated BTC (BTCMYR, HATA) resolves to the real bitcoin id, not junk', async () => {
+    const f = mockFetchJson({ bitcoin: { myr: 266_634, usd: 64_708 } });
+    const r = await svc.quote(h({ symbol: 'BTCMYR', holdingCurrency: 'MYR' }));
+    // The URL must target `bitcoin`, NOT the literal `btcmyr` (which 404s).
+    expect(String(f.mock.calls[0][0])).toContain('ids=bitcoin');
+    expect(String(f.mock.calls[0][0])).not.toContain('btcmyr');
+    expect(r.ok).toBe(true);
+    expect(r.price).toBe(266_634); // the MYR price, priced in the holding currency
+    expect(r.currency).toBe('MYR');
   });
 
   it('malformed coingecko body (no usd price) → falls back to stored price', async () => {
