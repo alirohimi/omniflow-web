@@ -195,6 +195,29 @@ export function InvestmentsView() {
     return anyBroker ? brokerTotal : (live.portfolio?.totalValueBase ?? 0);
   }, [pnl, live.portfolio]);
 
+  /** Net worth reconciled to the Home page: investment value (the same
+   *  valueInBase math Home uses) + manual "other assets" − liabilities.
+   *  Showing this on the Portfolio hero is why the two pages' headline
+   *  numbers differ — Home counts debts + other assets, Portfolio was
+   *  investment-only. Exposing the breakdown here makes it self-explanatory
+   *  and guarantees it equals Home's net-worth figure. */
+  const netWorth = useMemo(() => {
+    const rateToBase = (code: string): number => {
+      if (code === base) return 1;
+      if (!live.fx) return 0;
+      try { return fxService.toBase(1, code, live.fx); } catch { return 0; }
+    };
+    let investments = 0;
+    for (const h of vault.holdings) {
+      const q = live.quotes[h.symbol];
+      const { valueBase, ok } = valueInBase(h, q, base, rateToBase);
+      if (ok) investments += valueBase;
+    }
+    const assets = (vault.assets ?? []).reduce((s, a) => s + (Number.isFinite(a.value) ? a.value : 0), 0);
+    const liabilities = (vault.liabilities ?? []).reduce((s, l) => s + (Number.isFinite(l.balance) ? l.balance : 0), 0);
+    return { investments, assets, liabilities, net: investments + assets - liabilities, hasDebt: liabilities > 0, hasAssets: assets > 0 };
+  }, [vault, live.quotes, live.fx, base]);
+
   /** Accounts already designated as emergency-reserve lines. */
   const reservedIds = useMemo(
     () => new Set((vault.emergency?.items ?? []).filter((i) => i.kind === 'account').map((i) => i.accountId)),
@@ -487,7 +510,7 @@ export function InvestmentsView() {
         {/* Hero band: big number + tinted delta + a 3-cell stats strip. */}
         <div className="pf-hero">
           <div className="pf-hero-main">
-            <div className="pf-hero-lbl">Total value · {base}</div>
+            <div className="pf-hero-lbl">Investment value · {base}</div>
             <div className="pf-hero-num">{formatMoney(displayTotalValueBase, base)}</div>
             <div className="pf-hero-delta">
               {/* Primary KPI: P&L against "Total invested" (initialDepositBase).
@@ -541,6 +564,29 @@ export function InvestmentsView() {
             </div>
           </div>
         </div>
+
+        {/* Net-worth sub-card: reconciles to the Home page. Home's "Net
+            worth" = investment value + other assets − liabilities, using the
+            SAME valueInBase math as this page. Show the same figure here so
+            the two headlines match, and explain why Portfolio was smaller
+            before (it only counted the investment accounts). */}
+        {(netWorth.hasDebt || netWorth.hasAssets) ? (
+          <div className="card" style={{ marginTop: 10, marginBottom: 10 }}>
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+              <div>
+                <div className="small muted">Net worth (incl. assets & debts) · {base}</div>
+                <div style={{ fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 800, marginTop: 2 }}>
+                  {formatMoney(netWorth.net, base)}
+                </div>
+              </div>
+              <div className="row small muted" style={{ gap: 12, flexWrap: 'wrap' }}>
+                <span>invest {formatMoney(netWorth.investments, base)}</span>
+                {netWorth.hasAssets && <span>other assets {formatMoney(netWorth.assets, base)}</span>}
+                {netWorth.hasDebt && <span className="neg">debts −{formatMoney(netWorth.liabilities, base)}</span>}
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {/* P&L is undefined until at least one account has a recorded
             invested capital. Surface that as an actionable prompt so the
