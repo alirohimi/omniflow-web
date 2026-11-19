@@ -33,12 +33,55 @@ const COINGECKO_COIN_MAP: Record<string, string> = {
  *  index levels (daily, ~once a day), so the app's live quote must
  *  reference the SAME index — not a US-listed spot proxy that trades in a
  *  different currency on different hours. Values fetched here feed the
- *  crypto/ETF quote path; the PWA polls them on the same 60s cadence. */
+ *  crypto/ETF quote path; the PWA polls them on the same 60s cadence.
+ *
+ *  NOTE: These are INDEX/FUTURES reference levels, NOT per-unit ETF prices.
+ *  A StashAway CSPX fund unit is ~USD 840 (iShares Core S&P500 UCITS), but
+ *  ^GSPC is ~5,900 INDEX POINTS; a GLDM fund unit is ~USD 83 but GC=F is
+ *  ~2,650 USD/oz. Using the index level as the per-unit ETF price overstates
+ *  the value by 7–32x (the "messy calculation" bug). quote() guards against
+ *  this with a magnitude-vs-stored-price sanity check (see MAX_PRICE_RATIO)
+ *  and falls back to the stored per-unit price when the fetched quote is
+ *  implausible relative to the user's recorded entry price. */
 const STASHAWAY_INDEX_MAP: Record<string, string> = {
   CSPX:  '^GSPC', // S&P 500 (Developed Market / US sleeve)
   GLDM:  'GC=F',  // Gold (commodity sleeve)
   GLD:   'GC=F',  // user may type either gold ticker
 };
+
+/** StashAway money-market / short-T-bill funds that hold at par (or near-par
+ *  accrued). They are entered as `assetClass:'etf'` by the import helper but
+ *  are NOT tradable ETFs with a market price — fetching them from Yahoo
+ *  fails and the stale seed price (1.00 / 1.08 / 119.78) drives a fake P&L.
+ *  These symbols are valued at PAR (the unit IS the value), exactly like a
+ *  cash holding, so their P&L is honest (~0%, no seed-driven swing). */
+const PAR_FUNDS: ReadonlySet<string> = new Set([
+  'ABMINCT', // AmInvest Money Market / StashAway MY cash
+  'PRIMMAM', // PIMCO MMF / StashAway MY cash
+  'BB3M',    // 3-month US T-bill sleeve (StashAway USD cash yield)
+]);
+
+/**
+ * Live-quote sanity gate. A UCITS/ETF fund unit price is close to its
+ * index level ONLY when the fund happens to be priced per index point
+ * (rare). More often the fund price and the index differ by an order of
+ * magnitude (S&P500 index ~5,900 vs ETF ~840). When the fetched quote is
+ * more than this ratio above or below the user's stored per-unit entry
+ * price, the quote is almost certainly a reference index/commodity level
+ * rather than a tradable fund unit — so we reject it and use the stored
+ * price instead. This prevents a 7–32x overstatement of portfolio value.
+ */
+const MAX_PRICE_RATIO = 3;
+
+/** True when `quote` is a plausible per-unit price for a holding whose
+ *  recorded entry price is `stored`. A quote with no stored reference (or
+ *  a zero/NaN stored price) always passes — we have nothing to compare. */
+function plausiblePrice(quote: number, stored: number): boolean {
+  if (!Number.isFinite(stored) || stored <= 0) return true;
+  if (!Number.isFinite(quote) || quote <= 0) return false;
+  const ratio = quote / stored;
+  return ratio >= 1 / MAX_PRICE_RATIO && ratio <= MAX_PRICE_RATIO;
+}
 
 /** Per-fetch wall clock. A junk symbol (or a flaky network) must never be
  *  allowed to hang the whole batch: after this many ms the request aborts
@@ -123,13 +166,45 @@ export class MarketDataService {
         case 'equity-us':
         case 'equity-local':
         case 'etf':
+          // StashAway money-market / T-bill funds hold at par — value them
+          // like cash (unit = value) instead of fetching a non-tradable
+          // ticker from Yahoo, which would fall back to a stale seed price.
+          if (PAR_FUNDS.has(h.symbol.toUpperCase())) {
+            return {
+              ok: true,
+              symbol: h.symbol,
+              assetClass: h.assetClass,
+              price: 1,
+              currency: h.holdingCurrency,
+              source: 'manual',
+              asOf: Date.now(),
+              note: 'money-market fund valued at par',
+            };
+          }
           // StashAway model sleeves (CSPX, GLDM, …) price off the BROAD
           // INDEX their UCITS fund tracks — the same reference the fund's
           // daily NAV uses. Fetch THAT index so our live quote tracks the
           // same thing (minimal drift = fund fee + FX only, no instrument
           // mismatch). Unknown symbols fall through to the raw ticker.
-          const idx = STASHAWAY_INDEX_MAP[h.symbol.toUpperCase()] ?? h.symbol;
-          return await this.yahooQuote(idx, h.holdingCurrency, h.symbol);
+          {
+            const idx = STASHAWAY_INDEX_MAP[h.symbol.toUpperCase()] ?? h.symbol;
+            const yq = await this.yahooQuote(idx, h.holdingCurrency, h.symbol);
+            // Magnitude guard — ONLY when the symbol was mapped to a BROAD
+            // REFERENCE INDEX (CSPX → ^GSPC). A reference index can be an
+            // order of magnitude off from the fund's per-unit price (5,900
+            // index vs ~840 ETF unit). If the fetched index level is
+            // implausible vs the user's recorded price, reject it and use
+            // the stored price — a 7–32x overstatement is worse than a
+            // stale-but-right number. A plain ticker (idx === symbol) has no
+            // index-vs-unit mismatch, so the guard is skipped for it.
+            if (idx !== h.symbol) {
+              if (plausiblePrice(yq.price, h.currentPriceLocal)) return yq;
+              const f = fallback();
+              f.note = `live ${idx} level ${yq.price} ${yq.currency} is implausible vs stored ${h.currentPriceLocal}; using stored price`;
+              return f;
+            }
+            return yq;
+          }
         case 'gold':
           // Gold: track the spot reference the StashAway gold sleeve uses.
           // 'GC=F' = front-month COMEX gold futures (close proxy for spot).
@@ -138,7 +213,17 @@ export class MarketDataService {
           {
             const g = STASHAWAY_INDEX_MAP[h.symbol.toUpperCase()]
               ?? (h.symbol === 'GOLD' || h.symbol === 'GLD' || h.symbol === 'GLDM' ? 'GC=F' : h.symbol);
-            return await this.yahooQuote(g, h.holdingCurrency, h.symbol === g ? undefined : h.symbol);
+            const yq = await this.yahooQuote(g, h.holdingCurrency, h.symbol === g ? undefined : h.symbol);
+            // Magnitude guard only when g is a REFERENCE (GC=F / index), not
+            // the user's own gold ticker — a futures level (~4,074) vs a fund
+            // unit (~83) is a 49x mismatch that would overstate the position.
+            if (g !== h.symbol) {
+              if (plausiblePrice(yq.price, h.currentPriceLocal)) return yq;
+              const f = fallback();
+              f.note = `live ${g} level ${yq.price} ${yq.currency} is implausible vs stored ${h.currentPriceLocal}; using stored price`;
+              return f;
+            }
+            return yq;
           }
         case 'cash':
         case 'mmf':
@@ -282,4 +367,4 @@ export class MarketDataService {
 // services/index.ts (`marketDataService`). Do NOT import the class here
 // and construct a second instance — that is the bug this file used to ship.
 
-export { baseCoin };
+export { baseCoin, plausiblePrice, PAR_FUNDS };

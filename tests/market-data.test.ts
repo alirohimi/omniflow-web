@@ -7,7 +7,7 @@
 // ============================================================================
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { MarketDataService, baseCoin } from '../src/services/marketData';
+import { MarketDataService, baseCoin, plausiblePrice } from '../src/services/marketData';
 import { CurrencyExchangeService } from '../src/services/fx';
 import type { InvestmentHolding } from '../src/domain/types';
 
@@ -198,26 +198,81 @@ describe('MarketDataService.quote — equity (yahoo)', () => {
     expect(r.note).toContain('yahoo 502');
   });
 
-  it('a StashAway CSPX sleeve fetches the S&P 500 index, not a US spot proxy', async () => {
+  it('a StashAway CSPX sleeve fetches the S&P 500 index when the quote is plausible vs stored', async () => {
+    // Stored price 5,000; fetched index 5,600 → ratio 1.12 (within 3x) → keep.
     const f = mockFetchJson(yahooBody(5_600, 'USD'));
-    const r = await svc.quote(h({ assetClass: 'etf', symbol: 'CSPX', holdingCurrency: 'USD' }));
+    const r = await svc.quote(
+      h({ assetClass: 'etf', symbol: 'CSPX', holdingCurrency: 'USD', currentPriceLocal: 5_000, averageEntryPrice: 5_000 }),
+    );
     expect(r.ok).toBe(true);
     expect(r.price).toBe(5_600);
-    // The UI keeps the user's symbol; the fetch went to the reference index.
     expect(r.symbol).toBe('CSPX');
     expect(String(f.mock.calls[0][0])).toContain('%5EGSPC');
     expect(r.note).toContain('tracked ^GSPC index');
   });
 
-  it('a StashAway GLDM gold sleeve fetches the gold spot reference (GC=F)', async () => {
-    const f = mockFetchJson(yahooBody(4_074.9, 'USD'));
-    const r = await svc.quote(h({ assetClass: 'gold', symbol: 'GLDM', holdingCurrency: 'USD' }));
+  it('a StashAway CSPX sleeve REJECTS an implausible index level vs a per-unit fund price', async () => {
+    // The "messy calculation" bug: ^GSPC index ~5,600 vs a fund unit ~840.
+    // Ratio 6.6 > MAX_PRICE_RATIO(3) → reject the index, use the stored price.
+    mockFetchJson(yahooBody(5_600, 'USD'));
+    const r = await svc.quote(
+      h({ assetClass: 'etf', symbol: 'CSPX', holdingCurrency: 'USD', currentPriceLocal: 840, averageEntryPrice: 840 }),
+    );
     expect(r.ok).toBe(true);
-    expect(r.price).toBe(4_074.9);
-    expect(String(f.mock.calls[0][0])).toContain('GC%3DF');
-    expect(r.symbol).toBe('GLDM');
+    expect(r.price).toBe(840); // stored, NOT the 5,600 index
+    expect(r.source).toBe('cache');
+    expect(r.note).toContain('implausible');
+  });
+
+  it('a StashAway GLDM gold sleeve REJECTS a futures level that overstates the fund unit', async () => {
+    // GC=F ~4,074 vs a gold fund unit ~83 → ratio ~49 → reject, use stored.
+    mockFetchJson(yahooBody(4_074.9, 'USD'));
+    const r = await svc.quote(
+      h({ assetClass: 'gold', symbol: 'GLDM', holdingCurrency: 'USD', currentPriceLocal: 83, averageEntryPrice: 81.72 }),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.price).toBe(83); // stored, not the futures level
+    expect(r.note).toContain('implausible');
+  });
+
+  it('a StashAway GLDM gold sleeve accepts a plausible quote', async () => {
+    mockFetchJson(yahooBody(4_074.9, 'USD'));
+    const r = await svc.quote(
+      h({ assetClass: 'gold', symbol: 'GLDM', holdingCurrency: 'USD', currentPriceLocal: 3_900, averageEntryPrice: 3_900 }),
+    );
+    expect(r.price).toBe(4_074.9); // ratio 1.05 → kept
   });
 });
+
+describe('MarketDataService.quote — money-market funds valued at par', () => {
+  it.each(['ABMINCT', 'PRIMMAM', 'BB3M'])(
+    '%s (entered as etf) is valued at par, no Yahoo fetch',
+    async (sym) => {
+      const f = mockFetchJson({});
+      const r = await svc.quote(h({ assetClass: 'etf', symbol: sym, holdingCurrency: 'MYR', currentPriceLocal: 1, averageEntryPrice: 0.96 }));
+      expect(r.ok).toBe(true);
+      expect(r.price).toBe(1);
+      expect(r.currency).toBe('MYR');
+      expect(r.source).toBe('manual');
+      expect(r.note).toContain('par');
+      expect(f).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe('plausiblePrice — magnitude guard', () => {
+  it('accepts a quote within 3x of the stored price', () => {
+    expect(plausiblePrice(840, 800)).toBe(true);
+    expect(plausiblePrice(800, 1_000)).toBe(true);
+    expect(plausiblePrice(1_000, 300)).toBe(false); // 3.3x
+    expect(plausiblePrice(300, 1_000)).toBe(false); // 0.3x
+  });
+  it('accepts anything when there is no stored reference', () => {
+    expect(plausiblePrice(5_000, 0)).toBe(true);
+    expect(plausiblePrice(5_000, NaN)).toBe(true);
+  });
+});
+
 
 describe('MarketDataService.batch — parallel + degradation', () => {
   it('dedupes duplicate symbols: 3 holdings of BTC → 1 coingecko fetch', async () => {
