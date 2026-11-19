@@ -513,26 +513,14 @@ export function InvestmentsView() {
             <div className="pf-hero-lbl">Investment value · {base}</div>
             <div className="pf-hero-num">{formatMoney(displayTotalValueBase, base)}</div>
             <div className="pf-hero-delta">
-              {/* Primary KPI: P&L against "Total invested" (initialDepositBase).
-                  This is the broker's own cost basis (StashAway "Net deposits",
-                  HATA "Total invested"). A per-holding averageEntryPrice for a
-                  robo-advisor fund is the fund's NAV at purchase — not the
-                  user's actual cash cost — so it understates the true loss.
-                  Fall back to cost-basis P&L only when no account has a
-                  recorded initial balance yet. */}
-              {pnl && pnl.totalPnlBase != null ? (
-                <span className={`pf-delta ${pnl.totalPnlBase >= 0 ? 'up' : 'down'}`}>
-                  {pnl.totalPnlBase >= 0 ? '▲' : '▼'}{' '}
-                  {Math.abs(pnl.totalPnlBase) > 0
-                    ? `${pnl.totalPnlBase >= 0 ? '+' : '−'}${formatMoney(Math.abs(pnl.totalPnlBase), base)}`
-                    : 'Breakeven'}
-                  {pnl.totalReturnPct != null ? (
-                    <span className="pf-delta-pct">
-                      {pnl.totalReturnPct >= 0 ? '+' : '−'}{Math.abs(pnl.totalReturnPct).toFixed(1)}%
-                    </span>
-                  ) : null}
-                </span>
-              ) : pnl && pnl.totalCostPnlBase != null ? (
+              {/* Primary KPI: P&L against the AUTO-DERIVED total cost basis —
+                  the sum of each portfolio's own holdings (entry price ×
+                  units). No manual pasting: "total invested" is computed
+                  per account from its holdings, so it always reflects what's
+                  actually in each portfolio. `totalCostPnlBase` is value
+                  minus that sum. Only when no holding has a cost basis yet
+                  do we fall back to the manual initial-deposit P&L. */}
+              {pnl && pnl.totalCostPnlBase != null ? (
                 <span className={`pf-delta ${pnl.totalCostPnlBase >= 0 ? 'up' : 'down'}`}>
                   {pnl.totalCostPnlBase >= 0 ? '▲' : '▼'}{' '}
                   {Math.abs(pnl.totalCostPnlBase) > 0
@@ -541,6 +529,18 @@ export function InvestmentsView() {
                   {pnl.totalCostReturnPct != null ? (
                     <span className="pf-delta-pct">
                       {pnl.totalCostReturnPct >= 0 ? '+' : '−'}{Math.abs(pnl.totalCostReturnPct).toFixed(1)}%
+                    </span>
+                  ) : null}
+                </span>
+              ) : pnl && pnl.totalPnlBase != null ? (
+                <span className={`pf-delta ${pnl.totalPnlBase >= 0 ? 'up' : 'down'}`}>
+                  {pnl.totalPnlBase >= 0 ? '▲' : '▼'}{' '}
+                  {Math.abs(pnl.totalPnlBase) > 0
+                    ? `${pnl.totalPnlBase >= 0 ? '+' : '−'}${formatMoney(Math.abs(pnl.totalPnlBase), base)}`
+                    : 'Breakeven'}
+                  {pnl.totalReturnPct != null ? (
+                    <span className="pf-delta-pct">
+                      {pnl.totalReturnPct >= 0 ? '+' : '−'}{Math.abs(pnl.totalReturnPct).toFixed(1)}%
                     </span>
                   ) : null}
                 </span>
@@ -608,31 +608,32 @@ export function InvestmentsView() {
         {/* Per-account P&L breakdown — shows each account's gain/loss
             side by side so the user can see "StashAway −RM X · HATA ±RM Y"
             instead of a blended aggregate that masks which leg is down.
-            Primary metric: pnlBase (value − initialDepositBase = broker's
-            "Total invested / Net deposits"). This is the correct cost basis
-            for a robo-advisor account like StashAway where per-holding
-            averageEntryPrice is the fund NAV, not your actual cash cost.
-            Falls back to costPnlBase (value − sum of entry prices) when no
-            initial balance has been recorded for that account. */}
+            Primary metric: costPnlBase (value − auto-derived total cost,
+            i.e. the sum of each account's own holdings' entry price × units).
+            No manual pasting of a broker "total invested" figure. Falls
+            back to pnlBase (value − recorded initial deposit) only when an
+            account has no holding-level cost basis yet. */}
         {pnl && pnl.accounts.length > 0 && (
           <div className="card" style={{ marginBottom: 14 }}>
-            <div style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Per-account P&L</div>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Per-account P&amp;L</div>
             {pnl.accounts.map((l) => {
-              // Prefer pnlBase (against "Total invested") when the user has
-              // recorded an initial balance; fall back to costPnlBase.
-              const pnlVal = l.pnlBase != null ? l.pnlBase : l.costPnlBase;
-              const retPct = l.pnlBase != null ? l.returnPct : l.costReturnPct;
+              // Primary: costPnlBase — the AUTO-DERIVED cost basis, i.e. the
+              // sum of each account's own holdings (entry price × units).
+              // No manual pasting of a broker "total invested" figure. Only
+              // when an account has no holding-level cost basis yet do we
+              // fall back to the recorded initial deposit.
+              const pnlVal = l.costPnlBase != null ? l.costPnlBase : l.pnlBase;
+              const retPct = l.costPnlBase != null ? l.costReturnPct : l.returnPct;
               const neg = (pnlVal ?? 0) < 0;
-              // Flag accounts falling back to cost basis — their "Total
-              // invested" isn't set, so the number shown is the fund NAV
-              // cost, not the broker's cash cost (the real loss).
-              const usingFallback = l.pnlBase == null;
+              // Flag accounts with no per-holding cost basis — the number
+              // shown is the manual initial deposit, not the holding sum.
+              const usingFallback = l.costPnlBase == null;
               return (
                 <div key={l.account.id} className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
                   <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600, fontSize: 14 }}>
                     {l.account.platformName}
-                    {usingFallback && l.costPnlBase != null && (
-                      <span className="small" style={{ color: 'var(--warn, #d4a76a)', marginLeft: 6, fontWeight: 500 }}>· est.</span>
+                    {usingFallback && l.pnlBase != null && (
+                      <span className="small" style={{ color: 'var(--warn, #d4a76a)', marginLeft: 6, fontWeight: 500 }}>· deposit</span>
                     )}
                   </div>
                   <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
@@ -702,11 +703,12 @@ export function InvestmentsView() {
                  is what makes the number read green when it should be red.
         */}
         {(() => {
-          // Primary: P&L vs "Total invested" (the broker's own cost basis).
-          // Fallback: cost-basis P&L when no account has a recorded initial
-          // balance yet (no initialDepositBase, no contributions).
-          const primaryPnl = pnl?.totalPnlBase != null ? pnl.totalPnlBase : pnl?.totalCostPnlBase ?? null;
-          const primaryRet = pnl?.totalPnlBase != null ? pnl.totalReturnPct : pnl?.totalCostReturnPct ?? null;
+          // Primary: the AUTO-DERIVED cost basis — the sum of each portfolio's
+          // own holdings (entry price × units). No manual pasting of a broker
+          // "total invested" figure. Only fall back to the recorded
+          // initial-deposit P&L when no holding has a cost basis yet.
+          const primaryPnl = pnl?.totalCostPnlBase != null ? pnl.totalCostPnlBase : pnl?.totalPnlBase ?? null;
+          const primaryRet = pnl?.totalCostPnlBase != null ? pnl.totalCostReturnPct : pnl?.totalReturnPct ?? null;
           const totalValue = live.portfolio?.totalValueBase ?? 0;
           const totalCost = live.portfolio?.totalCostBase ?? 0;
 
@@ -727,7 +729,7 @@ export function InvestmentsView() {
               <div className="card" style={{ marginBottom: 10 }}>
                 <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                   <div>
-                    <div className="small muted">{pnl?.totalPnlBase != null ? 'GAIN / LOSS vs. total invested' : 'GAIN / LOSS vs. total cost'}</div>
+                    <div className="small muted">{pnl?.totalCostPnlBase != null ? 'GAIN / LOSS vs. your cost (auto from holdings)' : 'GAIN / LOSS vs. total invested'}</div>
                     {primaryPnl != null ? (
                       <div style={{ fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 800, letterSpacing: '-0.5px', marginTop: 4, color: isLoss ? 'var(--bad)' : isGain ? 'var(--good)' : 'var(--text)' }}>
                         {isLoss ? '▼ Losing' : isGain ? '▲ Gaining' : '— Breakeven'}
@@ -758,15 +760,6 @@ export function InvestmentsView() {
                       {auditGaps.slice(0, 4).map((g) => g.symbol).join(', ')}{auditGaps.length > 4 ? ` +${auditGaps.length - 4} more` : ''}
                     </span>
                     <button className="btn sm" onClick={() => openCostBasis()}>Set cost basis from broker</button>
-                  </div>
-                )}
-                {/* Fast-path button always available so you can (re)sync your
-                    real StashAway/Broker "total invested" at any time. */}
-                {vault.accounts.length > 0 && (
-                  <div className="row small" style={{ marginTop: 10, gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <button className="btn ghost sm" onClick={() => openCostBasis()}>
-                      Use my broker's "total invested" (StashAway) instead of per-holding entry prices
-                    </button>
                   </div>
                 )}
               </div>
