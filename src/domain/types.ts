@@ -76,6 +76,13 @@ export interface InvestmentAccount {
    *  fund-NAV prices drift from the broker's own daily valuation.
    *  Optional so old encrypted blobs heal cleanly. */
   brokerValueBase?: number;
+  /** Optional: this account is a SUB-VIEW / slice of another account that
+   *  already includes it (e.g. StashAway "Monthly Portofolio" is a sleeve
+   *  inside "Simple"). Set to true so the hero total + per-account P&L sum
+   *  do NOT double-count it. The account still shows in the per-account
+   *  list for visibility, but its value is excluded from the aggregate.
+   *  Optional so old encrypted blobs heal cleanly. */
+  isSubView?: boolean;
 }
 
 /** A holding inside an account. */

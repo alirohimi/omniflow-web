@@ -161,6 +161,34 @@ describe('portfolioPnl', () => {
     expect(pnl.totalReturnPct).toBeCloseTo((31_827.57 / 6_000) * 100, 3);
   });
 
+  it('excludes sub-view (sleeve) accounts from aggregate totals', () => {
+    // "Simple" (47,361) is the parent; "Monthly" (37,827) is a sleeve inside
+    // it (isSubView). Summing both double-counts. The aggregate total must
+    // exclude the sleeve, but the per-account list still contains it.
+    const parent: InvestmentAccount = {
+      id: 'acc-parent', platformName: 'Simple', accountType: 'robo',
+      baseCurrencyValue: 0, lastUpdated: NOW,
+      initialDepositBase: 43_367.01, brokerValueBase: 47_361.0,
+    };
+    const sleeve: InvestmentAccount = {
+      id: 'acc-sleeve', platformName: 'Monthly Portofolio', accountType: 'robo',
+      baseCurrencyValue: 0, lastUpdated: NOW,
+      initialDepositBase: 39_401.83, brokerValueBase: 37_827.57, isSubView: true,
+    };
+    const summary = fakeSummary([
+      { id: 'acc-parent', value: 47_361.0, cost: 0 },
+      { id: 'acc-sleeve', value: 37_827.57, cost: 0 },
+    ]);
+    const pnl = portfolioPnl(summary, [parent, sleeve], []);
+    // Both lines still present for the per-account display…
+    expect(pnl.accounts).toHaveLength(2);
+    // …but the aggregate total only counts the parent (sleeve excluded).
+    expect(pnl.totalCapitalBase).toBe(43_367.01);
+    expect(pnl.totalPnlBase).toBeCloseTo(47_361.0 - 43_367.01, 4);
+    // missingCapitalCount also ignores the sleeve.
+    expect(pnl.missingCapitalCount).toBe(0);
+  });
+
   it('falls back to the live quote when no broker value is recorded', () => {
     const acc: InvestmentAccount = {
       id: 'acc-1', platformName: 'Stashaway Monthly Portofolio', accountType: 'robo',

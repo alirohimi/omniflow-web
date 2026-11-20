@@ -166,14 +166,19 @@ export function portfolioPnl(
     };
   });
 
-  const withCapital = lines.filter((l) => l.pnlBase != null);
+  // Aggregate totals EXCLUDE sub-view accounts (sleeves already contained in
+  // another account, e.g. StashAway "Monthly" inside "Simple"). They still
+  // appear in `lines` for the per-account display, but summing them again
+  // double-counts the money and inflates the hero total.
+  const countable = lines.filter((l) => !l.account.isSubView);
+  const withCapital = countable.filter((l) => l.pnlBase != null);
   const totalValueBase = withCapital.length > 0
     ? withCapital.reduce((s, l) => s + l.valueBase, 0)
     : 0;
   const totalCapitalBase = withCapital.reduce((s, l) => s + l.capitalBase, 0);
   const totalPnlBase = totalCapitalBase > 0 ? totalValueBase - totalCapitalBase : null;
   const totalReturnPct = totalCapitalBase > 0 ? (totalPnlBase! / totalCapitalBase) * 100 : null;
-  const missingCapitalCount = lines.filter((l) => l.pnlBase == null && l.valueBase > 0).length;
+  const missingCapitalCount = countable.filter((l) => l.pnlBase == null && l.valueBase > 0).length;
 
   // P&L against TOTAL COST BASIS — matches a broker (StashAway) 1:1: total
   // value minus the sum of every holding's entry cost. This is the
@@ -186,7 +191,7 @@ export function portfolioPnl(
   const costValueBase = Number.isFinite(summary.totalValueBase) ? summary.totalValueBase : 0;
   const totalCostPnlBase = totalCostBase > 0 ? costValueBase - totalCostBase : null;
   const totalCostReturnPct = totalCostBase > 0 ? (costValueBase - totalCostBase) / totalCostBase * 100 : null;
-  const missingCostBasisCount = lines.filter((l) => l.costBase <= 0 && l.valueBase > 0).length;
+  const missingCostBasisCount = countable.filter((l) => l.costBase <= 0 && l.valueBase > 0).length;
 
   return {
     totalValueBase,

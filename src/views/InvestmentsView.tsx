@@ -179,8 +179,12 @@ export function InvestmentsView() {
    *  quote-derived total when no broker values are recorded. */
   const displayTotalValueBase = useMemo(() => {
     if (!pnl) return live.portfolio?.totalValueBase ?? 0;
+    // A sub-view account (a sleeve already contained in another account,
+    // e.g. StashAway "Monthly" inside "Simple") must NOT be summed again —
+    // it would double-count. Exclude isSubView accounts from the total.
     const brokerTotal = pnl.accounts.reduce((s, l) => {
       const a = l.account;
+      if (a.isSubView) return s;
       const v =
         Number.isFinite(a.brokerValueBase) && (a.brokerValueBase ?? 0) > 0
           ? a.brokerValueBase!
@@ -638,6 +642,9 @@ export function InvestmentsView() {
                     {l.account.platformName}
                     {usingFallback && l.costPnlBase != null && (
                       <span className="small" style={{ color: 'var(--warn, #d4a76a)', marginLeft: 6, fontWeight: 500 }}>· est.</span>
+                    )}
+                    {l.account.isSubView && (
+                      <span className="small" style={{ color: 'var(--muted, #8b93a7)', marginLeft: 6, fontWeight: 500 }}>· sleeve</span>
                     )}
                   </div>
                   <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
