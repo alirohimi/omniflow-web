@@ -549,7 +549,7 @@ export function InvestmentsView() {
                   ) : null}
                 </span>
               ) : (
-                <span className="muted small">No cost basis recorded yet</span>
+                <span className="muted small">No amount put in yet</span>
               )}
             </div>
           </div>
@@ -598,14 +598,14 @@ export function InvestmentsView() {
             all accounts are covered. */}
         {pnl && pnl.totalCapitalBase === 0 && vault.accounts.length > 0 && (
           <div className="row small" style={{ marginBottom: 8, gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span className="chip sm">No starting amount set yet</span>
-            <span className="muted grow">Set how much you initially put into each account — then you'll see your profit or loss.</span>
-            <button className="btn sm" onClick={() => openDeposit()}>Set starting amount</button>
+            <span className="chip sm">No amount set yet</span>
+            <span className="muted grow">Add how much you’ve put in so we can show your profit or loss.</span>
+            <button className="btn sm" onClick={() => openDeposit()}>Add amount put in</button>
           </div>
         )}
         {pnl && pnl.missingCapitalCount > 0 && pnl.totalCapitalBase > 0 && (
           <div className="row small muted" style={{ marginBottom: 8 }}>
-            Showing profit/loss for {pnl.accounts.length - pnl.missingCapitalCount} of {pnl.accounts.length} accounts · {pnl.missingCapitalCount} missing a starting amount
+            Showing profit/loss for {pnl.accounts.length - pnl.missingCapitalCount} of {pnl.accounts.length} accounts · {pnl.missingCapitalCount} still missing an amount
           </div>
         )}
 
@@ -725,9 +725,17 @@ export function InvestmentsView() {
           const totalCost = live.portfolio?.totalCostBase ?? 0;
 
           // Cost-basis audit: non-par holdings with no recorded entry price.
+          // For robo-advisor accounts this is EXPECTED — P&L is measured at
+          // the account level (value − amount invested), not per holding, so a
+          // missing per-fund buy price is fine. We still surface it for direct
+          // broker accounts where a real cost basis is expected.
+          const roboAccountIds = new Set(
+            vault.accounts.filter((a) => a.accountType === 'robo').map((a) => a.id),
+          );
           const auditGaps = vault.holdings
             .filter((h) => h.assetClass !== 'cash' && h.assetClass !== 'mmf')
             .filter((h) => !(Number.isFinite(h.averageEntryPrice) && h.averageEntryPrice > 0))
+            .filter((h) => !roboAccountIds.has(h.accountId))
             .map((h) => ({ symbol: h.symbol, units: h.units }));
 
           const isLoss = primaryPnl != null && primaryPnl < 0;
@@ -741,10 +749,10 @@ export function InvestmentsView() {
               <div className="card" style={{ marginBottom: 10 }}>
                 <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                   <div>
-                    <div className="small muted">{pnl?.totalPnlBase != null ? 'GAIN / LOSS vs. total invested' : 'GAIN / LOSS vs. total cost'}</div>
+                    <div className="small muted">{pnl?.totalPnlBase != null ? 'Profit or loss vs. what you put in' : 'Profit or loss vs. what you paid'}</div>
                     {primaryPnl != null ? (
                       <div style={{ fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 800, letterSpacing: '-0.5px', marginTop: 4, color: isLoss ? 'var(--bad)' : isGain ? 'var(--good)' : 'var(--text)' }}>
-                        {isLoss ? '▼ Losing' : isGain ? '▲ Gaining' : '— Breakeven'}
+                        {isLoss ? '▼ You’re down' : isGain ? '▲ You’re up' : '— Break-even'}
                         <span style={{ fontSize: 18, marginLeft: 8, fontWeight: 700 }}>
                           {isLoss ? '−' : isGain ? '+' : ''}{formatMoney(Math.abs(primaryPnl), base)}
                         </span>
@@ -755,10 +763,10 @@ export function InvestmentsView() {
                         )}
                       </div>
                     ) : (
-                      <div className="muted" style={{ fontSize: 16, marginTop: 4 }}>No cost basis recorded yet</div>
+                      <div className="muted" style={{ fontSize: 16, marginTop: 4 }}>Add how much you’ve put in to see your profit or loss</div>
                     )}
                     <div className="small muted" style={{ marginTop: 6 }}>
-                      Value {formatMoney(totalValue, base)} · Cost {formatMoney(totalCost, base)}
+                      Value {formatMoney(totalValue, base)} · Invested {pnl?.totalPnlBase != null ? formatMoney(pnl.totalCapitalBase ?? 0, base) : formatMoney(totalCost, base)}
                     </div>
                   </div>
                 </div>
@@ -771,7 +779,7 @@ export function InvestmentsView() {
                     <span className="muted grow">
                       {auditGaps.slice(0, 4).map((g) => g.symbol).join(', ')}{auditGaps.length > 4 ? ` +${auditGaps.length - 4} more` : ''}
                     </span>
-                    <button className="btn sm" onClick={() => openCostBasis()}>Set cost basis from broker</button>
+                    <button className="btn sm" onClick={() => openCostBasis()}>Use amount from broker</button>
                   </div>
                 )}
               </div>
@@ -1008,6 +1016,7 @@ export function InvestmentsView() {
                     )}
                     {line?.depositBase != null && (
                       <span className={`ret ${pnlGood ? 'pos' : pnlBad ? 'neg' : ''}`}>
+                        {(pnlGood ? 'Up ' : pnlBad ? 'Down ' : 'Break-even ')}
                         {line.pnlBase! >= 0 ? '+' : ''}{formatMoney(line.pnlBase!, base)} ({line.depositReturnPct! >= 0 ? '+' : ''}{line.depositReturnPct!.toFixed(1)}%)
                       </span>
                     )}
@@ -1026,20 +1035,23 @@ export function InvestmentsView() {
                     </div>
                   ) : null}
                   <div className="acc-foot">
-                    <span className="muted small">{a.accountType} · {holdings} holding{holdings === 1 ? '' : 's'}</span>
+                    <span className="muted small">
+                      {a.accountType === 'robo' ? 'Robo-advisor' : a.accountType}
+                      {holdings > 0 ? ` · ${holdings} ${holdings === 1 ? 'asset' : 'assets'}` : ''}
+                    </span>
                     <button
                       className={`dep-edit${hasDeposit ? '' : ' empty'}`}
                       onClick={() => openDeposit(a.id)}
-                      title="Edit starting capital"
+                      title="How much have you put in total?"
                     >
                       {hasDeposit ? (
                         <>
-                          <span className="val">{formatMoney(a.initialDepositBase!, base)}</span>
+                          <span className="val">Put in {formatMoney(a.initialDepositBase!, base)}</span>
                           <IPencil size={13} />
                         </>
                       ) : (
                         <>
-                          Set starting amount
+                          How much have you put in?
                           <IPlus size={13} />
                         </>
                       )}
@@ -1082,6 +1094,17 @@ export function InvestmentsView() {
             Pick an account above, then add your assets to it.
           </div>
         )}
+        {(() => {
+          const target = vault.accounts.find((a) => a.id === accountId);
+          return target && target.accountType === 'robo' ? (
+            <div className="small muted" style={{ marginBottom: 8 }}>
+              Robo-advisor account — your profit/loss is calculated from the total
+              you've put in vs the current value, so you don't need exact buy prices.
+              Add the funds for the allocation breakdown; leave “Buy price” blank if
+              you don't know it.
+            </div>
+          ) : null;
+        })()}
         <div className="cols">
           <label className="field"><span>Symbol</span>
             <input
@@ -1188,12 +1211,16 @@ export function InvestmentsView() {
         </Modal>
       )}
 
-      {/* Set starting capital — one input per account, drives the P&L KPI. */}
+      {/* "How much have you put in" — one input per account. This is the
+          account-level P&L baseline (value − amount-in), matching how
+          StashAway / robo-advisors report gain/loss: they don't track a
+          per-fund buy price, only the total you've deposited. */}
       {depOpen && (
-        <Modal title="Set starting amounts" onClose={() => setDepOpen(false)}>
+        <Modal title="How much have you put in?" onClose={() => setDepOpen(false)}>
           <p className="small muted" style={{ marginTop: 0 }}>
-            How much you first put into each account. This is the baseline for calculating your profit or loss.
-            Leave blank to clear.
+            Enter the total you've deposited into each account. This is what your
+            profit or loss is measured against — the same "amount invested" your
+            broker (like StashAway) shows. Leave blank to clear.
           </p>
           {vault.accounts.length === 0 && (
             <div className="row small muted" style={{ marginBottom: 8 }}>
@@ -1230,18 +1257,18 @@ export function InvestmentsView() {
         </Modal>
       )}
 
-      {/* Set cost basis fast path — enter your broker's "total invested" per
-          account; it back-fills each holding's entry price proportionally so
-          cost-basis P&L matches StashAway without editing every row. */}
+      {/* "Use amount from broker" fast path — enter your broker's "total
+          invested" per account; it sets the account-level P&L baseline
+          (amount you put in) and optionally pins the broker's current value,
+          so P&L matches StashAway without editing each fund's price. */}
       {costOpen && (
-        <Modal title="Set cost basis from broker" onClose={() => setCostOpen(false)}>
+        <Modal title="Use your broker’s amount" onClose={() => setCostOpen(false)}>
           <p className="small muted" style={{ marginTop: 0 }}>
-            <b>Total invested</b> = your broker's cost basis (StashAway "Net deposits", HATA
-            "Total invested") — NOT the current value. It back-fills each holding's entry price
-            so P&amp;L matches your broker. <b>Current value from broker</b> (optional) = the
-            exact value your broker displays for that account — when set, P&amp;L uses THAT
-            number directly, so it matches StashAway 1:1 even when live quotes / FX drift.
-            Leave a field blank to skip.
+            <b>Amount invested</b> = the total you’ve put in (StashAway’s “Net deposits”,
+            HATA’s “Total invested”) — not the current value. This sets your profit/loss
+            baseline. <b>Current value from broker</b> (optional) = the exact value your
+            broker shows — when set, P&amp;L uses THAT number directly so it matches your
+            broker even when our live prices drift. Leave a field blank to skip.
           </p>
           {vault.accounts.length === 0 && (
             <div className="row small muted" style={{ marginBottom: 8 }}>
@@ -1267,7 +1294,7 @@ export function InvestmentsView() {
                   <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                     <div style={{ minWidth: 0 }}>
                       <div className="title" style={{ fontWeight: 600, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.platformName}</div>
-                      <div className="small muted" style={{ marginTop: 2 }}>{a.accountType} · live value {formatMoney(liveValue, base)}</div>
+                      <div className="small muted" style={{ marginTop: 2 }}>{a.accountType === 'robo' ? 'robo-advisor' : a.accountType} · live value {formatMoney(liveValue, base)}</div>
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
