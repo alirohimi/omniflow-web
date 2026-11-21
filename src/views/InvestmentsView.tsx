@@ -61,6 +61,9 @@ export function InvestmentsView() {
   /** Cash/MMF rows: a single "amount in holding currency" input (price pinned
    *  to par=1, symbol pinned to the class). Non-par rows ignore this. */
   const [amount, setAmount] = useState('');
+  /** Robo-advisor value entry: "this fund is worth X" — stores units=1,
+   *  entry=X so the fund's current value is exactly X. No buy price needed. */
+  const [roboValue, setRoboValue] = useState('');
   /** The holding (with its current values) being edited in the modal pop-up. */
   const [editHolding, setEditHolding] = useState<InvestmentHolding | null>(null);
   const parMode = isParClass(assetClass);
@@ -290,6 +293,42 @@ export function InvestmentsView() {
     store.addHolding(payload);
     setSymbol(''); setUnits(''); setEntry(''); setAmount('');
     toast(`Added ${finalSymbol} to target account`);
+  };
+
+  // The currently-selected target account, and whether it's a robo-advisor
+  // (drives the simplified value-entry flow — no buy price, no units).
+  const targetAcct = vault.accounts.find((a) => a.id === accountId) ?? null;
+  const targetIsRobo = targetAcct?.accountType === 'robo';
+
+  /** Robo-advisor value entry: the user knows "this fund is worth X", not a
+   *  per-share price. Store it as units=1 × price=X so the holding's current
+   *  value is exactly X and it feeds the allocation breakdown. P&L still
+   *  comes from the account's "amount put in", not these rows. */
+  const addRoboValue = async () => {
+    const v = parseFloat(roboValue);
+    if (!accountId || !isFinite(v) || v <= 0) return;
+    // A free-typed symbol is best; default to the fund type when blank.
+    const sym = symbol.trim().toUpperCase() || (assetClass === 'equity-local' ? 'LOCAL EQUITY FUND' : assetClass === 'equity-us' ? 'GLOBAL EQUITY FUND' : 'FUND');
+    let priceBase = v;
+    try {
+      const rates = await fxService.latest(base);
+      if (holdCur !== base) {
+        const r = fxService.toBase(1, holdCur, rates);
+        priceBase = Number.isFinite(r) ? v * r : v;
+      }
+    } catch { /* offline: value is already in holding currency */ }
+    store.addHolding({
+      accountId,
+      symbol: sym,
+      assetClass,
+      holdingCurrency: holdCur,
+      units: 1,
+      averageEntryPrice: v,          // 1 × X = X — current value is exactly X
+      currentPriceLocal: v,
+      currentPriceBase: priceBase,
+    });
+    setSymbol(''); setRoboValue('');
+    toast(`Added ${sym} (worth ${v.toLocaleString()}) to ${targetAcct!.platformName}`);
   };
 
   // ---- Edit-holding modal (pop-up) state + save -----------------------------
@@ -908,19 +947,42 @@ export function InvestmentsView() {
         })()}
       </div>
 
-      <Disclosure id="accounts" title={`Your Accounts${vault.accounts.length ? ` (${vault.accounts.length})` : ''}`}>
+      <Disclosure id="accounts" title={`Your Accounts${vault.accounts.length ? ` (${vault.accounts.length})` : ''}`} defaultOpen={vault.accounts.length === 0}>
       <div className="card">
+        {/* One-tap presets so a fresh user doesn't have to type the broker
+            name — the top platforms map to the right account type, and the
+            "amount you've put in" is right there instead of a buried modal. */}
+        <div className="row small" style={{ gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+          {[
+            { name: 'StashAway', type: 'robo' as const },
+            { name: 'Hata', type: 'robo' as const },
+            { name: 'Luno', type: 'crypto' as const },
+            { name: 'IBKR', type: 'broker' as const },
+            { name: 'Moomoo', type: 'broker' as const },
+            { name: 'Cash', type: 'cash' as const },
+          ].map((p) => (
+            <button
+              key={p.name}
+              type="button"
+              className="chip sm"
+              aria-pressed={platform.toLowerCase() === p.name.toLowerCase() && acctType === p.type}
+              onClick={() => { setPlatform(p.name); setAcctType(p.type); }}
+            >
+              + {p.name}
+            </button>
+          ))}
+        </div>
         <div className="cols">
-          <label className="field"><span>Where is it? (Luno, IBKR, Moomoo…)</span>
-            <input value={platform} onChange={(e) => setPlatform(e.target.value)} placeholder="StashAway" />
+          <label className="field"><span>Where is it?</span>
+            <input value={platform} onChange={(e) => setPlatform(e.target.value)} placeholder="StashAway, Luno, IBKR…" />
           </label>
           <label className="field"><span>Type</span>
             <ThemedSelect
               value={acctType}
               onChange={(v: string) => setAcctType(v as typeof acctType)}
               options={[
+                { value: 'robo', label: 'Robo-advisor (StashAway)' },
                 { value: 'broker', label: 'Broker' },
-                { value: 'robo', label: 'Robo-advisor' },
                 { value: 'crypto', label: 'Crypto wallet' },
                 { value: 'cash', label: 'Cash / MMF' },
                 { value: 'other', label: 'Other' },
@@ -928,11 +990,11 @@ export function InvestmentsView() {
               aria-label="Account type"
             />
           </label>
-          <label className="field"><span>Starting amount ({base}, optional)</span>
-            <input type="number" inputMode="decimal" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="5000" />
+          <label className="field"><span>How much have you put in? ({base})</span>
+            <input type="number" inputMode="decimal" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="e.g. 15000" />
           </label>
         </div>
-        <button className="btn ghost sm" onClick={addAccount} style={{ width: '100%' }}><IPlus size={16} /> Create account</button>
+        <button className="btn sm" onClick={addAccount} style={{ width: '100%', marginTop: 10 }}><IPlus size={16} /> Create account</button>
 
         {vault.accounts.length > 0 && (
           <div className="list">
@@ -1094,63 +1156,93 @@ export function InvestmentsView() {
             Pick an account above, then add your assets to it.
           </div>
         )}
-        {(() => {
-          const target = vault.accounts.find((a) => a.id === accountId);
-          return target && target.accountType === 'robo' ? (
+        {targetIsRobo ? (
+          <>
             <div className="small muted" style={{ marginBottom: 8 }}>
-              Robo-advisor account — your profit/loss is calculated from the total
-              you've put in vs the current value, so you don't need exact buy prices.
-              Add the funds for the allocation breakdown; leave “Buy price” blank if
-              you don't know it.
+              StashAway — just say what it is and how much it’s worth now. No buy
+              price needed; your profit/loss comes from the total you’ve put in.
             </div>
-          ) : null;
-        })()}
-        <div className="cols">
-          <label className="field"><span>Symbol</span>
-            <input
-              value={symbol}
-              onChange={(e) => setSymbol(e.target.value)}
-              disabled={parMode}
-              placeholder={parMode ? 'auto (par)' : 'AAPL / CSPX.L / BTC / 1155.KL'}
-            />
-          </label>
-          <label className="field"><span>What is it?</span>
-            <ThemedSelect
-              value={assetClass}
-              onChange={(v: string) => pickAssetClass(v as typeof assetClass)}
-              options={ASSET_CLASSES.map((c) => ({
-                value: c,
-                label: c === 'equity-us' ? 'US stocks' : c === 'equity-local' ? 'Local stocks' : c === 'etf' ? 'ETF / Fund' : c === 'crypto' ? 'Crypto' : c === 'cash' ? 'Cash' : 'Money market',
-              }))}
-              aria-label="What is it?"
-            />
-          </label>
-          {parMode ? (
-            <label className="field"><span>Amount ({holdCur})</span>
-              <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="1500" />
+            <div className="cols">
+              <label className="field"><span>What is it?</span>
+                <ThemedSelect
+                  value={assetClass}
+                  onChange={(v: string) => pickAssetClass(v as typeof assetClass)}
+                  options={ASSET_CLASSES.map((c) => ({
+                    value: c,
+                    label: c === 'equity-us' ? 'Global stocks' : c === 'equity-local' ? 'Malaysian stocks' : c === 'etf' ? 'ETF / Fund' : c === 'crypto' ? 'Crypto' : c === 'cash' ? 'Cash' : 'Money market',
+                  }))}
+                  aria-label="What is it?"
+                />
+              </label>
+              <label className="field"><span>Name (optional)</span>
+                <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="e.g. Global Equity Fund" />
+              </label>
+              <label className="field"><span>How much is it worth? ({holdCur})</span>
+                <input type="number" inputMode="decimal" value={roboValue} onChange={(e) => setRoboValue(e.target.value)} placeholder="e.g. 4200" />
+              </label>
+              <label className="field"><span>Currency</span>
+                <ThemedSelect
+                  value={holdCur}
+                  onChange={(v: string) => setHoldCur(v)}
+                  options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))}
+                  aria-label="Currency"
+                />
+              </label>
+            </div>
+            <button className={`btn sm${accountId ? '' : ' ghost'}`} style={{ width: '100%', marginTop: 10 }} disabled={!accountId} onClick={() => void addRoboValue()}>
+              {accountId ? 'Add to portfolio' : 'Pick an account first'}
+            </button>
+          </>
+        ) : (
+          <div className="cols">
+            <label className="field"><span>Symbol</span>
+              <input
+                value={symbol}
+                onChange={(e) => setSymbol(e.target.value)}
+                disabled={parMode}
+                placeholder={parMode ? 'auto (par)' : 'AAPL / CSPX.L / BTC / 1155.KL'}
+              />
             </label>
-          ) : (
-            <>
-              <label className="field"><span>How many</span>
-                <input type="number" inputMode="decimal" value={units} onChange={(e) => setUnits(e.target.value)} placeholder="10" />
+            <label className="field"><span>What is it?</span>
+              <ThemedSelect
+                value={assetClass}
+                onChange={(v: string) => pickAssetClass(v as typeof assetClass)}
+                options={ASSET_CLASSES.map((c) => ({
+                  value: c,
+                  label: c === 'equity-us' ? 'US stocks' : c === 'equity-local' ? 'Local stocks' : c === 'etf' ? 'ETF / Fund' : c === 'crypto' ? 'Crypto' : c === 'cash' ? 'Cash' : 'Money market',
+                }))}
+                aria-label="What is it?"
+              />
+            </label>
+            {parMode ? (
+              <label className="field"><span>Amount ({holdCur})</span>
+                <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="1500" />
               </label>
-              <label className="field"><span>Buy price</span>
-                <input type="number" inputMode="decimal" value={entry} onChange={(e) => setEntry(e.target.value)} placeholder="12.40" />
-              </label>
-            </>
-          )}
-          <label className="field"><span>Currency</span>
-            <ThemedSelect
-              value={holdCur}
-              onChange={(v: string) => setHoldCur(v)}
-              options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))}
-              aria-label="Currency"
-            />
-          </label>
-        </div>
-        <button className={`btn sm${accountId ? '' : ' ghost'}`} style={{ width: '100%' }} disabled={!accountId} onClick={() => void addHolding()}>
-          {accountId ? 'Add asset' : 'Pick an account first'}
-        </button>
+            ) : (
+              <>
+                <label className="field"><span>How many</span>
+                  <input type="number" inputMode="decimal" value={units} onChange={(e) => setUnits(e.target.value)} placeholder="10" />
+                </label>
+                <label className="field"><span>Buy price</span>
+                  <input type="number" inputMode="decimal" value={entry} onChange={(e) => setEntry(e.target.value)} placeholder="12.40" />
+                </label>
+              </>
+            )}
+            <label className="field"><span>Currency</span>
+              <ThemedSelect
+                value={holdCur}
+                onChange={(v: string) => setHoldCur(v)}
+                options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))}
+                aria-label="Currency"
+              />
+            </label>
+          </div>
+        )}
+        {!targetIsRobo && (
+          <button className={`btn sm${accountId ? '' : ' ghost'}`} style={{ width: '100%', marginTop: 10 }} disabled={!accountId} onClick={() => void addHolding()}>
+            {accountId ? 'Add asset' : 'Pick an account first'}
+          </button>
+        )}
       </div>
       </Disclosure>
 
