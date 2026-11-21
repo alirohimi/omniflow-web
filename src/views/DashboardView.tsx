@@ -166,7 +166,7 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
     : (liveCt || staleCt || unctd)
       ? `${liveCt} live · ${staleCt} cached${unctd ? ` · ${unctd} uncounted` : ''}`
       : '';
-  const fxMeta = live.fxSource === 'offline' ? 'offline FX (cached/approx)' : '';
+  const fxMeta = live.fxSource === 'offline' ? ' · prices may be slightly delayed' : '';
   const metaLine = [quoteMeta, fxMeta].filter(Boolean).join(' · ');
 
   const emRes = useMemo(
@@ -239,22 +239,23 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
 
   return (
     <>
-      <h2 className="section-title">Portfolio</h2>
+      <h2 className="section-title">Net Worth</h2>
       <div className="card hero-card">
         <div className="hero">
           <div>
-            <div className="hero-lbl">Net worth · {base}</div>
+            <div className="hero-lbl">Your total money · {base}</div>
             <div className="hero-num">{formatMoney(nw.net, base)}</div>
             <div className="hero-sub">
               {nw.hasData ? (
-                <span className="muted">
-                  invest {formatMoney(nw.investments, base)}
-                  {nw.assets > 0 ? ` · assets ${formatMoney(nw.assets, base)}` : ''}
-                  {liabilities.length > 0 ? ` · debt −${formatMoney(nw.liabilities, base)}` : ''}
-                </span>
+                <>
+                  <span className="muted">invested {formatMoney(nw.investments, base)} · other assets {formatMoney(nw.assets, base)}</span>
+                  {liabilities.length > 0 ? (
+                    <span className="muted"> · debts −{formatMoney(nw.liabilities, base)}</span>
+                  ) : null}
+                </>
               ) : (
                 <button className="link" onClick={() => onOpenTab('investments')}>
-                  No data yet — add your first portfolio or asset
+                  No data yet — add your first asset
                 </button>
               )}
             </div>
@@ -311,15 +312,14 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
       {aiLoading ? (
         <div className="card ai-summary-card" style={{ marginBottom: 16 }}>
           <span className="spinner sm" />
-          <span className="muted" style={{ marginLeft: 8, fontSize: 13 }}>Generating AI summary…</span>
+          <span className="muted" style={{ marginLeft: 8, fontSize: 13 }}>Getting your summary…</span>
         </div>
       ) : aiSummary ? (
         <div className="card ai-summary-card" style={{ marginBottom: 16 }}>
           <div className="ai-summary-header">
             <span className={`chip sm ${aiSummary.source === 'llm' ? 'ok' : ''}`}>
-              {aiSummary.source === 'llm' ? `AI · ${store.llmConfig?.provider ?? 'LLM'}` : 'On-device'}
+              {aiSummary.source === 'llm' ? 'AI summary' : 'Quick summary'}
             </span>
-            {aiSummary.degraded && <span className="muted small">degraded - key call failed</span>}
           </div>
           <p className="ai-summary-text">
             <Markdown text={aiSummary.text} className="md" />
@@ -327,16 +327,16 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
         </div>
       ) : null}
 
-      <h2 className="section-title">Spending pace</h2>
+      <h2 className="section-title">Spending</h2>
       <div className="card">
         <div className="hero">
           <div>
             <div className="hero-lbl">Spent this month</div>
             <div className="hero-num">{formatMoney(spentThisMonth, base)}</div>
             <div className="hero-sub">
-              <span className="muted">{sym}{dailyPace.toFixed(0)}/d pace</span>
+              <span className="muted">About {sym}{dailyPace.toFixed(0)}/day</span>
               {' · '}
-              <span className="muted">proj {formatMoney(projected, base)}</span>
+              <span className="muted">Expected {formatMoney(projected, base)}</span>
             </div>
           </div>
         </div>
@@ -345,11 +345,11 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
 
       {forecast && (
         <>
-          <h2 className="section-title">Cashflow forecast</h2>
+          <h2 className="section-title">Money coming in</h2>
           <div className="card">
             <div className="hero">
               <div>
-                <div className="hero-lbl">Net {sym}{forecast.netPerMonth >= 0 ? '+' : ''}{forecast.netPerMonth.toFixed(0)}/mo</div>
+                <div className="hero-lbl">Net monthly money</div>
                 <div className="hero-num">
                   {nw.net < 0 && forecast.netPerMonth < 0
                     ? 'Already in the red'
@@ -403,9 +403,9 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
                 <div className="row" style={{ marginBottom: 4 }}>
                   <span className="grow small" style={{ fontWeight: 600 }}>{b.category}</span>
                   <span className="small muted">
-                    {sym}{b.spent.toFixed(0)} / {sym}{b.cap.toFixed(0)}
-                    {b.status === 'over' && <span className="neg" style={{ marginLeft: 6 }}>over</span>}
-                    {b.status === 'watch' && <span style={{ marginLeft: 6, color: '#e08600' }}>watch</span>}
+                    {sym}{b.spent.toFixed(0)} of {sym}{b.cap.toFixed(0)}
+                    {b.status === 'over' && <span className="neg" style={{ marginLeft: 6 }}>over budget</span>}
+                    {b.status === 'watch' && <span style={{ marginLeft: 6, color: '#e08600' }}>almost there</span>}
                   </span>
                 </div>
                 <div className="bar" style={{ height: 5 }}>
@@ -422,7 +422,7 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
 
       {nextBills.length > 0 && (
         <>
-          <h2 className="section-title">Upcoming bills</h2>
+          <h2 className="section-title">Bills coming up</h2>
           <div className="card list">
             {nextBills.map((b) => (
               <div key={b.id} className="item">
@@ -430,10 +430,10 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
                   <div className="title">{b.name}</div>
                   <div className="meta">
                     {b.daysUntilDue < 0
-                      ? `overdue ${-b.daysUntilDue}d`
+                      ? `${-b.daysUntilDue} days overdue`
                       : b.daysUntilDue === 0
                         ? 'due today'
-                        : `due in ${b.daysUntilDue}d`}
+                        : `due in ${b.daysUntilDue} days`}
                   </div>
                 </div>
                 <div className="amt">{sym}{b.baseAmount.toFixed(0)}</div>
@@ -445,17 +445,17 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
 
       {debtPlan && debtPlan.months > 0 && (
         <>
-          <h2 className="section-title">Debt payoff</h2>
+          <h2 className="section-title">Debts</h2>
           <div className="card">
             <div className="hero">
               <div>
-                <div className="hero-lbl">{debtPlan.strategy} plan</div>
+                <div className="hero-lbl">Time to be debt-free</div>
                 <div className="hero-num">
-                  {Math.floor(debtPlan.months / 12) > 0 ? `${Math.floor(debtPlan.months / 12)}y ${debtPlan.months % 12}mo` : `${debtPlan.months} mo`}
+                  {Math.floor(debtPlan.months / 12) > 0 ? `${Math.floor(debtPlan.months / 12)} years ${debtPlan.months % 12} months` : `${debtPlan.months} months`}
                 </div>
                 <div className="hero-sub">
                   <span className="muted">
-                    {liabilities.length} debt(s) · {sym}{debtPlan.totalInterest.toFixed(0)} total interest
+                    {liabilities.length} debt{liabilities.length === 1 ? '' : 's'} · {sym}{debtPlan.totalInterest.toFixed(0)} interest total
                   </span>
                 </div>
               </div>
@@ -464,19 +464,19 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
         </>
       )}
 
-      <h2 className="section-title">Emergency reserve</h2>
+      <h2 className="section-title">Safety net</h2>
       <div className="card">
         <div className="hero">
           <div>
-            <div className="hero-lbl">Reserve · {base}</div>
+            <div className="hero-lbl">Emergency fund · {base}</div>
             <div className="hero-num">{formatMoney(emRes.reserve, base)}</div>
             <div className="hero-sub">
               {emRes.lines.length === 0 ? (
-                <span className="muted">No lines yet — add one under Portfolio</span>
+                <span className="muted">No safety net yet — add some under Portfolio</span>
               ) : emRes.coverageMonths != null ? (
-                <span>{emRes.coverageMonths.toFixed(1)} mo of spending</span>
+                <span>{emRes.coverageMonths.toFixed(1)} months of essentials covered</span>
               ) : (
-                <span className="muted">Coverage not measurable yet</span>
+                <span className="muted">Not enough data yet</span>
               )}
             </div>
           </div>
@@ -488,8 +488,8 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
           <>
             <div className="bar"><i style={{ width: `${Math.min(100, Math.round(emRes.pctOfTarget))}%` }} /></div>
             <div className="small muted" style={{ marginTop: 6 }}>
-              {Math.min(100, Math.round(emRes.pctOfTarget))}% of {formatMoney(emRes.target, base)} target
-              {emRes.gap > 0 ? ` · gap ${formatMoney(emRes.gap, base)}` : ' · target met'}
+              {Math.min(100, Math.round(emRes.pctOfTarget))}% of your {formatMoney(emRes.target, base)} goal
+              {emRes.gap > 0 ? ` · still need ${formatMoney(emRes.gap, base)}` : ' · goal reached!'}
             </div>
           </>
         ) : null}
@@ -497,7 +497,7 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
 
       {advice.length > 0 && (
         <>
-          <h2 className="section-title">Advisor</h2>
+          <h2 className="section-title">Tips</h2>
           <div className="list">
             {advice.map((a) => (
               <div className="item" key={a.id}>
@@ -514,7 +514,7 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
 
       {topExpenses.length > 0 && (
         <>
-          <h2 className="section-title">Top this week</h2>
+          <h2 className="section-title">Biggest spending this week</h2>
           <div className="list">
             {topExpenses.map((e) => (
               <div className="item" key={e.id}>

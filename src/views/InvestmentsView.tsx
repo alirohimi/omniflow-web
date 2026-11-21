@@ -509,7 +509,7 @@ export function InvestmentsView() {
 
   return (
     <>
-      <h2 className="section-title">Portfolio</h2>
+      <h2 className="section-title">Your Portfolio</h2>
       <div className="card">
         {/* Hero band: big number + tinted delta + a 3-cell stats strip. */}
         <div className="pf-hero">
@@ -598,14 +598,14 @@ export function InvestmentsView() {
             all accounts are covered. */}
         {pnl && pnl.totalCapitalBase === 0 && vault.accounts.length > 0 && (
           <div className="row small" style={{ marginBottom: 8, gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span className="chip sm">No capital recorded yet</span>
-            <span className="muted grow">Set a starting balance per account, or log a contribution — P&L then measures against what you've actually invested.</span>
-            <button className="btn sm" onClick={() => openDeposit()}>Set starting capital</button>
+            <span className="chip sm">No starting amount set yet</span>
+            <span className="muted grow">Set how much you initially put into each account — then you'll see your profit or loss.</span>
+            <button className="btn sm" onClick={() => openDeposit()}>Set starting amount</button>
           </div>
         )}
         {pnl && pnl.missingCapitalCount > 0 && pnl.totalCapitalBase > 0 && (
           <div className="row small muted" style={{ marginBottom: 8 }}>
-            P&L covers {pnl.accounts.length - pnl.missingCapitalCount} of {pnl.accounts.length} accounts · {pnl.missingCapitalCount} without a recorded balance
+            Showing profit/loss for {pnl.accounts.length - pnl.missingCapitalCount} of {pnl.accounts.length} accounts · {pnl.missingCapitalCount} missing a starting amount
           </div>
         )}
 
@@ -789,7 +789,7 @@ export function InvestmentsView() {
           return (
             <div className="row" style={{ marginTop: 10 }}>
               <span className="small muted">
-                {'P&L on recorded capital: '}<span className={pnl >= 0 ? 'pos' : 'neg'}>{pnl >= 0 ? '+' : ''}{formatMoney(pnl, base)} ({pct >= 0 ? '+' : ''}{pct.toFixed(1)}%)</span>
+                {'Profit / Loss: '}<span className={pnl >= 0 ? 'pos' : 'neg'}>{pnl >= 0 ? '+' : ''}{formatMoney(pnl, base)} ({pct >= 0 ? '+' : ''}{pct.toFixed(1)}%)</span>
                 {withDep.length < (live.portfolio?.byAccount.length ?? 0) && (
                   <span> · {withDep.length} of {live.portfolio?.byAccount.length} accounts</span>
                 )}
@@ -800,11 +800,11 @@ export function InvestmentsView() {
         {live.error && <div className="small neg" style={{ marginTop: 10 }}>{live.error}</div>}
         <div className="row small muted" style={{ marginTop: 10 }}>
           <span>
-            FX: {live.fxSource === 'offline' ? 'offline (cached/approx)' : live.fxSource === 'daily' ? 'daily (broker-anchored)' : (live.fxSource ?? '…')} · live {live.portfolio?.liveQuoteCount ?? 0} · cached {live.portfolio?.staleQuoteCount ?? 0}
+            {live.fxSource === 'offline' ? 'Prices may be delayed' : 'Live prices'}
+            {live.portfolio && live.portfolio.uncounted > 0 && (
+              <span> · {live.portfolio.uncounted} asset{live.portfolio.uncounted === 1 ? '' : 's'} without a price</span>
+            )}
           </span>
-          {live.portfolio && live.portfolio.uncounted > 0 && (
-            <span style={{ color: 'var(--text-2, #9aa4b8)' }}> · {live.portfolio.uncounted} uncounted</span>
-          )}
           <button className="btn ghost sm" onClick={live.refresh} disabled={live.loading}><IRefresh size={16} /> Refresh</button>
         </div>
       </div>
@@ -900,10 +900,10 @@ export function InvestmentsView() {
         })()}
       </div>
 
-      <Disclosure id="accounts" title={`Accounts${vault.accounts.length ? ` (${vault.accounts.length})` : ''}`}>
+      <Disclosure id="accounts" title={`Your Accounts${vault.accounts.length ? ` (${vault.accounts.length})` : ''}`}>
       <div className="card">
         <div className="cols">
-          <label className="field"><span>Platform (Luno, IBKR, Moomoo…)</span>
+          <label className="field"><span>Where is it? (Luno, IBKR, Moomoo…)</span>
             <input value={platform} onChange={(e) => setPlatform(e.target.value)} placeholder="StashAway" />
           </label>
           <label className="field"><span>Type</span>
@@ -920,7 +920,7 @@ export function InvestmentsView() {
               aria-label="Account type"
             />
           </label>
-          <label className="field"><span>Starting capital ({base}, optional)</span>
+          <label className="field"><span>Starting amount ({base}, optional)</span>
             <input type="number" inputMode="decimal" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="5000" />
           </label>
         </div>
@@ -960,13 +960,13 @@ export function InvestmentsView() {
                           onClick: () => (reserved ? unReserve(a.id) : toReserve(a.id)),
                         },
                         {
-                          label: 'Set as target',
+                          label: 'Add assets here',
                           icon: ICheck,
                           hide: isTarget,
                           onClick: () => setAccountId(a.id),
                         },
                       {
-                          label: 'Edit starting capital',
+                          label: 'Edit starting amount',
                           icon: IPlus,
                           onClick: () => openDeposit(a.id),
                         },
@@ -1039,7 +1039,7 @@ export function InvestmentsView() {
                         </>
                       ) : (
                         <>
-                          Set starting capital
+                          Set starting amount
                           <IPlus size={13} />
                         </>
                       )}
@@ -1065,21 +1065,21 @@ export function InvestmentsView() {
       {/* Contributions come first: this is how the client records money
           actually invested (with a date) so P&L stays honest. Standing
           auto-invest plans follow (the client's own scheduler, optional). */}
-      <h2 className="section-title">Contributions</h2>
+      <h2 className="section-title">Money in</h2>
       <ContributionPanel fx={live.fx} />
 
       {vault.autoInvests && vault.autoInvests.length > 0 && (
         <>
-          <h2 className="section-title">Auto-invest plans</h2>
+          <h2 className="section-title">Auto-invest</h2>
           <AutoInvestPanel fx={live.fx} />
         </>
       )}
 
-      <Disclosure id="add-holding" title="Add holding" defaultOpen={accountId !== ''}>
+      <Disclosure id="add-holding" title="Add an asset" defaultOpen={accountId !== ''}>
       <div className="card">
         {!accountId && (
           <div className="small muted" style={{ marginBottom: 8 }}>
-            Set a target account above, then add holdings to it.
+            Pick an account above, then add your assets to it.
           </div>
         )}
         <div className="cols">
@@ -1091,12 +1091,15 @@ export function InvestmentsView() {
               placeholder={parMode ? 'auto (par)' : 'AAPL / CSPX.L / BTC / 1155.KL'}
             />
           </label>
-          <label className="field"><span>Asset class</span>
+          <label className="field"><span>What is it?</span>
             <ThemedSelect
               value={assetClass}
               onChange={(v: string) => pickAssetClass(v as typeof assetClass)}
-              options={ASSET_CLASSES.map((c) => ({ value: c, label: c }))}
-              aria-label="Asset class"
+              options={ASSET_CLASSES.map((c) => ({
+                value: c,
+                label: c === 'equity-us' ? 'US stocks' : c === 'equity-local' ? 'Local stocks' : c === 'etf' ? 'ETF / Fund' : c === 'crypto' ? 'Crypto' : c === 'cash' ? 'Cash' : 'Money market',
+              }))}
+              aria-label="What is it?"
             />
           </label>
           {parMode ? (
@@ -1105,25 +1108,25 @@ export function InvestmentsView() {
             </label>
           ) : (
             <>
-              <label className="field"><span>Units</span>
+              <label className="field"><span>How many</span>
                 <input type="number" inputMode="decimal" value={units} onChange={(e) => setUnits(e.target.value)} placeholder="10" />
               </label>
-              <label className="field"><span>Avg entry</span>
+              <label className="field"><span>Buy price</span>
                 <input type="number" inputMode="decimal" value={entry} onChange={(e) => setEntry(e.target.value)} placeholder="12.40" />
               </label>
             </>
           )}
-          <label className="field"><span>Holding cur</span>
+          <label className="field"><span>Currency</span>
             <ThemedSelect
               value={holdCur}
               onChange={(v: string) => setHoldCur(v)}
               options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))}
-              aria-label="Holding currency"
+              aria-label="Currency"
             />
           </label>
         </div>
         <button className={`btn sm${accountId ? '' : ' ghost'}`} style={{ width: '100%' }} disabled={!accountId} onClick={() => void addHolding()}>
-          {accountId ? 'Add holding' : 'Set a target account first'}
+          {accountId ? 'Add asset' : 'Pick an account first'}
         </button>
       </div>
       </Disclosure>
@@ -1140,7 +1143,7 @@ export function InvestmentsView() {
                 placeholder={mPar ? 'auto (par)' : 'AAPL / CSPX.L / BTC / 1155.KL'}
               />
             </label>
-            <label className="field"><span>Asset class</span>
+            <label className="field"><span>What is it?</span>
               <ThemedSelect
                 value={mClass}
                 onChange={(v: string) => {
@@ -1148,8 +1151,11 @@ export function InvestmentsView() {
                   setMClass(c);
                   if (isParClass(c)) setMSymbol(parSymbolFor(c));
                 }}
-                options={ASSET_CLASSES.map((c) => ({ value: c, label: c }))}
-                aria-label="Asset class"
+                options={ASSET_CLASSES.map((c) => ({
+                  value: c,
+                  label: c === 'equity-us' ? 'US stocks' : c === 'equity-local' ? 'Local stocks' : c === 'etf' ? 'ETF / Fund' : c === 'crypto' ? 'Crypto' : c === 'cash' ? 'Cash' : 'Money market',
+                }))}
+                aria-label="What is it?"
               />
             </label>
             {mPar ? (
@@ -1158,20 +1164,20 @@ export function InvestmentsView() {
               </label>
             ) : (
               <>
-                <label className="field"><span>Units</span>
+                <label className="field"><span>How many</span>
                   <input type="number" inputMode="decimal" value={mUnits} onChange={(e) => setMUnits(e.target.value)} placeholder="10" />
                 </label>
-                <label className="field"><span>Avg entry</span>
+                <label className="field"><span>Buy price</span>
                   <input type="number" inputMode="decimal" value={mEntry} onChange={(e) => setMEntry(e.target.value)} placeholder="12.40" />
                 </label>
               </>
             )}
-            <label className="field"><span>Holding cur</span>
+            <label className="field"><span>Currency</span>
               <ThemedSelect
                 value={mCur}
                 onChange={(v: string) => setMCur(v)}
                 options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))}
-                aria-label="Holding currency"
+                aria-label="Currency"
               />
             </label>
           </div>
@@ -1184,10 +1190,10 @@ export function InvestmentsView() {
 
       {/* Set starting capital — one input per account, drives the P&L KPI. */}
       {depOpen && (
-        <Modal title="Set starting capital" onClose={() => setDepOpen(false)}>
+        <Modal title="Set starting amounts" onClose={() => setDepOpen(false)}>
           <p className="small muted" style={{ marginTop: 0 }}>
-            The amount you initially invested in each account. P&amp;L on capital compares your live
-            value against this. Leave a field blank to clear it.
+            How much you first put into each account. This is the baseline for calculating your profit or loss.
+            Leave blank to clear.
           </p>
           {vault.accounts.length === 0 && (
             <div className="row small muted" style={{ marginBottom: 8 }}>
@@ -1329,43 +1335,38 @@ export function InvestmentsView() {
                 base,
                 rateToBase,
               );
-              const isLive = q?.source === 'coingecko' || q?.source === 'yahoo';
               const ret = ok && cost > 0 ? ((val - cost) / cost) * 100 : 0;
+              const pnl = ok && cost > 0 ? val - cost : 0;
               const par = isParClass(h.assetClass);
               const price = q?.price ?? h.currentPriceBase;
-              const showPrice = par
-                ? 'par'
-                : Number.isFinite(price) ? sym + price!.toFixed(3) : '—';
               const showVal = ok ? sym + val.toFixed(0) : '—';
-              const showRet = ok && cost > 0 ? ` ${ret >= 0 ? '+' : ''}${ret.toFixed(1)}%` : '';
-              const note = !ok ? ' · uncounted (corrupt/no FX rate)' : '';
+              const showPnl = ok && cost > 0 && !par ? (pnl >= 0 ? '+' : '') + sym + pnl.toFixed(0) + ` (${ret >= 0 ? '+' : ''}${ret.toFixed(1)}%)` : '';
               return (
                 <div className="item" key={h.id}>
                   <div className="grow">
-                    <div className="title">{h.symbol} <span className="muted small">× {Number.isFinite(h.units) ? h.units : '—'} {h.holdingCurrency}</span></div>
+                    <div className="title">{h.symbol} <span className="muted small">× {Number.isFinite(h.units) ? h.units : '—'}</span></div>
                     <div className="meta">
-                      {h.assetClass} · {q ? (isLive ? `live ${new Date(q.asOf).toLocaleString()}` : `cached ${new Date(q.asOf).toLocaleDateString()}`) : 'no quote'}
-                      {' '}· {showPrice}{note}
+                      {!par && cost > 0 ? <span className={pnl >= 0 ? 'pos' : 'neg'}>{showPnl}</span> : null}
+                      {ok ? '' : ' · no price found'}
                     </div>
                   </div>
                   <div className="amt">
                     {showVal}
-                    <span className={ret >= 0 ? 'pos small' : 'neg small'}>{showRet}</span>
                   </div>
                   <button
                     className="edit"
-                    title={`Edit ${h.symbol} holding`}
-                    aria-label={`Edit ${h.symbol} holding`}
+                    title={`Edit ${h.symbol}`}
+                    aria-label={`Edit ${h.symbol}`}
                     onClick={() => startEdit(h)}
                   >
                     <IPencil size={16} />
                   </button>
                   <DelButton
-                    label={`Delete ${h.symbol} holding`}
+                    label={`Delete ${h.symbol}`}
                     onConfirm={() => {
                       store.deleteHolding(h.id);
                       if (editHolding?.id === h.id) closeEdit();
-                      toast(`Deleted ${h.symbol} holding`);
+                      toast(`Deleted ${h.symbol}`);
                     }}
                   />
                 </div>

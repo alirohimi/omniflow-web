@@ -196,6 +196,17 @@ export function ExpensesView() {
 
   const clearFilters = () => { setQ(''); setCatF('all'); setRangeF('all'); setTypeF('expense'); };
 
+  // ---- History pagination: 15 per page (applied over the filtered/sorted
+  //      `visible` set, so paging respects any active filter or sort) ----------
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 15;
+  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const pageItems = visible.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  // Clamp the page when the filtered list shrinks (e.g. after delete)
+  useEffect(() => {
+    if (page >= totalPages) setPage(totalPages - 1);
+  }, [totalPages, page]);
+
   // Drives the "Select all" toolbar button state (check + "All selected").
   // Operates on the VISIBLE (filtered) set, so bulk-delete respects filters.
   const allPicked =
@@ -557,12 +568,12 @@ export function ExpensesView() {
 
   return (
     <>
-      <h2 className="section-title">Capture</h2>
+      <h2 className="section-title">Add a transaction</h2>
       <div className="card">
         <div className="row" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
           <div className="row" style={{ gap: 8 }}>
-            <span className="chip sm"><IReceipt size={14} /> Manual / Apple Pay</span>
-            <span className="chip sm"><IScan size={14} /> QR / e-wallet OCR</span>
+            <span className="chip sm"><IReceipt size={14} /> Type it in</span>
+            <span className="chip sm"><IScan size={14} /> Scan a receipt</span>
           </div>
           <button
             className={`btn ghost sm ${isIncome ? '' : 'off'}`}
@@ -637,7 +648,7 @@ export function ExpensesView() {
       </div>
 
       <div className="card">
-        <h3>Scan a payment / QR screenshot</h3>
+        <h3>Scan a receipt or payment screenshot</h3>
         <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }}
           onChange={(e) => e.target.files?.[0] && void runOcr(e.target.files[0])} />
         <button className="btn ghost sm" disabled={ocrBusy} onClick={() => fileRef.current?.click()}>
@@ -651,7 +662,7 @@ export function ExpensesView() {
       </div>
 
       <div className="card">
-        <h3>Import a statement (PDF)</h3>
+        <h3>Import a bank statement (PDF)</h3>
         <p className="small muted" style={{ marginTop: 0 }}>
           Monthly bank / card / e-wallet statement. The PDF is read on your
           device (never uploaded). Bank tables (Maybank/M2U, CIMB, RHB, card
@@ -986,7 +997,7 @@ export function ExpensesView() {
       )}
 
       <div className="list">
-        {visible.map((e) => {
+        {pageItems.map((e) => {
           const picked = selected.has(e.id);
           const isIncome = e.category === 'Income';
           return (
@@ -1006,8 +1017,7 @@ export function ExpensesView() {
                   {e.merchant}
                 </div>
                 <div className="meta">
-                  {e.category} · {e.paymentMethod} · {new Date(e.timestamp).toLocaleDateString()}
-                  {e.originalCurrency !== base ? ` · ${formatMoney(e.originalAmount, e.originalCurrency)}` : ''}
+                  {e.category} · {new Date(e.timestamp).toLocaleDateString()}
                 </div>
               </div>
               <div className={`amt${isIncome ? ' income' : ''}`}>{isIncome ? '+' : ''}{sym}{e.baseAmount.toFixed(2)}</div>
@@ -1024,8 +1034,19 @@ export function ExpensesView() {
         {visible.length === 0 && sorted.length > 0 && (
           <div className="empty">No transactions match your search / filters. <button type="button" className="hist-clear" onClick={clearFilters}>Clear them</button></div>
         )}
-        {sorted.length === 0 && <div className="empty">No expenses yet. Add one above, or ask the Coach to log one for you.</div>}
+        {sorted.length === 0 && <div className="empty">No expenses yet. Add one above.</div>}
       </div>
+
+      {/* Pagination controls */}
+      {totalPages > 1 && (
+        <div className="row" style={{ marginTop: 12, gap: 8, justifyContent: 'center' }}>
+          <button className="btn ghost sm" disabled={page === 0} onClick={() => setPage(0)}>«</button>
+          <button className="btn ghost sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>‹</button>
+          <span className="small muted">{page + 1} / {totalPages}</span>
+          <button className="btn ghost sm" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>›</button>
+          <button className="btn ghost sm" disabled={page >= totalPages - 1} onClick={() => setPage(totalPages - 1)}>»</button>
+        </div>
+      )}
     </>
   );
 }
