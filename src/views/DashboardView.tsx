@@ -19,8 +19,6 @@ import {
   bestStrategy,
 } from '../insights';
 import { IPlus, IRefresh, IChevron, ITrend, IWallet } from '../icons';
-import { fxService } from '../services';
-import { valueInBase } from '../ai/portfolio';
 import Markdown from '../components/Markdown';
 import { AreaChart } from '../components/AreaChart';
 
@@ -42,29 +40,18 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
 
   // Net-worth hero: full assets − liabilities.
   //
-  // The investments term uses the SAME valueInBase() math the Portfolio page
-  // uses (ai/portfolio.ts), so the Home "invest" figure and the Portfolio
-  // "Value" figure always reconcile. The old `investmentValueNow` in
-  // insights/networth.ts treated par rows (cash/MMF) with no stored price as
-  // 0, while valueInBase treats them as par (=1) — that was the source of the
-  // Home-vs-Portfolio duplication the user saw.
+  // The investments term uses live.portfolio.totalValueBase — the SAME
+  // allocation-aware buildPortfolio() math the Portfolio page's hero uses.
+  // This is critical: a naive per-holding valueInBase() loop (the old code)
+  // skipped the allocation scale factor for StashAway-style sleeves, so the
+  // Home "Net Worth" figure undercounted any allocation portfolio. Using the
+  // portfolio summary guarantees Home and Portfolio always reconcile.
   const nw = useMemo(
     () => {
-      const rateToBase = (code: string): number => {
-        if (code === base) return 1;
-        if (!live.fx) return 0;
-        try {
-          return fxService.toBase(1, code, live.fx);
-        } catch {
-          return 0;
-        }
-      };
-      let investments = 0;
-      for (const h of vault.holdings) {
-        const q = live.quotes[h.symbol];
-        const { valueBase, ok } = valueInBase(h, q, base, rateToBase);
-        if (ok) investments += valueBase;
-      }
+      // Allocation-aware investment value (sleeves scale by liveTicker/ref).
+      // buildPortfolio already applies FX + the allocation scale factor, so this
+      // reconciles 1:1 with the Portfolio page's hero.
+      const investments = live.portfolio?.totalValueBase ?? 0;
       const assetsSum = (vault.assets ?? []).reduce(
         (s, a) => s + (Number.isFinite(a.value) ? a.value : 0),
         0,
@@ -81,7 +68,7 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
         hasData: vault.holdings.length > 0 || (vault.assets?.length ?? 0) > 0 || liabilities.length > 0,
       };
     },
-    [vault, live.quotes, live.fx, base, liabilities],
+    [vault, live.portfolio, base, liabilities],
   );
 
   // K1 — cash-flow forecast: months-until-broke + 6-month projected balances.

@@ -68,32 +68,36 @@ export function InvestmentsView() {
   const [editHolding, setEditHolding] = useState<InvestmentHolding | null>(null);
   const parMode = isParClass(assetClass);
 
-  // ---- StashAway-style allocation portfolio builder ----
-  const [showStashaway, setShowStashaway] = useState(false);
-  const [saName, setSaName] = useState('');
-  const [saDeposit, setSaDeposit] = useState('');
-  const [saCur, setSaCur] = useState(base);
-  /** Per-class reference ticker price, seeded best-effort so each sleeve
-   *  tracks its REAL index. On offline/failed fetch the value stays 0 and the
-   *  store seeds refPrice=1 (flat) — the sleeve shows the slice until a live
-   *  quote lands on the next poll. */
+  // ---- StashAway / robo-advisor allocation mix ----
+  // When the account type is 'robo' the creation form shows this inline mix
+  // editor (pick the assets, set the % of each). Tapping the "+ StashAway"
+  // chip auto-sets type=robo, so one flow creates the account AND its asset
+  // allocation — no separate "New Portfolio" modal. Each sleeve's live value
+  // = pct/100 × net deposit × (liveTicker / refPrice); refPrice is seeded
+  // best-effort per class so the sleeve tracks its REAL index.
   const [saRefs, setSaRefs] = useState<Record<string, number>>({});
-  const [saRows, setSaRows] = useState<{ assetClass: InvestmentHolding['assetClass']; pct: string }[]>([
+  const [roboRows, setRoboRows] = useState<{ assetClass: InvestmentHolding['assetClass']; pct: string }[]>([
     { assetClass: 'equity-us', pct: '60' },
     { assetClass: 'gold', pct: '20' },
     { assetClass: 'cash', pct: '20' },
   ]);
-  const seedStashawayRefs = async (classes: string[]) => {
+  const isRobo = acctType === 'robo';
+  const seedRoboRefs = async (classes: string[]) => {
     await Promise.all(
       classes.map(async (c) => {
         if (saRefs[c] && saRefs[c] > 0) return; // already seeded
         try {
-          const p = await marketDataService.referencePriceFor(c, saCur);
+          const p = await marketDataService.referencePriceFor(c, base);
           if (p > 0) setSaRefs((prev) => ({ ...prev, [c]: p }));
-        } catch { /* offline -> leave 0, store will seed refPrice=1 */ }
+        } catch { /* offline -> leave 0, store seeds refPrice=1 (flat) */ }
       }),
     );
   };
+  // Seed the reference tickers whenever the mix editor becomes visible.
+  useEffect(() => {
+    if (isRobo) void seedRoboRefs(roboRows.map((r) => r.assetClass));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRobo]);
 
   const startEdit = (h: InvestmentHolding) => {
     openEdit(h);
@@ -171,10 +175,38 @@ export function InvestmentsView() {
     const name = platform.trim();
     if (!name) return;
     const d = parseFloat(deposit);
+    const depositOk = Number.isFinite(d) && d > 0;
+    if (isRobo) {
+      // StashAway / robo-advisor: create the account AND its asset allocation
+      // in one shot. Each row with a %>0 becomes a sleeve tracking its real
+      // index; net deposit = the amount you put in (the cost basis).
+      const sleeves = roboRows
+        .filter((r) => Number.isFinite(parseFloat(r.pct)) && parseFloat(r.pct) > 0)
+        .map((r) => ({
+          assetClass: r.assetClass,
+          allocationPct: parseFloat(r.pct),
+          refPrice: saRefs[r.assetClass] || 0, // 0 -> store seeds 1 (flat until live)
+        }));
+      if (sleeves.length === 0) {
+        toast('Pick at least one asset to allocate to');
+        return;
+      }
+      const id = store.addAllocationPortfolio({
+        platformName: name,
+        netDepositBase: depositOk ? d : 0,
+        holdingCurrency: base,
+        sleeves,
+      });
+      setAccountId(id);
+      setPlatform('');
+      setDeposit('');
+      toast(`Created ${name} — ${sleeves.length} asset${sleeves.length > 1 ? 's' : ''} tracking live prices`);
+      return;
+    }
     const id = store.addAccount({
       platformName: name,
       accountType: acctType,
-      initialDepositBase: Number.isFinite(d) && d > 0 ? d : undefined,
+      initialDepositBase: depositOk ? d : undefined,
     });
     setAccountId(id);
     setPlatform('');
@@ -230,27 +262,16 @@ export function InvestmentsView() {
   }, [pnl, live.portfolio]);
 
   /** Net worth reconciled to the Home page: investment value (the same
-   *  valueInBase math Home uses) + manual "other assets" − liabilities.
-   *  Showing this on the Portfolio hero is why the two pages' headline
-   *  numbers differ — Home counts debts + other assets, Portfolio was
-   *  investment-only. Exposing the breakdown here makes it self-explanatory
-   *  and guarantees it equals Home's net-worth figure. */
+   *  allocation-aware buildPortfolio math Home uses) + manual "other assets"
+   *  − liabilities. Using live.portfolio.totalValueBase (not a naive
+   *  valueInBase loop) is critical so allocation/robo sleeves are counted
+   *  with their live scale factor and the two pages always reconcile. */
   const netWorth = useMemo(() => {
-    const rateToBase = (code: string): number => {
-      if (code === base) return 1;
-      if (!live.fx) return 0;
-      try { return fxService.toBase(1, code, live.fx); } catch { return 0; }
-    };
-    let investments = 0;
-    for (const h of vault.holdings) {
-      const q = live.quotes[h.symbol];
-      const { valueBase, ok } = valueInBase(h, q, base, rateToBase);
-      if (ok) investments += valueBase;
-    }
+    const investments = live.portfolio?.totalValueBase ?? 0;
     const assets = (vault.assets ?? []).reduce((s, a) => s + (Number.isFinite(a.value) ? a.value : 0), 0);
     const liabilities = (vault.liabilities ?? []).reduce((s, l) => s + (Number.isFinite(l.balance) ? l.balance : 0), 0);
     return { investments, assets, liabilities, net: investments + assets - liabilities, hasDebt: liabilities > 0, hasAssets: assets > 0 };
-  }, [vault, live.quotes, live.fx, base]);
+  }, [vault, live.portfolio]);
 
   /** Accounts already designated as emergency-reserve lines. */
   const reservedIds = useMemo(
@@ -358,36 +379,10 @@ export function InvestmentsView() {
     toast(`Added ${sym} (worth ${v.toLocaleString()}) to ${targetAcct!.platformName}`);
   };
 
-  // ---- StashAway-style allocation portfolio: create ------------------------
-  /** Open the builder and seed the per-class reference ticker prices. */
-  const openStashaway = () => {
-    setShowStashaway(true);
-    void seedStashawayRefs(saRows.map((r) => r.assetClass));
-  };
-  /** Save the allocation: one robo account (net deposit = cost basis) + one
-   *  allocation sleeve per class, each tracking its REAL index. P&L compares
-   *  the initial price (refPrice) vs the live ticker — no avg-entry input. */
-  const createStashaway = () => {
-    const dep = parseFloat(saDeposit);
-    if (!saName.trim() || !isFinite(dep) || dep <= 0) return;
-    const sleeves = saRows
-      .filter((r) => Number.isFinite(parseFloat(r.pct)) && parseFloat(r.pct) > 0)
-      .map((r) => ({
-        assetClass: r.assetClass,
-        allocationPct: parseFloat(r.pct),
-        refPrice: saRefs[r.assetClass] || 0,   // 0 -> store seeds 1 (flat until live)
-      }));
-    if (sleeves.length === 0) return;
-    store.addAllocationPortfolio({
-      platformName: saName.trim(),
-      netDepositBase: dep,
-      holdingCurrency: saCur,
-      sleeves,
-    });
-    setSaName(''); setSaDeposit(''); setSaRefs({});
-    setShowStashaway(false);
-    toast(`Created ${saName.trim()} — allocation tracks live prices`);
-  };
+  // ---- StashAway / robo allocation creation is now inline in addAccount
+  // ---- (see the isRobo branch above); the old separate "New Portfolio"
+  //      modal + openStashaway/createStashaway helpers were removed.
+
 
   // ---- Edit-holding modal (pop-up) state + save -----------------------------
   const [mSymbol, setMSymbol] = useState('');
@@ -1089,9 +1084,61 @@ export function InvestmentsView() {
             <input type="number" inputMode="decimal" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="e.g. 15000" />
           </label>
         </div>
+        {isRobo && (
+          <div className="field" style={{ marginTop: 10 }}>
+            <span>Assets &amp; allocation %</span>
+            <div style={{ marginTop: 6 }}>
+              {roboRows.map((r, i) => (
+                <div key={i} className="row" style={{ gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <ThemedSelect
+                      value={r.assetClass}
+                      onChange={(v: string) => {
+                        setRoboRows((prev) => prev.map((row, j) => (j === i ? { ...row, assetClass: v as typeof r.assetClass } : row)));
+                        void seedRoboRefs([v]);
+                      }}
+                      options={[
+                        { value: 'equity-us', label: 'Global equities' },
+                        { value: 'equity-local', label: 'Local equities' },
+                        { value: 'etf', label: 'ETF / index fund' },
+                        { value: 'bond', label: 'Bonds' },
+                        { value: 'gold', label: 'Gold' },
+                        { value: 'crypto', label: 'Crypto' },
+                        { value: 'cash', label: 'Cash / MMF' },
+                        { value: 'mmf', label: 'Money market' },
+                      ]}
+                      aria-label="Asset class"
+                    />
+                  </div>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={r.pct}
+                    onChange={(e) => setRoboRows((prev) => prev.map((row, j) => (j === i ? { ...row, pct: e.target.value } : row)))}
+                    style={{ width: 64, textAlign: 'right' }}
+                    aria-label="Allocation percent"
+                  />
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label="Remove asset"
+                    onClick={() => setRoboRows((prev) => prev.filter((_, j) => j !== i))}
+                    disabled={roboRows.length <= 1}
+                  >✕</button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="btn sm ghost"
+                onClick={() => setRoboRows((prev) => [...prev, { assetClass: 'equity-us', pct: '0' }])}
+              >
+                <IPlus size={14} /> Add asset
+              </button>
+            </div>
+          </div>
+        )}
         <div className="row" style={{ gap: 8, marginTop: 10 }}>
-          <button className="btn sm" onClick={addAccount} style={{ flex: 1 }}><IPlus size={16} /> Create account</button>
-          <button className="btn sm ghost" onClick={openStashaway} style={{ flex: 1 }}>+ New Portfolio</button>
+          <button className="btn sm" onClick={addAccount} style={{ flex: 1 }}><IPlus size={16} /> {isRobo ? 'Create portfolio' : 'Create account'}</button>
         </div>
 
         {vault.accounts.length > 0 && (
@@ -1617,43 +1664,6 @@ export function InvestmentsView() {
           No holdings yet. Create an account, then add a holding above — or log a
           contribution below to start tracking invested capital.
         </div>
-      )}
-
-      {/* StashAway-style allocation portfolio builder modal */}
-      {showStashaway && (
-        <Modal title="New Portfolio" onClose={() => setShowStashaway(false)}>
-          <div className="cols" style={{ gap: 12 }}>
-            <label className="field"><span>Portfolio name</span>
-              <input value={saName} onChange={(e) => setSaName(e.target.value)} placeholder="e.g. StashAway Balanced" autoFocus />
-            </label>
-            <label className="field"><span>How much did you put in? ({base})</span>
-              <input type="number" inputMode="decimal" value={saDeposit} onChange={(e) => setSaDeposit(e.target.value)} placeholder="e.g. 15000" />
-            </label>
-            <label className="field"><span>Currency</span>
-              <input value={saCur} onChange={(e) => setSaCur(e.target.value)} style={{ width: 72 }} />
-            </label>
-          </div>
-          <div style={{ marginTop: 14 }}>
-            <div className="small muted" style={{ marginBottom: 6 }}>Your mix (target %)</div>
-            {saRows.map((r, i) => (
-              <div key={i} className="row" style={{ gap: 8, alignItems: 'center', marginBottom: 6 }}>
-                <span style={{ flex: 1, fontSize: 14 }}>{r.assetClass}</span>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  value={r.pct}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setSaRows((prev) => prev.map((row, j) => (j === i ? { ...row, pct: v } : row)));
-                  }}
-                  style={{ width: 56, textAlign: 'right' }}
-                />
-                <span style={{ fontSize: 13 }}>%</span>
-              </div>
-            ))}
-          </div>
-          <button className="btn sm" onClick={createStashaway} style={{ width: '100%', marginTop: 14 }}>Create portfolio</button>
-        </Modal>
       )}
     </>
   );

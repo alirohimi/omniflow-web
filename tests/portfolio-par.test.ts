@@ -235,3 +235,79 @@ describe('buildPortfolio — deposit P&L (starting-capital tracking)', () => {
     expect(line.depositReturnPct).toBeNull();
   });
 });
+
+describe('buildPortfolio — StashAway-style allocation sleeves', () => {
+  const fx = myrFx(4.0);
+  const accOf = (over: Partial<InvestmentAccount>): InvestmentAccount => ({
+    id: 'a1',
+    platformName: 'StashAway',
+    accountType: 'robo',
+    baseCurrencyValue: 0,
+    lastUpdated: 0,
+    ...over,
+  } as InvestmentAccount);
+  const sleeve = (over: Partial<InvestmentHolding>): InvestmentHolding => ({
+    id: 's1',
+    accountId: 'a1',
+    symbol: '^GSPC',
+    assetClass: 'equity-us',
+    holdingCurrency: 'MYR',
+    units: 100,
+    averageEntryPrice: 1, // pinned — P&L uses net deposit, not entry
+    currentPriceLocal: 1,
+    currentPriceBase: 1,
+    ...over,
+  } as InvestmentHolding);
+
+  it('sleeve value = pct/100 x netDeposit x (liveTicker / refPrice)', () => {
+    // 60% sleeve of a 10000 deposit, refPrice 5000, live ticker 5200 -> scale 1.04
+    const a = accOf({ initialDepositBase: 10000 });
+    const h = sleeve({
+      isAllocation: true,
+      allocationPct: 60,
+      refPrice: 5000,
+    });
+    const quotes: Record<string, QuoteSnapshot> = {
+      '^GSPC': { symbol: '^GSPC', assetClass: 'equity-us', price: 5200, currency: 'MYR', asOf: 0, source: 'yahoo' },
+    };
+    const p = buildPortfolio([a], [h], quotes, 'MYR', ratesOf(fx));
+    expect(p.byAccount[0].valueBase).toBeCloseTo(0.6 * 10000 * (5200 / 5000)); // 6240
+    expect(p.totalValueBase).toBeCloseTo(6240);
+  });
+
+  it('sleeve stays flat when offline (no live quote -> ref fallback)', () => {
+    const a = accOf({ initialDepositBase: 10000 });
+    const h = sleeve({ isAllocation: true, allocationPct: 60, refPrice: 5000 });
+    // No quotes map -> live falls back to refPrice -> scale 1 -> value = slice
+    const p = buildPortfolio([a], [h], {}, 'MYR', ratesOf(fx));
+    expect(p.byAccount[0].valueBase).toBe(6000); // 0.6 x 10000, flat
+  });
+
+  it('sleeve P&L = value - netDeposit (account level), not entry x units', () => {
+    const a = accOf({ initialDepositBase: 10000 });
+    const h = sleeve({ isAllocation: true, allocationPct: 60, refPrice: 5000 });
+    const quotes: Record<string, QuoteSnapshot> = {
+      '^GSPC': { symbol: '^GSPC', assetClass: 'equity-us', price: 5200, currency: 'MYR', asOf: 0, source: 'yahoo' },
+    };
+    const p = buildPortfolio([a], [h], quotes, 'MYR', ratesOf(fx));
+    const line = p.byAccount[0];
+    // sleeve value 6240 vs the account's net deposit 10000 -> -3760.
+    // This is the P&L rule that landed: sleeve P&L is measured against the
+    // account's net deposit (what the user put in), NEVER entry(1) x units,
+    // which would falsely read near-zero.
+    expect(line.valueBase).toBeCloseTo(6240);
+    expect(line.pnlBase).toBeCloseTo(6240 - 10000); // -3760
+    expect(line.pnlBase).not.toBeCloseTo(0); // proves it is NOT entry x units
+  });
+
+  it('valueInBase does NOT scale the sleeve (the hero bug this test locks)', () => {
+    // A naive valueInBase loop reads units(100) x priceLocal(1) = 100 base,
+    // missing the net-deposit slice entirely. buildPortfolio gives 6000 flat.
+    const h = sleeve({ isAllocation: true, allocationPct: 60, refPrice: 5000, units: 100 });
+    const viaInBase = valueInBase(h, undefined, 'MYR', ratesOf(fx));
+    const a = accOf({ initialDepositBase: 10000 });
+    const viaBuild = buildPortfolio([a], [h], {}, 'MYR', ratesOf(fx));
+    expect(viaBuild.byAccount[0].valueBase).toBe(6000);
+    expect(viaInBase.valueBase).not.toBe(6000);
+  });
+});
