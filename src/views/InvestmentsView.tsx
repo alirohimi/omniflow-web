@@ -338,6 +338,10 @@ export function InvestmentsView() {
   const [mUnits, setMUnits] = useState('');
   const [mEntry, setMEntry] = useState('');
   const [mAmount, setMAmount] = useState('');
+  /** Robo-account edit: a single "how much is it worth" value (units=1 × X). */
+  const [mValue, setMValue] = useState('');
+  /** Whether the holding being edited lives in a robo-advisor account. */
+  const [mIsRobo, setMIsRobo] = useState(false);
   const mPar = isParClass(mClass);
 
   /** Prefill the modal from the holding being edited; close it (and reset
@@ -346,14 +350,24 @@ export function InvestmentsView() {
     setMSymbol(h.symbol);
     setMClass(h.assetClass);
     setMCur(h.holdingCurrency);
-    if (isParClass(h.assetClass)) {
+    // Is this holding in a robo-advisor account? -> value-based edit.
+    const acct = vault.accounts.find((a) => a.id === h.accountId);
+    const robo = acct?.accountType === 'robo' && !isParClass(h.assetClass);
+    setMIsRobo(robo);
+    if (robo) {
+      // Show the holding's current value in its holding currency: units × entry
+      // (the seeded current price) — that's the figure the user edits.
+      const curVal = (h.units || 0) * (h.currentPriceLocal || h.averageEntryPrice || 0);
+      setMValue(curVal > 0 ? String(curVal) : '');
+      setMUnits(''); setMEntry(''); setMAmount('');
+    } else if (isParClass(h.assetClass)) {
       setMAmount(String(h.units || ''));
-      setMUnits(''); setMEntry('');
+      setMUnits(''); setMEntry(''); setMValue('');
       setMSymbol(parSymbolFor(h.assetClass));
     } else {
       setMUnits(String(h.units));
       setMEntry(String(h.averageEntryPrice || ''));
-      setMAmount('');
+      setMAmount(''); setMValue('');
     }
     setEditHolding(h);
   };
@@ -500,6 +514,29 @@ export function InvestmentsView() {
     const h = editHolding;
     if (!h) return;
     const par = isParClass(mClass);
+    // Robo-account value edit: a single "worth X" -> units=1 × X.
+    if (mIsRobo) {
+      const v = parseFloat(mValue);
+      if (!isFinite(v) || v <= 0) { toast('Enter how much it is worth.', 'err'); return; }
+      let priceBase = v;
+      try {
+        const rates = await fxService.latest(base);
+        if (mCur !== base) { const r = fxService.toBase(1, mCur, rates); priceBase = Number.isFinite(r) ? v * r : v; }
+      } catch { /* offline: value already in holding currency */ }
+      store.updateHolding(h.id, {
+        accountId: h.accountId,
+        symbol: mSymbol.trim().toUpperCase() || h.symbol,
+        assetClass: mClass,
+        holdingCurrency: mCur,
+        units: 1,
+        averageEntryPrice: v,
+        currentPriceLocal: v,
+        currentPriceBase: priceBase,
+      });
+      closeEdit();
+      toast(`Updated ${mSymbol.trim().toUpperCase() || h.symbol} (worth ${v.toLocaleString()})`);
+      return;
+    }
     const am = parseFloat(mAmount);
     const u = parseFloat(mUnits);
     const e = parseFloat(mEntry);
@@ -1036,9 +1073,18 @@ export function InvestmentsView() {
                           onClick: () => setAccountId(a.id),
                         },
                       {
-                          label: 'Edit starting amount',
+                          label: 'Edit amount put in',
                           icon: IPlus,
                           onClick: () => openDeposit(a.id),
+                        },
+                        // Robo-advisors (StashAway) drift from live quotes —
+                        // this one-tap control pins the account to the value
+                        // StashAway itself displays, so P&L matches 1:1.
+                        {
+                          label: a.accountType === 'robo' ? "Match StashAway's value" : 'Use broker value',
+                          icon: IPlus,
+                          hide: a.accountType === 'robo' ? (Number.isFinite(a.brokerValueBase) && (a.brokerValueBase ?? 0) > 0) : undefined,
+                          onClick: () => openCostBasis(),
                         },
                         { label: 'Delete account', danger: true, onClick: () => removeAccount(a.id) },
                       ]}
@@ -1254,8 +1300,8 @@ export function InvestmentsView() {
               <input
                 value={mSymbol}
                 onChange={(e) => setMSymbol(e.target.value)}
-                disabled={mPar}
-                placeholder={mPar ? 'auto (par)' : 'AAPL / CSPX.L / BTC / 1155.KL'}
+                disabled={mPar || mIsRobo}
+                placeholder={mPar ? 'auto (par)' : mIsRobo ? 'optional' : 'AAPL / CSPX.L / BTC / 1155.KL'}
               />
             </label>
             <label className="field"><span>What is it?</span>
@@ -1273,7 +1319,11 @@ export function InvestmentsView() {
                 aria-label="What is it?"
               />
             </label>
-            {mPar ? (
+            {mIsRobo ? (
+              <label className="field"><span>How much is it worth? ({mCur})</span>
+                <input type="number" inputMode="decimal" value={mValue} onChange={(e) => setMValue(e.target.value)} placeholder="e.g. 4200" />
+              </label>
+            ) : mPar ? (
               <label className="field"><span>Amount ({mCur})</span>
                 <input type="number" inputMode="decimal" value={mAmount} onChange={(e) => setMAmount(e.target.value)} placeholder="1500" />
               </label>
@@ -1296,6 +1346,12 @@ export function InvestmentsView() {
               />
             </label>
           </div>
+          {mIsRobo && (
+            <div className="small muted" style={{ marginTop: 8 }}>
+              No buy price needed — set this fund’s current worth. Your profit/loss
+              for the account comes from the total you’ve put in.
+            </div>
+          )}
           <div className="row" style={{ marginTop: 14, gap: 10 }}>
             <button className="btn ghost sm" style={{ flex: 1 }} onClick={closeEdit}>Cancel</button>
             <button className="btn sm" style={{ flex: 1 }} onClick={() => void saveHoldingEdit()}>Save changes</button>
@@ -1386,7 +1442,7 @@ export function InvestmentsView() {
                   <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                     <div style={{ minWidth: 0 }}>
                       <div className="title" style={{ fontWeight: 600, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.platformName}</div>
-                      <div className="small muted" style={{ marginTop: 2 }}>{a.accountType === 'robo' ? 'robo-advisor' : a.accountType} · live value {formatMoney(liveValue, base)}</div>
+                      <div className="small muted" style={{ marginTop: 2 }}>{a.accountType === 'robo' ? 'StashAway / robo-advisor' : a.accountType} · our live value {formatMoney(liveValue, base)}</div>
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
@@ -1404,15 +1460,15 @@ export function InvestmentsView() {
                       />
                     </label>
                     <label className="field" style={{ flex: 1, minWidth: 0, marginBottom: 0 }}>
-                      <span>Current value from broker</span>
+                      <span>Paste StashAway's value (optional)</span>
                       <input
                         type="number"
                         inputMode="decimal"
                         min={0}
                         value={brokerValueDrafts[a.id] ?? ''}
                         onChange={(e) => setBrokerValueDrafts((d) => ({ ...d, [a.id]: e.target.value }))}
-                        placeholder="what StashAway shows"
-                        aria-label={`Current value from broker for ${a.platformName}`}
+                        placeholder={a.accountType === 'robo' ? 'e.g. 63670' : 'what broker shows'}
+                        aria-label={`Paste ${a.platformName}'s current value`}
                         style={{ width: '100%' }}
                       />
                     </label>
