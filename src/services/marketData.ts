@@ -40,6 +40,28 @@ const STASHAWAY_INDEX_MAP: Record<string, string> = {
   GLD:   'GC=F',  // user may type either gold ticker
 };
 
+/** Per-ASSET-CLASS reference ticker — the broad index/coin that a StashAway-style
+ *  allocation sleeve tracks. When a user builds a StashAway allocation, each
+ *  sleeve's value is its target % × net deposit × (livePrice / refPrice), where
+ *  refPrice is this class's ticker level at the moment the allocation was set.
+ *  Cash/MMF have no ticker (scale factor pinned to 1 = flat). The symbols must
+ *  be resolvable by the same quote paths below (crypto -> CoinGecko, equity/
+ *  etf -> Yahoo, gold -> GC=F) so the live quote actually tracks the index. */
+const CLASS_TICKER: Record<string, string> = {
+  'equity-us':    '^GSPC', // S&P 500 — Developed/US stocks
+  'equity-local': '^KLSE', // FTSE Bursa Malaysia KLCI — local (MY) stocks
+  'etf':          '^GSPC', // default ETF sleeve -> US large cap
+  'crypto':       'BTC',   // Bitcoin — the crypto sleeve
+  'gold':         'GC=F',  // COMEX gold futures — the gold sleeve
+  'cash':         'CASH',  // par, no ticker
+  'mmf':          'MMF',    // par, no ticker
+};
+
+/** The reference ticker symbol an asset-class allocation sleeve tracks. */
+export function classReferenceSymbol(c: string): string {
+  return CLASS_TICKER[c] ?? (c === 'equity-local' ? '^KLSE' : '^GSPC');
+}
+
 /** Per-fetch wall clock. A junk symbol (or a flaky network) must never be
  *  allowed to hang the whole batch: after this many ms the request aborts
  *  and we fall back to the stored price. */
@@ -275,6 +297,22 @@ export class MarketDataService {
       }
     });
     return out;
+  }
+
+  /** Fetch the reference price for an asset class (the class ticker level, in
+   *  the given currency) so a new allocation sleeve can seed its `refPrice`.
+   *  Cash/MMF return 1 (par). Returns 0 when the fetch fails (offline), in
+   *  which case the UI seeds refPrice from any existing sleeve or falls back
+   *  to 1 — the sleeve then shows a flat value until a live quote lands. */
+  async referencePriceFor(assetClass: string, currency: string): Promise<number> {
+    if (assetClass === 'cash' || assetClass === 'mmf') return 1;
+    const sym = classReferenceSymbol(assetClass);
+    const synthetic: InvestmentHolding = {
+      id: '__ref__', accountId: '', symbol: sym, assetClass: assetClass as InvestmentHolding['assetClass'],
+      holdingCurrency: currency, units: 1, averageEntryPrice: 1, currentPriceLocal: 0, currentPriceBase: 0,
+    };
+    const r = await this.quote(synthetic);
+    return Number.isFinite(r.price) && r.price > 0 ? r.price : 0;
   }
 }
 

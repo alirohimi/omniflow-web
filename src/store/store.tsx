@@ -60,6 +60,7 @@ import { resolveLlmConfig } from '../ai/resolveLlm';
 import { makeEntitlements, DEFAULT_TIER, type Tier } from '../entitlements';
 import { useAuthStore } from '../auth/AuthProvider';
 import { fetchCloudVaultStrict, saveCloudVault, deleteCloudVault, flushVaultKeepalive } from '../services/cloudVault';
+import { classReferenceSymbol } from '../services';
 import {
   type LlmPolicyRow,
   type MemberRow,
@@ -117,6 +118,20 @@ export interface NewAccountInput {
   accountType: InvestmentAccount['accountType'];
   /** Optional starting capital (deposit) in base currency. */
   initialDepositBase?: number;
+}
+
+/** One sleeve of a StashAway-style allocation portfolio. */
+export interface AllocationSleeveInput {
+  assetClass: InvestmentHolding['assetClass'];
+  allocationPct: number;     // target weight, 0-100
+  refPrice?: number;         // class ticker level when the allocation was set
+}
+
+export interface NewAllocationPortfolioInput {
+  platformName: string;      // the portfolio name, e.g. "StashAway Balanced"
+  netDepositBase: number;    // user's net deposit in base currency (cost basis)
+  holdingCurrency: string;   // currency the sleeves are denominated in
+  sleeves: AllocationSleeveInput[];
 }
 
 export interface VaultStore {
@@ -179,6 +194,11 @@ export interface VaultStore {
   /** Patch an existing account (platformName, accountType, deposit). */
   updateAccount: (id: string, patch: Partial<Omit<InvestmentAccount, 'id' | 'baseCurrencyValue' | 'lastUpdated'>>) => void;
   addHolding: (input: NewHoldingInput) => string;
+  /** Create a StashAway-style allocation portfolio in ONE persist: a robo
+   *  account (initialDepositBase = net deposit) + one allocation holding per
+   *  sleeve. Each sleeve's live value = pct/100 × net deposit × (ticker/ref),
+   *  so it tracks the real index and StashAway's auto-rebalance. */
+  addAllocationPortfolio: (input: NewAllocationPortfolioInput) => string;
   deleteHolding: (id: string) => void;
   /** Patch an existing holding (units, entry, symbol, class, currency, account). */
   updateHolding: (id: string, patch: Partial<Omit<InvestmentHolding, 'id'>>) => void;
@@ -1080,6 +1100,62 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     [persist],
   );
 
+  const addAllocationPortfolio = useCallback(
+    (input: NewAllocationPortfolioInput): string => {
+      const accId = `acc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      setVault((prev) => {
+        if (!prev) return prev;
+        const dep = Number.isFinite(input.netDepositBase) && input.netDepositBase > 0 ? input.netDepositBase : 0;
+        const now = Date.now();
+        const acc: InvestmentAccount = {
+          id: accId,
+          baseCurrencyValue: 0,
+          lastUpdated: now,
+          platformName: input.platformName,
+          accountType: 'robo',
+          initialDepositBase: dep > 0 ? dep : undefined,
+        };
+        // One allocation holding per sleeve. `units` mirrors the dollar slice
+        // (pct/100 × net deposit); the engine computes live value from
+        // (liveTicker / refPrice) so the sleeve tracks the REAL index. entry is
+        // pinned to 1 because P&L uses the account's net deposit, not holding
+        // cost — exactly the StashAway "compare initial price vs current price"
+        // model the user asked for (no avg-entry input).
+        const sleeves: InvestmentHolding[] = input.sleeves
+          .filter((s) => Number.isFinite(s.allocationPct) && s.allocationPct > 0)
+          .map((s, i) => {
+            const ref = Number.isFinite(s.refPrice) && (s.refPrice ?? 0) > 0 ? s.refPrice! : 1;
+            const sliceBase = (s.allocationPct / 100) * dep;
+            const sym = classReferenceSymbol(s.assetClass);
+            return {
+              id: `h-${now.toString(36)}-${i}-${Math.random().toString(36).slice(2, 5)}`,
+              accountId: accId,
+              symbol: sym,
+              assetClass: s.assetClass,
+              holdingCurrency: input.holdingCurrency,
+              units: sliceBase,                       // dollar slice (display fallback)
+              averageEntryPrice: 1,                   // pinned — P&L uses net deposit
+              currentPriceLocal: 1,                   // reference seed (flat until live quote)
+              currentPriceBase: 1,
+              isAllocation: true,
+              allocationPct: s.allocationPct,
+              refPrice: ref,
+            } as InvestmentHolding;
+          });
+        const next: VaultBlob = {
+          ...prev,
+          accounts: [...prev.accounts, acc],
+          holdings: [...prev.holdings, ...sleeves],
+          updatedAt: now,
+        };
+        void persist(next);
+        return next;
+      });
+      return accId;
+    },
+    [persist],
+  );
+
   const deleteHolding = useCallback(
     (id: string) => {
       setVault((prev) => {
@@ -1814,6 +1890,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     deleteAccount,
     updateAccount,
     addHolding,
+    addAllocationPortfolio,
     deleteHolding,
     updateHolding,
     updateHoldingPrice,

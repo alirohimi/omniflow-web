@@ -101,8 +101,31 @@ export function buildPortfolio(
   base: string,
   rates: (code: string) => number,
 ): PortfolioSummary {
+  // Index accounts by id so allocation lines can reach their net deposit.
+  const depositById = new Map<string, number>();
+  for (const a of accounts) {
+    const d = typeof a.initialDepositBase === 'number' && Number.isFinite(a.initialDepositBase) && a.initialDepositBase > 0
+      ? a.initialDepositBase : 0;
+    if (d > 0) depositById.set(a.id, d);
+  }
   const lines: HoldingLine[] = holdings.map((h) => {
     const q = quotes[h.symbol];
+    // Allocation sleeve: value = pct/100 × netDeposit × (livePrice / refPrice).
+    // The slice scales with how the REAL ticker has moved since it was set —
+    // this is what makes a StashAway-style allocation track auto-rebalance.
+    if (h.isAllocation && Number.isFinite(h.allocationPct) && (h.allocationPct ?? 0) > 0) {
+      const deposit = depositById.get(h.accountId) ?? 0;
+      const ref = Number.isFinite(h.refPrice) && (h.refPrice ?? 0) > 0 ? h.refPrice! : 0;
+      const live = q && Number.isFinite(q.price) && q.price > 0 ? q.price : ref; // offline -> flat
+      const scale = ref > 0 ? live / ref : 1; // no ref -> value = the slice (flat)
+      const valueBase = ((h.allocationPct ?? 0) / 100) * deposit * scale;
+      // valueBase is authoritative (totals + P&L are base-currency). Local is
+      // only a display hint for these sleeves — mirror valueBase when the
+      // holding currency IS the base, else it's shown "—" by the UI anyway.
+      const valueLocal = h.holdingCurrency === base ? valueBase : 0;
+      const ok = valueBase > 0;
+      return { holding: h, quote: q, valueBase, valueLocal, costBase: 0, currency: q?.currency ?? h.holdingCurrency, ok };
+    }
     const { valueBase, valueLocal, costBase, ok } = valueInBase(h, q, base, rates);
     return { holding: h, quote: q, valueBase, valueLocal, costBase, currency: q?.currency ?? h.holdingCurrency, ok };
   });

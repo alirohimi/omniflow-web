@@ -16,6 +16,7 @@ export {
   MarketDataService,
   type QuoteResult,
   type QuoteSource,
+  classReferenceSymbol,
 } from './marketData';
 
 export {

@@ -96,6 +96,16 @@ export interface InvestmentHolding {
   averageEntryPrice: number; // in holdingCurrency
   currentPriceLocal: number; // last known price in holdingCurrency
   currentPriceBase: number;  // last known price in base currency
+  /** Optional: this row is a STASHAWAY-STYLE ALLOCATION, not a named holding.
+   *  `allocationPct` is the target weight (0-100). Its live value is
+   *  `allocationPct/100 × account.initialDepositBase × (liveTicker / refPrice)`,
+   *  so the slice tracks the REAL ticker (StashAway auto-rebalances the mix,
+   *  we just scale each sleeve by how its reference index moved). P&L is
+   *  measured against the account's `initialDepositBase` (net deposit).
+   *  Optional so old encrypted blobs heal cleanly. */
+  isAllocation?: boolean;
+  allocationPct?: number;    // target weight, 0-100
+  refPrice?: number;         // liveTicker value when the allocation was set
 }
 
 /** BYOK LLM providers. 'none' = free on-device rule engine only.

@@ -15,7 +15,7 @@ import { SavingsGoalsPanel } from './SavingsGoalsPanel';
 import { AutoInvestPanel, ContributionPanel } from './AutoInvestPanel';
 import { AllocationPie, type PieSlice } from '../components/AllocationPie';
 import { colorForClass } from '../components/AllocationPie';
-import { fxService } from '../services';
+import { fxService, marketDataService } from '../services';
 import {
   portfolioPnl,
   dueAutoInvests,
@@ -67,6 +67,33 @@ export function InvestmentsView() {
   /** The holding (with its current values) being edited in the modal pop-up. */
   const [editHolding, setEditHolding] = useState<InvestmentHolding | null>(null);
   const parMode = isParClass(assetClass);
+
+  // ---- StashAway-style allocation portfolio builder ----
+  const [showStashaway, setShowStashaway] = useState(false);
+  const [saName, setSaName] = useState('');
+  const [saDeposit, setSaDeposit] = useState('');
+  const [saCur, setSaCur] = useState(base);
+  /** Per-class reference ticker price, seeded best-effort so each sleeve
+   *  tracks its REAL index. On offline/failed fetch the value stays 0 and the
+   *  store seeds refPrice=1 (flat) — the sleeve shows the slice until a live
+   *  quote lands on the next poll. */
+  const [saRefs, setSaRefs] = useState<Record<string, number>>({});
+  const [saRows, setSaRows] = useState<{ assetClass: InvestmentHolding['assetClass']; pct: string }[]>([
+    { assetClass: 'equity-us', pct: '60' },
+    { assetClass: 'gold', pct: '20' },
+    { assetClass: 'cash', pct: '20' },
+  ]);
+  const seedStashawayRefs = async (classes: string[]) => {
+    await Promise.all(
+      classes.map(async (c) => {
+        if (saRefs[c] && saRefs[c] > 0) return; // already seeded
+        try {
+          const p = await marketDataService.referencePriceFor(c, saCur);
+          if (p > 0) setSaRefs((prev) => ({ ...prev, [c]: p }));
+        } catch { /* offline -> leave 0, store will seed refPrice=1 */ }
+      }),
+    );
+  };
 
   const startEdit = (h: InvestmentHolding) => {
     openEdit(h);
@@ -329,6 +356,37 @@ export function InvestmentsView() {
     });
     setSymbol(''); setRoboValue('');
     toast(`Added ${sym} (worth ${v.toLocaleString()}) to ${targetAcct!.platformName}`);
+  };
+
+  // ---- StashAway-style allocation portfolio: create ------------------------
+  /** Open the builder and seed the per-class reference ticker prices. */
+  const openStashaway = () => {
+    setShowStashaway(true);
+    void seedStashawayRefs(saRows.map((r) => r.assetClass));
+  };
+  /** Save the allocation: one robo account (net deposit = cost basis) + one
+   *  allocation sleeve per class, each tracking its REAL index. P&L compares
+   *  the initial price (refPrice) vs the live ticker — no avg-entry input. */
+  const createStashaway = () => {
+    const dep = parseFloat(saDeposit);
+    if (!saName.trim() || !isFinite(dep) || dep <= 0) return;
+    const sleeves = saRows
+      .filter((r) => Number.isFinite(parseFloat(r.pct)) && parseFloat(r.pct) > 0)
+      .map((r) => ({
+        assetClass: r.assetClass,
+        allocationPct: parseFloat(r.pct),
+        refPrice: saRefs[r.assetClass] || 0,   // 0 -> store seeds 1 (flat until live)
+      }));
+    if (sleeves.length === 0) return;
+    store.addAllocationPortfolio({
+      platformName: saName.trim(),
+      netDepositBase: dep,
+      holdingCurrency: saCur,
+      sleeves,
+    });
+    setSaName(''); setSaDeposit(''); setSaRefs({});
+    setShowStashaway(false);
+    toast(`Created ${saName.trim()} — allocation tracks live prices`);
   };
 
   // ---- Edit-holding modal (pop-up) state + save -----------------------------
@@ -1031,7 +1089,10 @@ export function InvestmentsView() {
             <input type="number" inputMode="decimal" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="e.g. 15000" />
           </label>
         </div>
-        <button className="btn sm" onClick={addAccount} style={{ width: '100%', marginTop: 10 }}><IPlus size={16} /> Create account</button>
+        <div className="row" style={{ gap: 8, marginTop: 10 }}>
+          <button className="btn sm" onClick={addAccount} style={{ flex: 1 }}><IPlus size={16} /> Create account</button>
+          <button className="btn sm ghost" onClick={openStashaway} style={{ flex: 1 }}>+ New Portfolio</button>
+        </div>
 
         {vault.accounts.length > 0 && (
           <div className="list">
@@ -1556,6 +1617,43 @@ export function InvestmentsView() {
           No holdings yet. Create an account, then add a holding above — or log a
           contribution below to start tracking invested capital.
         </div>
+      )}
+
+      {/* StashAway-style allocation portfolio builder modal */}
+      {showStashaway && (
+        <Modal title="New Portfolio" onClose={() => setShowStashaway(false)}>
+          <div className="cols" style={{ gap: 12 }}>
+            <label className="field"><span>Portfolio name</span>
+              <input value={saName} onChange={(e) => setSaName(e.target.value)} placeholder="e.g. StashAway Balanced" autoFocus />
+            </label>
+            <label className="field"><span>How much did you put in? ({base})</span>
+              <input type="number" inputMode="decimal" value={saDeposit} onChange={(e) => setSaDeposit(e.target.value)} placeholder="e.g. 15000" />
+            </label>
+            <label className="field"><span>Currency</span>
+              <input value={saCur} onChange={(e) => setSaCur(e.target.value)} style={{ width: 72 }} />
+            </label>
+          </div>
+          <div style={{ marginTop: 14 }}>
+            <div className="small muted" style={{ marginBottom: 6 }}>Your mix (target %)</div>
+            {saRows.map((r, i) => (
+              <div key={i} className="row" style={{ gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                <span style={{ flex: 1, fontSize: 14 }}>{r.assetClass}</span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={r.pct}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setSaRows((prev) => prev.map((row, j) => (j === i ? { ...row, pct: v } : row)));
+                  }}
+                  style={{ width: 56, textAlign: 'right' }}
+                />
+                <span style={{ fontSize: 13 }}>%</span>
+              </div>
+            ))}
+          </div>
+          <button className="btn sm" onClick={createStashaway} style={{ width: '100%', marginTop: 14 }}>Create portfolio</button>
+        </Modal>
       )}
     </>
   );
