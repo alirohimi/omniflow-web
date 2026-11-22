@@ -21,8 +21,23 @@ import {
   type ParseStatementResult,
 } from './statement';
 
-// Install the worker port once at module load.
-pdfjs.GlobalWorkerOptions.workerPort = new PdfJsWorker();
+// Install the worker port lazily — only in environments where `Worker`
+// exists (browser). Under Node/vitest the global `Worker` is undefined, and
+// a module-level `new Worker()` would crash every test that transitively
+// imports this file via `services/index.ts`.
+let workerInstalled = false;
+function ensureWorker() {
+  if (workerInstalled) return;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (typeof Worker !== 'undefined') {
+      pdfjs.GlobalWorkerOptions.workerPort = new PdfJsWorker();
+      workerInstalled = true;
+    }
+  } catch {
+    // Offline / test env: pdf.js will fall back to the main-thread fake worker.
+  }
+}
 
 export type { ParsedStatementLine, ParseStatementResult } from './statement';
 
@@ -34,6 +49,7 @@ export async function extractPdfText(
   file: File,
   onProgress?: (p: number) => void,
 ): Promise<string> {
+  ensureWorker();
   const data = await file.arrayBuffer();
   const task = pdfjs.getDocument({ data });
   const doc = await task.promise;
