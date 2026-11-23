@@ -47,6 +47,7 @@ import type {
   EmergencyFundItem,
   PendingImport,
   NetWorthPoint,
+  AccountValuePoint,
   SavingsGoal,
   AutoInvest,
   Contribution,
@@ -238,6 +239,13 @@ export interface VaultStore {
 
   /** Append a daily net-worth snapshot (deduped by day, capped at 365 points). */
   captureNetWorth: (point: Omit<NetWorthPoint, 'at'> & { at?: number }) => void;
+
+  /** Append a per-account live-value snapshot (deduped by day, capped at 90
+   *  points per account). Called on each Portfolio view so the card can show
+   *  a "daily change" figure (today − yesterday) like the real StashAway app.
+   *  Takes the full account id -> valueBase map so one call snapshots every
+   *  account in the current portfolio. */
+  captureAccountValues: (values: Record<string, number>) => void;
 
   // ---- in-flight PDF statement import checkpoint (survives a refresh) ----
   /** Persist an in-progress PDF import into the encrypted vault blob. Passing
@@ -1467,6 +1475,43 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     });
   }, [persist]);
 
+  /** Append a per-account live-value snapshot (one point per day, most-recent-
+   *  wins for today), capped at 90 points per account. Mirrors
+   *  `captureNetWorth` but keyed per account so each card can compute its own
+   *  "daily change" (today's value − yesterday's value). */
+  const captureAccountValues = useCallback((values: Record<string, number>) => {
+    const at = Date.now();
+    const dayStart = new Date(at);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayKey = dayStart.getTime();
+    setVault((prev) => {
+      if (!prev) return prev;
+      const hist = prev.accountHistory ?? {};
+      let changed = false;
+      const next: Record<string, AccountValuePoint[]> = { ...hist };
+      for (const [accId, valueBase] of Object.entries(values)) {
+        if (!Number.isFinite(valueBase)) continue;
+        const list = next[accId] ?? [];
+        const todayIdx = list.findIndex((p) => {
+          const d = new Date(p.at);
+          d.setHours(0, 0, 0, 0);
+          return d.getTime() === dayKey;
+        });
+        if (todayIdx >= 0) {
+          // Refresh today's point in place; cap at 90.
+          next[accId] = list.map((p, i) => (i === todayIdx ? { ...p, valueBase } : p)).slice(-90);
+        } else {
+          next[accId] = [...list, { at, valueBase }].sort((a, b) => a.at - b.at).slice(-90);
+        }
+        changed = true;
+      }
+      if (!changed) return prev;
+      const out = { ...prev, accountHistory: next, updatedAt: Date.now() };
+      void persist(out);
+      return out;
+    });
+  }, [persist]);
+
   const setLlmKey = useCallback(
     async (
       _provider: 'none' | 'openai' | 'anthropic' | 'gemini' | 'adacode',
@@ -1918,6 +1963,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     deleteEmergencyItem,
     setEmergency,
     captureNetWorth,
+    captureAccountValues,
     setPendingImport,
     setPrefs,
     setSalary,

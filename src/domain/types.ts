@@ -175,6 +175,16 @@ export interface NetWorthPoint {
   liabilities: number;
 }
 
+/** Per-account live value snapshot (one point per day, most recent last).
+ *  Captured on each Portfolio view so the card can show a "daily change"
+ *  figure (today's value − yesterday's value) the way the real StashAway
+ *  app does. `valueBase` is the allocation-aware buildPortfolio value for
+ *  the account (respects brokerValueBase + allocation sleeves). */
+export interface AccountValuePoint {
+  at: number;            // epoch ms (day-granularity bucket)
+  valueBase: number;    // account value in base currency
+}
+
 export type AutoInvestPeriod = 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 
 /** Cadence the salary input figure was expressed in — reuses the same
@@ -505,6 +515,11 @@ export interface VaultBlob {
    *  Optional so old encrypted blobs keep decrypting; readers normalize
    *  with ?? []. */
   contributions?: Contribution[];
+  /** Per-account live value history (account id -> day-bucketed points, most
+   *  recent last). Powers the "daily change" figure on each portfolio card,
+   *  matching the real StashAway app. Optional so old encrypted blobs keep
+   *  decrypting; readers normalize with ?? {}. */
+  accountHistory?: Record<string, AccountValuePoint[]>;
 }
 
 /** One coach chat turn, persisted (encrypted) with the vault. Compact by

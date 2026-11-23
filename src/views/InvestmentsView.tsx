@@ -35,6 +35,34 @@ const ASSET_CLASSES = ['equity-us', 'equity-local', 'etf', 'crypto', 'gold', 'ca
  *  convention (symbol = class name, price = 1) so value = amount · FX. */
 const PAR_CLASSES: InvestmentHolding['assetClass'][] = ['cash', 'mmf'];
 const isParClass = (c: InvestmentHolding['assetClass']) => PAR_CLASSES.includes(c);
+
+/** StashAway-style section grouping for the portfolio cards. Mirrors the
+ *  real app: robo-advisor portfolios (StashAway/Hata) live under
+ *  "Satellite" (target specific sectors), cash/MMF under "Cash", and
+ *  brokers/crypto/manual under "More ways to invest". */
+type PortfolioSection = 'satellite' | 'cash' | 'more';
+const sectionForType = (t: InvestmentAccount['accountType']): PortfolioSection =>
+  t === 'robo' ? 'satellite' : t === 'cash' ? 'cash' : 'more';
+const SECTION_META: Record<PortfolioSection, { title: string; subtitle: string }> = {
+  satellite: { title: 'Satellite', subtitle: 'Target specific sectors' },
+  cash: { title: 'Cash', subtitle: 'Earn yield at ultra-low risk' },
+  more: { title: 'More ways to invest', subtitle: 'Build long-term wealth' },
+};
+
+/** Compact "daily change" pill for a portfolio card — StashAway shows a
+ *  coloured delta under each portfolio value (green = up, red = down).
+ *  `null` renders nothing (no prior snapshot yet). */
+function DailyChangePill({ delta, base }: { delta: number | null; base: string }) {
+  if (delta == null) return null;
+  if (delta === 0) return <span className="pill-flat" title="No change since yesterday">—</span>;
+  const up = delta > 0;
+  return (
+    <span className={`pill-daily ${up ? 'up' : 'down'}`}>
+      {up ? '▲' : '▼'} {up ? '+' : '−'}{formatMoney(Math.abs(delta), base)}
+      <span className="pill-sub"> today</span>
+    </span>
+  );
+}
 /** Pinned symbol for par rows — matches the marketData par-price path. */
 const parSymbolFor = (c: InvestmentHolding['assetClass']) =>
   c === 'cash' ? 'CASH' : c === 'mmf' ? 'MMF' : c.toUpperCase();
@@ -220,6 +248,41 @@ export function InvestmentsView() {
     const m = new Map<string, AccountLine>();
     if (live.portfolio) for (const a of live.portfolio.byAccount) m.set(a.account.id, a);
     return m;
+  }, [live.portfolio]);
+
+  /** Per-account "daily change" — today's live value minus the previous
+   *  day's snapshot (StashAway shows e.g. "-RM3,678.75" on each card).
+   *  Returns null when there's no prior snapshot to compare against. */
+  const dailyChange = useMemo(() => {
+    const m = new Map<string, number | null>();
+    const hist = vault.accountHistory ?? {};
+    for (const [accId, pts] of Object.entries(hist)) {
+      if (pts.length < 2) { m.set(accId, null); continue; }
+      const today = pts[pts.length - 1];
+      const yesterday = pts[pts.length - 2];
+      m.set(accId, today.valueBase - yesterday.valueBase);
+    }
+    return m;
+  }, [vault.accountHistory]);
+
+  // Snapshot each account's live value once per day so the cards can compute
+  // a "daily change" figure on the next visit (mirrors the real StashAway
+  // app's per-portfolio daily delta). Guarded: `live.portfolio` is a fresh
+  // object every render, so we only persist when the per-account values
+  // actually changed since the last capture (prevents an infinite
+  // capture -> setVault -> re-render -> capture loop).
+  const lastCaptured = useRef<string>('');
+  useEffect(() => {
+    if (!live.portfolio) return;
+    const values: Record<string, number> = {};
+    for (const line of live.portfolio.byAccount) {
+      values[line.account.id] = Math.round(line.valueBase * 100) / 100;
+    }
+    const sig = JSON.stringify(values);
+    if (sig === lastCaptured.current) return;
+    lastCaptured.current = sig;
+    store.captureAccountValues(values);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live.portfolio]);
 
   // Contribution-aware portfolio P&L: live value vs total invested capital
@@ -1143,7 +1206,20 @@ export function InvestmentsView() {
 
         {vault.accounts.length > 0 && (
           <div className="list">
-            {vault.accounts.map((a) => {
+            {(Object.keys(SECTION_META) as PortfolioSection[]).map((section) => {
+              const sectionAccounts = vault.accounts.filter((a) => sectionForType(a.accountType) === section);
+              if (sectionAccounts.length === 0) return null;
+              const meta = SECTION_META[section];
+              return (
+                <div key={section} className="pf-section">
+                  <div className="pf-section-head">
+                    <div>
+                      <div className="pf-section-title">{meta.title}</div>
+                      <div className="pf-section-sub">{meta.subtitle}</div>
+                    </div>
+                    {section === 'more' && <span className="pf-new-badge">NEW</span>}
+                  </div>
+                  {sectionAccounts.map((a) => {
               const holdings = vault.holdings.filter((h) => h.accountId === a.id).length;
               const isTarget = a.id === accountId;
               const line = accLines.get(a.id);
@@ -1237,6 +1313,12 @@ export function InvestmentsView() {
                       </span>
                     )}
                   </div>
+                  {/* StashAway-style "daily change" — today's value minus the
+                      previous day's snapshot. Hidden until a 2nd-day snapshot
+                      exists (first visit shows no delta). */}
+                  <div className="acc-daily">
+                    <DailyChangePill delta={dailyChange.get(a.id) ?? null} base={base} />
+                  </div>
                   {/* Per-account share of the total portfolio value. */}
                   {line && live.portfolio && live.portfolio.totalValueBase > 0 ? (
                     <div style={{ marginTop: 8 }}>
@@ -1273,6 +1355,9 @@ export function InvestmentsView() {
                       )}
                     </button>
                   </div>
+                </div>
+              );
+                  })}
                 </div>
               );
             })}
