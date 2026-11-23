@@ -317,11 +317,17 @@ export function InvestmentsView() {
       return s + v;
     }, 0);
     // Only use the broker-adjusted total if at least one account set one,
-    // otherwise the quote total is the right number to show.
+    // otherwise the quote total is the right number to show. Use
+    // `pnl.totalValueBase` (the de-duplicated total that EXCLUDES
+    // isSubView sleeves) — NOT `live.portfolio.totalValueBase`, which
+    // sums every sleeve again and inflates the hero value. Pairing the
+    // inflated value with the clean `pnl.totalPnlBase` made the hero's
+    // value and P&L disagree (value minus P&L ≠ capital). The sleeve
+    // exclusion keeps value + P&L + per-account list all on one base.
     const anyBroker = pnl.accounts.some(
       (l) => Number.isFinite(l.account.brokerValueBase) && (l.account.brokerValueBase ?? 0) > 0,
     );
-    return anyBroker ? brokerTotal : (live.portfolio?.totalValueBase ?? 0);
+    return anyBroker ? brokerTotal : (pnl.totalValueBase ?? live.portfolio?.totalValueBase ?? 0);
   }, [pnl, live.portfolio]);
 
   /** Net worth reconciled to the Home page: investment value (the same
