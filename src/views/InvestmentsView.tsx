@@ -303,31 +303,24 @@ export function InvestmentsView() {
    *  matches what the user sees on their broker. Falls back to the pure
    *  quote-derived total when no broker values are recorded. */
   const displayTotalValueBase = useMemo(() => {
+    // The hero VALUE must sit on the EXACT same base as the hero P&L, or
+    // value − P&L ≠ capital and the numbers don't reconcile.
+    //
+    // `pnl.totalValueBase` (autoinvest.portfolioPnl) is that base:
+    //   - it EXCLUDES isSubView sleeves (a "Monthly" sleeve already inside
+    //     "Simple" is not summed again — that was the double-count), and
+    //   - each line's value already uses the broker value when recorded
+    //     (valueBase = brokerValue ?? quoteValue), so broker-adjusted
+    //     accounts are correct without a separate `brokerTotal` branch.
+    //
+    // The old `brokerTotal` branch summed over ALL non-sleeve accounts
+    // while `pnl.totalValueBase` sums over non-sleeve WITH recorded
+    // capital — the two disagreed, so the hero value and P&L were on
+    // different bases (value looked too big / P&L looked too small).
+    // Using `pnl.totalValueBase` unifies value + P&L + return% + the
+    // per-account list on one consistent base.
     if (!pnl) return live.portfolio?.totalValueBase ?? 0;
-    // A sub-view account (a sleeve already contained in another account,
-    // e.g. StashAway "Monthly" inside "Simple") must NOT be summed again —
-    // it would double-count. Exclude isSubView accounts from the total.
-    const brokerTotal = pnl.accounts.reduce((s, l) => {
-      const a = l.account;
-      if (a.isSubView) return s;
-      const v =
-        Number.isFinite(a.brokerValueBase) && (a.brokerValueBase ?? 0) > 0
-          ? a.brokerValueBase!
-          : l.valueBase;
-      return s + v;
-    }, 0);
-    // Only use the broker-adjusted total if at least one account set one,
-    // otherwise the quote total is the right number to show. Use
-    // `pnl.totalValueBase` (the de-duplicated total that EXCLUDES
-    // isSubView sleeves) — NOT `live.portfolio.totalValueBase`, which
-    // sums every sleeve again and inflates the hero value. Pairing the
-    // inflated value with the clean `pnl.totalPnlBase` made the hero's
-    // value and P&L disagree (value minus P&L ≠ capital). The sleeve
-    // exclusion keeps value + P&L + per-account list all on one base.
-    const anyBroker = pnl.accounts.some(
-      (l) => Number.isFinite(l.account.brokerValueBase) && (l.account.brokerValueBase ?? 0) > 0,
-    );
-    return anyBroker ? brokerTotal : (pnl.totalValueBase ?? live.portfolio?.totalValueBase ?? 0);
+    return Number.isFinite(pnl.totalValueBase) ? pnl.totalValueBase! : (live.portfolio?.totalValueBase ?? 0);
   }, [pnl, live.portfolio]);
 
   /** Net worth reconciled to the Home page: investment value (the same

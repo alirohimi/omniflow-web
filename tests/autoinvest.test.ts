@@ -189,6 +189,65 @@ describe('portfolioPnl', () => {
     expect(pnl.missingCapitalCount).toBe(0);
   });
 
+  it('hero value (pnl.totalValueBase) reconciles with P&L: value − P&L = capital', () => {
+    // Mirrors the real screenshot: 5 accounts, 2 of which are nested sleeves
+    // (StashAway "USD Cash Yield" + "Monthly Portofolio" inside "Simple"), each
+    // with a broker value and a recorded deposit. The hero VALUE must equal
+    // pnl.totalValueBase (sleeves excluded, broker values used) so that
+    // value − P&L === capital and the return % reconciles. This is the
+    // invariant the old `brokerTotal` branch broke (it summed ALL
+    // non-sleeve accounts while P&L only summed non-sleeve WITH capital).
+    const simple: InvestmentAccount = {
+      id: 'a', platformName: 'Stashaway Simple', accountType: 'robo',
+      baseCurrencyValue: 0, lastUpdated: NOW,
+      initialDepositBase: 25_000, brokerValueBase: 47_148.78, // +22,148.78
+    };
+    const usdYield: InvestmentAccount = {
+      id: 'b', platformName: 'Stahsaway USD Cash Yield', accountType: 'robo',
+      baseCurrencyValue: 0, lastUpdated: NOW,
+      initialDepositBase: 5_500, brokerValueBase: 5_153.41, isSubView: true, // −346.59
+    };
+    const monthly: InvestmentAccount = {
+      id: 'c', platformName: 'Stashaway Monthly Portofolio', accountType: 'robo',
+      baseCurrencyValue: 0, lastUpdated: NOW,
+      initialDepositBase: 49_000, brokerValueBase: 37_504.18, isSubView: true, // −11,495.82
+    };
+    const hata: InvestmentAccount = {
+      id: 'd', platformName: 'HATA', accountType: 'robo',
+      baseCurrencyValue: 0, lastUpdated: NOW,
+      initialDepositBase: 9_000, brokerValueBase: 7_104.51, // −1,895.49
+    };
+    const maybank: InvestmentAccount = {
+      id: 'e', platformName: 'Maybank', accountType: 'cash',
+      baseCurrencyValue: 0, lastUpdated: NOW,
+      initialDepositBase: 20_000, brokerValueBase: 20_000, // +0.00
+    };
+    const accounts = [simple, usdYield, monthly, hata, maybank];
+    const summary = fakeSummary([
+      { id: 'a', value: 47_148.78, cost: 0 },
+      { id: 'b', value: 5_153.41, cost: 0 },
+      { id: 'c', value: 37_504.18, cost: 0 },
+      { id: 'd', value: 7_104.51, cost: 0 },
+      { id: 'e', value: 20_000, cost: 0 },
+    ]);
+    const pnl = portfolioPnl(summary, accounts, []);
+
+    // The hero value must be the de-duplicated (sleeve-excluded) total —
+    // Simple(47,148.78) + HATA(7,104.51) + Maybank(20,000); the two sleeves
+    // (USD Yield, Monthly) are NOT added again.
+    expect(pnl.totalValueBase).toBeCloseTo(47_148.78 + 7_104.51 + 20_000, 2);
+    // Capital = same de-duplicated set of deposits.
+    expect(pnl.totalCapitalBase).toBeCloseTo(25_000 + 9_000 + 20_000, 2);
+    // P&L = value − capital (on the SAME base).
+    expect(pnl.totalPnlBase).toBeCloseTo(pnl.totalValueBase! - pnl.totalCapitalBase, 2);
+    // And the invariant that makes the hero self-consistent:
+    expect(pnl.totalValueBase! - (pnl.totalPnlBase ?? 0)).toBeCloseTo(pnl.totalCapitalBase!, 2);
+    // return% is P&L / capital.
+    expect(pnl.totalReturnPct).toBeCloseTo(
+      ((pnl.totalPnlBase! / pnl.totalCapitalBase!) * 100), 3,
+    );
+  });
+
   it('falls back to the live quote when no broker value is recorded', () => {
     const acc: InvestmentAccount = {
       id: 'acc-1', platformName: 'Stashaway Monthly Portofolio', accountType: 'robo',
