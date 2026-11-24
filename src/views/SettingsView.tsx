@@ -46,11 +46,17 @@ export function SettingsView() {
   // PWAs silently swallow window.confirm(), which made this button a no-op in
   // the installed app. Mirrors the DelButton armed-destructive pattern.
   const [eraseArmed, setEraseArmed] = useState(false);
+  const [wipeArmed, setWipeArmed] = useState(false);
   useEffect(() => {
     if (!eraseArmed) return;
     const t = window.setTimeout(() => setEraseArmed(false), 2500);
     return () => window.clearTimeout(t);
   }, [eraseArmed]);
+  useEffect(() => {
+    if (!wipeArmed) return;
+    const t = window.setTimeout(() => setWipeArmed(false), 2500);
+    return () => window.clearTimeout(t);
+  }, [wipeArmed]);
 
   // ---- admin: single shared AI model + member directory. Only the 0003
   // platform-default row matters; there is no per-user BYOK or per-user
@@ -578,6 +584,33 @@ export function SettingsView() {
           <div className="small muted" style={{ marginTop: 8 }}>
             Removes the vault, portfolio, and sync row from this device.
             No undo.
+          </div>
+        )}
+
+        {/* A lighter reset: clear all financial data but keep the account
+            signed in (vs. eraseAll above, which also deletes the cloud row
+            and signs you out). This is what clears orphaned contributions
+            left behind by per-account deletes that kept the hero P&L
+            showing after every account was removed. */}
+        <button
+          className={`btn danger sm${wipeArmed ? ' active' : ''}`}
+          style={{ marginTop: 12 }}
+          onClick={() => {
+            if (wipeArmed) {
+              setWipeArmed(false);
+              store.wipeVault();
+            } else {
+              setWipeArmed(true);
+            }
+          }}
+        >
+          {wipeArmed ? 'Tap again to reset all data (stay signed in)' : 'Reset all data'}
+        </button>
+        {!wipeArmed && (
+          <div className="small muted" style={{ marginTop: 8 }}>
+            Wipes accounts, holdings, contributions, budgets, and goals but
+            keeps you signed in. Use this when the portfolio won't empty
+            after deleting accounts.
           </div>
         )}
       </div>

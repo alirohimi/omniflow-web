@@ -192,6 +192,13 @@ export interface VaultStore {
 
   addAccount: (input: NewAccountInput) => string;
   deleteAccount: (id: string) => void;
+  /** Wipe the entire vault (all accounts/holdings/contributions/budgets/
+   *  recurring/liabilities/assets/dividends/disposals/emergency/goals/auto-
+   *  invests) back to a fresh empty state, preserving the user's prefs and
+   *  llmKey. One persist. Used by the Settings "Delete all data" button —
+   *  the only way to truly reset when orphaned data (e.g. contributions
+   *  left behind by an older deleteAccount) keeps the hero P&L showing. */
+  wipeVault: () => void;
   /** Patch an existing account (platformName, accountType, deposit). */
   updateAccount: (id: string, patch: Partial<Omit<InvestmentAccount, 'id' | 'baseCurrencyValue' | 'lastUpdated'>>) => void;
   addHolding: (input: NewHoldingInput) => string;
@@ -1031,10 +1038,20 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     (id: string) => {
       setVault((prev) => {
         if (!prev) return prev;
+        // Removing an account must also drop its contribution ledger entries,
+        // otherwise `capFromContribs` (the P&L fallback when initialDepositBase
+        // is missing) re-sums the orphaned contributions and the hero P&L
+        // persists even after every account is deleted. The user reported
+        // "I deleted all accounts but the view still shows +19,906" — this
+        // is the root cause: contributions were not cleaned up with the
+        // account.
         const next: VaultBlob = {
           ...prev,
           accounts: prev.accounts.filter((a) => a.id !== id),
           holdings: prev.holdings.filter((h) => h.accountId !== id),
+          contributions: prev.contributions
+            ? prev.contributions.filter((c) => c.accountId !== id)
+            : prev.contributions,
           emergency: prev.emergency
             ? { ...prev.emergency, items: prev.emergency.items.filter((it) => it.accountId !== id) }
             : prev.emergency,
@@ -1046,6 +1063,24 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     },
     [persist],
   );
+
+  const wipeVault = useCallback(() => {
+    setVault((prev) => {
+      if (!prev) return prev;
+      // Preserve user prefs + llmKey (those are settings, not data); wipe
+      // every data array back to an empty state. This clears orphaned
+      // contributions/auto-invests/accounts that a per-account delete may
+      // have left behind, so the hero P&L finally resets to nothing.
+      const next: VaultBlob = {
+        ...emptyVault(prev.prefs),
+        createdAt: prev.createdAt,
+        updatedAt: Date.now(),
+        llmKey: prev.llmKey,
+      };
+      void persist(next);
+      return next;
+    });
+  }, [persist]);
 
   const updateAccount = useCallback(
     (id: string, patch: Partial<Omit<InvestmentAccount, 'id' | 'baseCurrencyValue' | 'lastUpdated'>>) => {
@@ -1933,6 +1968,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     addCategory,
     addAccount,
     deleteAccount,
+    wipeVault,
     updateAccount,
     addHolding,
     addAllocationPortfolio,

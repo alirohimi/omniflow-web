@@ -379,6 +379,89 @@ describe('extended-entity CRUD (budgets/recurring/liabilities/assets/dividends/d
     await unmount();
   });
 
+  it('deleteAccount also removes that account\'s contribution ledger (orphan-proof)', async () => {
+    // Regression: the user reported deleting every account but the hero P&L
+    // still showing +19,906. `capFromContribs` (the P&L fallback in
+    // autoinvest.portfolioPnl) re-sums contribution ledger entries per
+    // accountId, so if `deleteAccount` left the contributions behind, the
+    // orphaned ledger kept re-creating the capital base. Deleting an account
+    // must remove its contributions too.
+    const { storeRef, unmount } = await unlockFreshVault('user-del-contribs');
+    let accId = '';
+    await act(async () => {
+      accId = storeRef.current!.addAccount({ platformName: 'HATA', accountType: 'crypto', initialDepositBase: 0 });
+      storeRef.current!.addContribution({
+        accountId: accId,
+        amount: 5_000, currency: 'MYR', amountBase: 5_000, fxRate: 1, date: Date.now(),
+      });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    // Seed a second account with its own contribution so we can prove only
+    // the deleted account's ledger is removed, not the survivor's.
+    let otherId = '';
+    await act(async () => {
+      otherId = storeRef.current!.addAccount({ platformName: 'Maybank', accountType: 'cash', initialDepositBase: 0 });
+      storeRef.current!.addContribution({
+        accountId: otherId,
+        amount: 3_000, currency: 'MYR', amountBase: 3_000, fxRate: 1, date: Date.now(),
+      });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    let v = storeRef.current!.vault!;
+    expect(v.contributions).toHaveLength(2);
+
+    await act(async () => {
+      storeRef.current!.deleteAccount(accId);
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    v = storeRef.current!.vault!;
+    // The deleted account's contribution is gone; the other account's
+    // contribution survives.
+    expect(v.contributions).toHaveLength(1);
+    expect(v.contributions![0].accountId).toBe(otherId);
+    expect(v.contributions!.some((c) => c.accountId === accId)).toBe(false);
+    // The account itself is gone.
+    expect(v.accounts).toHaveLength(1);
+    expect(v.accounts[0].id).toBe(otherId);
+    await unmount();
+  });
+
+  it('wipeVault clears all data arrays but preserves prefs + llmKey (stay signed in)', async () => {
+    // The "Reset all data" button: wipes accounts/holdings/contributions/
+    // budgets/goals back to empty while keeping the user unlocked (unlike
+    // eraseAll, which deletes the cloud row + signs out). Proves the hero
+    // P&L finally resets to nothing when there's no data at all.
+    const { storeRef, unmount } = await unlockFreshVault('user-wipe');
+    let accId = '';
+    await act(async () => {
+      accId = storeRef.current!.addAccount({ platformName: 'HATA', accountType: 'crypto', initialDepositBase: 9_000, brokerValueBase: 7_104.51 });
+      storeRef.current!.addHolding({ accountId: accId, symbol: 'ETH', assetClass: 'crypto', holdingCurrency: 'MYR', units: 1, averageEntryPrice: 9_000, currentPriceLocal: 7_104.51 });
+      storeRef.current!.addContribution({ accountId: accId, amount: 9_000, currency: 'MYR', amountBase: 9_000, fxRate: 1, date: Date.now() });
+      storeRef.current!.addBudget({ category: 'Food', cap: 500, period: 'monthly', rollover: false });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    let v = storeRef.current!.vault!;
+    expect(v.accounts).toHaveLength(1);
+    expect(v.holdings).toHaveLength(1);
+    expect(v.contributions).toHaveLength(1);
+    expect(v.budgets).toHaveLength(1);
+
+    await act(async () => {
+      storeRef.current!.wipeVault();
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    v = storeRef.current!.vault!;
+    // All data arrays are empty…
+    expect(v.accounts).toHaveLength(0);
+    expect(v.holdings).toHaveLength(0);
+    expect(v.contributions).toHaveLength(0);
+    expect(v.budgets).toHaveLength(0);
+    // …but the vault is still unlocked (NOT null) and prefs survived.
+    expect(storeRef.current!.status).toBe('unlocked');
+    expect(v.prefs).toBeTruthy();
+    await unmount();
+  });
+
   it('updateAccount({ brokerValueBase: undefined }) clears a stale broker override', async () => {
     const { storeRef, unmount } = await unlockFreshVault('user-broker-clear');
     const store = storeRef.current!;
