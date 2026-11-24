@@ -434,7 +434,7 @@ describe('extended-entity CRUD (budgets/recurring/liabilities/assets/dividends/d
     const { storeRef, unmount } = await unlockFreshVault('user-wipe');
     let accId = '';
     await act(async () => {
-      accId = storeRef.current!.addAccount({ platformName: 'HATA', accountType: 'crypto', initialDepositBase: 9_000, brokerValueBase: 7_104.51 });
+      accId = storeRef.current!.addAccount({ platformName: 'HATA', accountType: 'crypto', initialDepositBase: 9_000 });
       storeRef.current!.addHolding({ accountId: accId, symbol: 'ETH', assetClass: 'crypto', holdingCurrency: 'MYR', units: 1, averageEntryPrice: 9_000, currentPriceLocal: 7_104.51 });
       storeRef.current!.addContribution({ accountId: accId, amount: 9_000, currency: 'MYR', amountBase: 9_000, fxRate: 1, date: Date.now() });
       storeRef.current!.addBudget({ category: 'Food', cap: 500, period: 'monthly', rollover: false });
