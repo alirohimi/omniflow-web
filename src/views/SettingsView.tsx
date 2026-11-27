@@ -205,233 +205,300 @@ export function SettingsView() {
 
   return (
     <>
-      <h2 className="section-title">Preferences</h2>
-      <div className="card">
-        <label className="field"><span>Display name</span>
-          <input value={prefs.displayName} onChange={(e) => store.setPrefs({ displayName: e.target.value })} />
-        </label>
-        <label className="field"><span>Base currency (all totals convert to this)</span>
-          <ThemedSelect
-            value={prefs.baseCurrency}
-            onChange={(v: string) => store.setPrefs({ baseCurrency: v })}
-            options={CURRENCIES.map((c) => ({ value: c.code, label: `${c.code} — ${c.name}` }))}
-            aria-label="Base currency"
-          />
-        </label>
-        <div className="list" style={{ marginTop: 12 }}>
-          <label className="row">
-            <span>Auto-categorize new expenses (AI engine)</span>
-            <span className="switch">
-              <input type="checkbox" checked={prefs.autoCategorize} onChange={(e) => store.setPrefs({ autoCategorize: e.target.checked })} />
-              <span className="track" aria-hidden="true" />
-            </span>
-          </label>
-          <label className="row">
-            <span>Advisor rules (overspend, concentration, pace)</span>
-            <span className="switch">
-              <input type="checkbox" checked={prefs.advisorRules} onChange={(e) => store.setPrefs({ advisorRules: e.target.checked })} />
-              <span className="track" aria-hidden="true" />
-            </span>
-          </label>
-        </div>
-      </div>
-
-      <h2 className="section-title">AI assistant</h2>
-      <div className="card">
-        {store.llmConfig ? (
-          // A platform default LLM is set by the admin — every user is on it.
-          <div className="notice" style={{ borderColor: 'var(--ok, #2e7d32)' }}>
-            <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>
-              {store.isAdminUser ? 'AI engine (admin-managed)' : 'AI engine'}
-            </div>
-            <p className="muted small" style={{ margin: 0, marginBottom: 10 }}>
-              {store.isAdminUser
-                ? 'The AI model below is the single platform default you manage in the admin section. Every user — including you — runs on it. There is no per-user key or model override.'
-                : 'The AI model is set centrally by your administrator. You do not configure it - your expenses are categorized automatically.'}
-            </p>
-            <div className="list">
-              {store.isAdminUser ? (
-                <>
-                  <div className="row"><span>Provider</span><span className="badge">{store.llmConfig.provider}</span></div>
-                  {store.llmConfig.model && (
-                    <div className="row"><span>Model</span><span className="muted small">{store.llmConfig.model}</span></div>
-                  )}
-                </>
-              ) : (
-                <>
-                  {/* Non-admin: never reveal the provider/model identity. */}
-                  <div className="row"><span>Provider</span><span className="badge">Managed</span></div>
-                  <div className="row"><span>Model</span><span className="muted small">{genericModelName()}</span></div>
-                </>
-              )}
-            </div>
+      <div className="page-head">
+        <div>
+          <div className="page-badge">
+            <span className="dot" /> AES-256-GCM Encrypted Vault
           </div>
-        ) : (
-          <p className="muted small">
-            No AI model is configured yet, so OmniFlow categorizes with the free
-            on-device rule engine. An administrator can set the shared model in the
-            admin section below - no per-user setup is needed.
+          <h1 className="page-title">Settings &amp; Security</h1>
+          <p className="page-sub">
+            Manage base currency, cloud sync, encryption keys, CSV exports, and AI configuration.
           </p>
-        )}
-        {store.error && (
-          <div className="card" style={{ marginTop: 10, borderColor: 'var(--bad)' }}>
-            <div className="small" style={{ color: 'var(--bad)' }}>{store.error}</div>
-            <button className="btn ghost sm" style={{ marginTop: 6 }} onClick={() => store.retrySync()}>
-              Retry cloud save
-            </button>
-          </div>
-        )}
+        </div>
       </div>
 
-      <h2 className="section-title">Data</h2>
-      <div className="card">
-        <div className="list">
-          <button className="btn ghost sm" onClick={() => store.lock()}>Lock vault now</button>
-        </div>
-        <div className="list" style={{ marginTop: 10 }}>
-          <button
-            className="btn ghost sm"
-            onClick={() => downloadCsv('omniflow-expenses.csv', expensesToCsv(vault.expenses))}
-          >
-            Export expenses CSV
-          </button>
-          <button
-            className="btn ghost sm"
-            onClick={() => downloadCsv('omniflow-investments.csv', holdingsToCsv(vault.holdings, vault.accounts))}
-          >
-            Export investments CSV
-          </button>
-          {vault.disposals && vault.disposals.length > 0 && store.entitlements.has('csv-export-pnl') && (
-            <button
-              className="btn ghost sm"
-              onClick={() => {
-                const base = vault.prefs.baseCurrency;
-                const disposals = vault.disposals ?? [];
-                const toBase: ToBase = (amt, from) => {
-                  if (from === base) return amt;
-                  if (!live.fx) return amt;
-                  try { return fxService.toBase(amt, from, live.fx); }
-                  catch { return amt; }
-                };
-                downloadCsv('omniflow-pnl.csv', pnlToCsv(disposals, toBase, base));
-              }}
-            >
-              Export P&L CSV
-            </button>
-          )}
-        </div>
-        <p className="muted small" style={{ marginTop: 8 }}>
-          {vault.expenses.length} expenses · {vault.holdings.length} holdings · {vault.accounts.length} accounts · updated {new Date(vault.updatedAt).toLocaleString()}
-        </p>
-      </div>
-
-      <h2 className="section-title">Plan</h2>
-      <div className="card">
-        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <div className="title">
-              {store.tier === 'pro' ? 'Pro' : 'Free'}
-              {store.tier === 'pro' ? <span className="chip sm ok" style={{ marginLeft: 8 }}>Active</span> : null}
-            </div>
-            <div className="meta muted small">
-              {store.tier === 'pro'
-                ? 'All Pro features unlocked.'
-                : 'Upgrade for LLM coach, P&L export, rebalance alerts, and more.'}
+      <div className="grid-2" style={{ marginBottom: 20, alignItems: 'start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
+          <div className="card" style={{ marginBottom: 0 }}>
+            <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>Preferences</h2>
+            <label className="field"><span>Display name</span>
+              <input value={prefs.displayName} onChange={(e) => store.setPrefs({ displayName: e.target.value })} />
+            </label>
+            <label className="field"><span>Base currency (all totals convert to this)</span>
+              <ThemedSelect
+                value={prefs.baseCurrency}
+                onChange={(v: string) => store.setPrefs({ baseCurrency: v })}
+                options={CURRENCIES.map((c) => ({ value: c.code, label: `${c.code} — ${c.name}` }))}
+                aria-label="Base currency"
+              />
+            </label>
+            <div className="list" style={{ marginTop: 12 }}>
+              <label className="row">
+                <span>Auto-categorize new expenses (AI engine)</span>
+                <span className="switch">
+                  <input type="checkbox" checked={prefs.autoCategorize} onChange={(e) => store.setPrefs({ autoCategorize: e.target.checked })} />
+                  <span className="track" aria-hidden="true" />
+                </span>
+              </label>
+              <label className="row">
+                <span>Advisor rules (overspend, concentration, pace)</span>
+                <span className="switch">
+                  <input type="checkbox" checked={prefs.advisorRules} onChange={(e) => store.setPrefs({ advisorRules: e.target.checked })} />
+                  <span className="track" aria-hidden="true" />
+                </span>
+              </label>
             </div>
           </div>
-          {store.tier !== 'pro' ? (
-            <button className="btn sm">Upgrade to Pro</button>
-          ) : null}
-        </div>
-      </div>
 
-      <h2 className="section-title">Account &amp; Sync</h2>
-      <div className="card">
-        {auth.cloudAvailable ? (
-          auth.user ? (
-            <>
-              <div className="list">
-                <div className="row">
-                  <span>Signed in</span>
-                  <span className="muted small">{auth.user.email}</span>
+          <div className="card" style={{ marginBottom: 0 }}>
+            <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>AI Assistant</h2>
+            {store.llmConfig ? (
+              <div className="notice" style={{ borderColor: 'var(--ok, #2e7d32)' }}>
+                <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>
+                  {store.isAdminUser ? 'AI engine (admin-managed)' : 'AI engine'}
                 </div>
-                <div className="row">
-                  <span>Vault sync</span>
-                  <span className="badge">
-                    {store.syncState === 'synced' ? 'synced' : store.syncState === 'error' ? 'error' : store.syncState}
-                  </span>
+                <p className="muted small" style={{ margin: 0, marginBottom: 10 }}>
+                  {store.isAdminUser
+                    ? 'The AI model below is the single platform default you manage in the admin section. Every user — including you — runs on it. There is no per-user key or model override.'
+                    : 'The AI model is set centrally by your administrator. You do not configure it - your expenses are categorized automatically.'}
+                </p>
+                <div className="list">
+                  {store.isAdminUser ? (
+                    <>
+                      <div className="row"><span>Provider</span><span className="badge">{store.llmConfig.provider}</span></div>
+                      {store.llmConfig.model && (
+                        <div className="row"><span>Model</span><span className="muted small">{store.llmConfig.model}</span></div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div className="row"><span>Provider</span><span className="badge">Managed</span></div>
+                      <div className="row"><span>Model</span><span className="muted small">{genericModelName()}</span></div>
+                    </>
+                  )}
                 </div>
               </div>
-              <p className="muted small" style={{ marginTop: 8 }}>
-                Your encrypted vault is stored in the database under this
-                {auth.user.user_metadata?.display_name
-                  ? ` ${auth.user.user_metadata.display_name}'s`
-                  : ''}{' '}
-                account ({auth.user.email}). Only ciphertext is stored.
+            ) : (
+              <p className="muted small" style={{ margin: 0 }}>
+                No AI model is configured yet, so OmniFlow categorizes with the free
+                on-device rule engine. An administrator can set the shared model in the
+                admin section below - no per-user setup is needed.
               </p>
-              <button className="btn ghost sm" style={{ marginTop: 8 }} onClick={() => void auth.signOut()}>
-                Sign out
-              </button>
-            </>
-          ) : (
-            <>
-              <p className="muted small">
-                Not signed in. Sign in or create an account at the top of the
-                app to load your vault from the database.
-              </p>
-            </>
-          )
-        ) : (
-          <p className="muted small">
-            Database is not configured. Build the app with{' '}
-            <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code>{' '}
-            to store your encrypted vault in the shared database. Without it
-            the vault exists only in this session and is lost on reload.
-          </p>
-        )}
-      </div>
-
-      <h2 className="section-title">Security</h2>
-      <div className="card">
-        <p className="muted small">
-          Everything is encrypted at rest with AES-256-GCM using a key derived
-          from your password (PBKDF2, 210k iterations). Only the ciphertext
-          is written to the database; your password and decrypted data never
-          leave this device. A wrong password fails to decrypt — there is
-          no bypass and no recovery.
-        </p>
-      </div>
-
-      {auth.cloudAvailable && auth.user && (
-        <>
-          <h2 className="section-title">Change password</h2>
-          <div className="card">
-            <p className="muted small">
-              Your password is the vault key. Changing it re-encrypts the whole
-              vault under the new key, so the two can never get out of sync.
-              At least 6 characters, must differ from the current one.
-            </p>
-            <label className="field"><span>Current password</span>
-              <input type="password" value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} placeholder="••••••••" autoComplete="current-password" />
-            </label>
-            <label className="field"><span>New password</span>
-              <input type="password" value={pwNext} onChange={(e) => setPwNext(e.target.value)} placeholder="min 6 characters" autoComplete="new-password" />
-            </label>
-            <label className="field"><span>Confirm new password</span>
-              <input type="password" value={pwNext2} onChange={(e) => setPwNext2(e.target.value)} placeholder="repeat new password" autoComplete="new-password" />
-            </label>
-            <button
-              className="btn sm"
-              style={{ marginTop: 8 }}
-              disabled={pwBusy || !pwCurrent || !pwNext || !pwNext2}
-              onClick={() => void changePw()}
-            >
-              {pwBusy ? 'Re-encrypting…' : 'Change password'}
-            </button>
-            {pwMsg && <div className="small muted" style={{ marginTop: 8 }}>{pwMsg}</div>}
+            )}
+            {store.error && (
+              <div className="card" style={{ marginTop: 10, borderColor: 'var(--bad)' }}>
+                <div className="small" style={{ color: 'var(--bad)' }}>{store.error}</div>
+                <button className="btn ghost sm" style={{ marginTop: 6 }} onClick={() => store.retrySync()}>
+                  Retry cloud save
+                </button>
+              </div>
+            )}
           </div>
-        </>
-      )}
+
+          <div className="card" style={{ marginBottom: 0 }}>
+            <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>Data &amp; Export</h2>
+            <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
+              <button className="btn ghost sm" onClick={() => store.lock()}>Lock vault now</button>
+              <button
+                className="btn ghost sm"
+                onClick={() => downloadCsv('omniflow-expenses.csv', expensesToCsv(vault.expenses))}
+              >
+                Export expenses CSV
+              </button>
+              <button
+                className="btn ghost sm"
+                onClick={() => downloadCsv('omniflow-investments.csv', holdingsToCsv(vault.holdings, vault.accounts))}
+              >
+                Export investments CSV
+              </button>
+              {vault.disposals && vault.disposals.length > 0 && store.entitlements.has('csv-export-pnl') && (
+                <button
+                  className="btn ghost sm"
+                  onClick={() => {
+                    const base = vault.prefs.baseCurrency;
+                    const disposals = vault.disposals ?? [];
+                    const toBase: ToBase = (amt, from) => {
+                      if (from === base) return amt;
+                      if (!live.fx) return amt;
+                      try { return fxService.toBase(amt, from, live.fx); }
+                      catch { return amt; }
+                    };
+                    downloadCsv('omniflow-pnl.csv', pnlToCsv(disposals, toBase, base));
+                  }}
+                >
+                  Export P&amp;L CSV
+                </button>
+              )}
+            </div>
+            <p className="muted small" style={{ marginTop: 10, marginBottom: 0 }}>
+              {vault.expenses.length} expenses · {vault.holdings.length} holdings · {vault.accounts.length} accounts · updated {new Date(vault.updatedAt).toLocaleString()}
+            </p>
+          </div>
+
+          <div className="card" style={{ marginBottom: 0 }}>
+            <h2 style={{ margin: '0 0 10px', fontSize: 16 }}>Plan</h2>
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div className="title">
+                  {store.tier === 'pro' ? 'Pro' : 'Free'}
+                  {store.tier === 'pro' ? <span className="chip sm ok" style={{ marginLeft: 8 }}>Active</span> : null}
+                </div>
+                <div className="meta muted small">
+                  {store.tier === 'pro'
+                    ? 'All Pro features unlocked.'
+                    : 'Upgrade for LLM coach, P&L export, rebalance alerts, and more.'}
+                </div>
+              </div>
+              {store.tier !== 'pro' ? (
+                <button className="btn sm">Upgrade to Pro</button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
+          <div className="card" style={{ marginBottom: 0 }}>
+            <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>Account &amp; Sync</h2>
+            {auth.cloudAvailable ? (
+              auth.user ? (
+                <>
+                  <div className="list">
+                    <div className="row">
+                      <span>Signed in</span>
+                      <span className="muted small">{auth.user.email}</span>
+                    </div>
+                    <div className="row">
+                      <span>Vault sync</span>
+                      <span className="badge">
+                        {store.syncState === 'synced' ? 'synced' : store.syncState === 'error' ? 'error' : store.syncState}
+                      </span>
+                    </div>
+                  </div>
+                  <p className="muted small" style={{ marginTop: 8 }}>
+                    Your encrypted vault is stored in the database under this
+                    {auth.user.user_metadata?.display_name
+                      ? ` ${auth.user.user_metadata.display_name}'s`
+                      : ''}{' '}
+                    account ({auth.user.email}). Only ciphertext is stored.
+                  </p>
+                  <button className="btn ghost sm" style={{ marginTop: 8 }} onClick={() => void auth.signOut()}>
+                    Sign out
+                  </button>
+                </>
+              ) : (
+                <p className="muted small" style={{ margin: 0 }}>
+                  Not signed in. Sign in or create an account at the top of the
+                  app to load your vault from the database.
+                </p>
+              )
+            ) : (
+              <p className="muted small" style={{ margin: 0 }}>
+                Database is not configured. Build the app with{' '}
+                <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code>{' '}
+                to store your encrypted vault in the shared database. Without it
+                the vault exists only in this session and is lost on reload.
+              </p>
+            )}
+          </div>
+
+          <div className="card" style={{ marginBottom: 0 }}>
+            <h2 style={{ margin: '0 0 8px', fontSize: 16 }}>Security Architecture</h2>
+            <p className="muted small" style={{ margin: 0 }}>
+              Everything is encrypted at rest with AES-256-GCM using a key derived
+              from your password (PBKDF2, 210k iterations). Only the ciphertext
+              is written to the database; your password and decrypted data never
+              leave this device. A wrong password fails to decrypt — there is
+              no bypass and no recovery.
+            </p>
+          </div>
+
+          {auth.cloudAvailable && auth.user && (
+            <div className="card" style={{ marginBottom: 0 }}>
+              <h2 style={{ margin: '0 0 8px', fontSize: 16 }}>Change Password</h2>
+              <p className="muted small">
+                Your password is the vault key. Changing it re-encrypts the whole
+                vault under the new key, so the two can never get out of sync.
+                At least 6 characters, must differ from the current one.
+              </p>
+              <label className="field"><span>Current password</span>
+                <input type="password" value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} placeholder="••••••••" autoComplete="current-password" />
+              </label>
+              <label className="field"><span>New password</span>
+                <input type="password" value={pwNext} onChange={(e) => setPwNext(e.target.value)} placeholder="min 6 characters" autoComplete="new-password" />
+              </label>
+              <label className="field"><span>Confirm new password</span>
+                <input type="password" value={pwNext2} onChange={(e) => setPwNext2(e.target.value)} placeholder="repeat new password" autoComplete="new-password" />
+              </label>
+              <button
+                className="btn sm"
+                style={{ marginTop: 10 }}
+                disabled={pwBusy || !pwCurrent || !pwNext || !pwNext2}
+                onClick={() => void changePw()}
+              >
+                {pwBusy ? 'Re-encrypting…' : 'Change password'}
+              </button>
+              {pwMsg && <div className="small muted" style={{ marginTop: 8 }}>{pwMsg}</div>}
+            </div>
+          )}
+
+          <div className="card" style={{ marginBottom: 0, borderColor: 'color-mix(in srgb, var(--bad) 25%, var(--card-border))' }}>
+            <h2 style={{ margin: '0 0 12px', fontSize: 16, color: 'var(--bad)' }}>Danger Zone</h2>
+            <button
+              className={`btn danger sm${eraseArmed ? ' active' : ''}`}
+              disabled={dangerBusy}
+              onClick={() => {
+                if (eraseArmed) {
+                  setEraseArmed(false);
+                  setDangerBusy(true);
+                  setDangerMsg(null);
+                  void store.eraseAll().finally(() => setDangerBusy(false));
+                } else {
+                  setEraseArmed(true);
+                }
+              }}
+              style={eraseArmed ? { background: 'var(--bad)', color: '#fff', borderColor: 'var(--bad)' } : undefined}
+            >
+              {eraseArmed ? 'Tap again to erase everything' : 'Erase all data'}
+            </button>
+            {!eraseArmed && (
+              <div className="small muted" style={{ marginTop: 8 }}>
+                Removes the vault, portfolio, and sync row from this device.
+                No undo.
+              </div>
+            )}
+
+            <button
+              className={`btn danger sm${wipeArmed ? ' active' : ''}`}
+              style={{ marginTop: 12 }}
+              disabled={dangerBusy}
+              onClick={() => {
+                if (wipeArmed) {
+                  setWipeArmed(false);
+                  setDangerBusy(true);
+                  setDangerMsg(null);
+                  void store
+                    .wipeVault()
+                    .then(() => setDangerMsg('All data cleared.'))
+                    .catch(() => setDangerMsg('Reset failed — please try again.'))
+                    .finally(() => setDangerBusy(false));
+                } else {
+                  setWipeArmed(true);
+                }
+              }}
+            >
+              {dangerBusy ? 'Clearing data…' : wipeArmed ? 'Tap again to reset all data (stay signed in)' : 'Reset all data'}
+            </button>
+            {!wipeArmed && (
+              <div className="small muted" style={{ marginTop: 8 }}>
+                Wipes accounts, holdings, contributions, budgets, and goals but
+                keeps you signed in. Use this when the portfolio won't empty
+                after deleting accounts.
+              </div>
+            )}
+            {dangerMsg && <div className="small muted" style={{ marginTop: 10 }}>{dangerMsg}</div>}
+          </div>
+        </div>
+      </div>
 
       {store.isAdminUser && auth.cloudAvailable && auth.user && (
         <>
@@ -565,68 +632,6 @@ export function SettingsView() {
           </div>
         </>
       )}
-
-      <h2 className="section-title">Danger zone</h2>
-      <div className="card">
-        <button
-          className={`btn danger sm${eraseArmed ? ' active' : ''}`}
-          disabled={dangerBusy}
-          onClick={() => {
-            if (eraseArmed) {
-              setEraseArmed(false);
-              setDangerBusy(true);
-              setDangerMsg(null);
-              void store.eraseAll().finally(() => setDangerBusy(false));
-            } else {
-              setEraseArmed(true);
-            }
-          }}
-          style={eraseArmed ? { background: 'var(--bad)', color: '#fff', borderColor: 'var(--bad)' } : undefined}
-        >
-          {eraseArmed ? 'Tap again to erase everything' : 'Erase all data'}
-        </button>
-        {!eraseArmed && (
-          <div className="small muted" style={{ marginTop: 8 }}>
-            Removes the vault, portfolio, and sync row from this device.
-            No undo.
-          </div>
-        )}
-
-        {/* A lighter reset: clear all financial data but keep the account
-            signed in (vs. eraseAll above, which also deletes the cloud row
-            and signs you out). This is what clears orphaned contributions
-            left behind by per-account deletes that kept the hero P&L
-            showing after every account was removed. */}
-        <button
-          className={`btn danger sm${wipeArmed ? ' active' : ''}`}
-          style={{ marginTop: 12 }}
-          disabled={dangerBusy}
-          onClick={() => {
-            if (wipeArmed) {
-              setWipeArmed(false);
-              setDangerBusy(true);
-              setDangerMsg(null);
-              void store
-                .wipeVault()
-                .then(() => setDangerMsg('All data cleared.'))
-                .catch(() => setDangerMsg('Reset failed — please try again.'))
-                .finally(() => setDangerBusy(false));
-            } else {
-              setWipeArmed(true);
-            }
-          }}
-        >
-          {dangerBusy ? 'Clearing data…' : wipeArmed ? 'Tap again to reset all data (stay signed in)' : 'Reset all data'}
-        </button>
-        {!wipeArmed && (
-          <div className="small muted" style={{ marginTop: 8 }}>
-            Wipes accounts, holdings, contributions, budgets, and goals but
-            keeps you signed in. Use this when the portfolio won't empty
-            after deleting accounts.
-          </div>
-        )}
-        {dangerMsg && <div className="small muted" style={{ marginTop: 10 }}>{dangerMsg}</div>}
-      </div>
     </>
   );
 }

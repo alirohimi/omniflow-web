@@ -179,3 +179,16 @@ export const IImage = (p: P) => (
     <path d="m20.5 13.5-4.5-4L7 19" />
   </S>
 );
+
+export const ISun = (p: P) => (
+  <S {...p}>
+    <circle cx="12" cy="12" r="4" />
+    <path d="M12 2.5v2M12 19.5v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2.5 12h2M19.5 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+  </S>
+);
+
+export const IMoon = (p: P) => (
+  <S {...p}>
+    <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11Z" />
+  </S>
+);

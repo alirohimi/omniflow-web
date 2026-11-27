@@ -56,6 +56,7 @@ export function ExpensesView() {
   const [aiMsg, setAiMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [isIncome, setIsIncome] = useState(false);
+  const [captureTab, setCaptureTab] = useState<'manual' | 'ocr' | 'pdf'>('manual');
 
   // ---- OCR form state
   const fileRef = useRef<HTMLInputElement>(null);
@@ -568,265 +569,319 @@ export function ExpensesView() {
 
   return (
     <>
-      <h2 className="section-title">Add a transaction</h2>
-      <div className="card">
-        <div className="row" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
-          <div className="row" style={{ gap: 8 }}>
-            <span className="chip sm"><IReceipt size={14} /> Type it in</span>
-            <span className="chip sm"><IScan size={14} /> Scan a receipt</span>
+      <div className="page-head">
+        <div>
+          <div className="page-badge">
+            <span className="dot" /> Cashflow &amp; Ledger
           </div>
-          <button
-            className={`btn ghost sm ${isIncome ? '' : 'off'}`}
-            onClick={() => { setIsIncome((v) => !v); if (!isIncome) setCat(''); }}
-            aria-pressed={isIncome}
-            style={{ flex: 'none' }}
-          >
-            {isIncome ? 'Income' : 'Expense'}
-          </button>
-        </div>
-
-        <label className="field"><span>{isIncome ? 'Income source' : 'Amount'}</span>
-          <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />
-        </label>
-        <div className="cols">
-          <label className="field"><span>Currency</span>
-            <ThemedSelect
-              value={cur}
-              onChange={(v: string) => setCur(v)}
-              options={CURRENCIES.map((c) => ({ value: c.code, label: `${c.code} (${c.name})` }))}
-              aria-label="Currency"
-            />
-          </label>
-          {!isIncome && (
-            <label className="field"><span>Payment</span>
-              <ThemedSelect
-                value={pm}
-                onChange={(v: string) => setPm(v as typeof pm)}
-                options={PAYMENT_METHODS.map((m) => ({ value: m, label: m }))}
-                aria-label="Payment method"
-              />
-            </label>
-          )}
-        </div>
-        <label className="field"><span>{isIncome ? 'Source (e.g. salary, freelance)' : 'Merchant (auto-categorized by AI)'}</span>
-          <input value={merchant} onChange={(e) => void categorizeMerchant(e.target.value)} placeholder={isIncome ? 'e.g. salary, freelance, rental' : 'e.g. 7-Eleven, Luno, Grab'} />
-        </label>
-        {isIncome ? (
-          <div className="small muted">Income is tracked separately from spend and excluded from all budget / pace calculations.</div>
-        ) : aiMsg ? <div className="small muted">{aiMsg}</div> : null}
-        {!isIncome && (
-          <label className="field"><span>Category</span>
-            <ThemedSelect
-              value={cat}
-              onChange={(v: string) => setCat(v)}
-              options={vault.categories
-                .filter((c) => c.name !== 'Income')
-                .map((c) => ({ value: c.name, label: `${c.icon} ${c.name}` }))}
-              aria-label="Category"
-            />
-          </label>
-        )}
-        <label className="field"><span>Note (optional)</span>
-          <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="receipt text, reference…" />
-        </label>
-        <div className="row" style={{ gap: 8 }}>
-          <button className="btn" style={{ flex: 1 }} disabled={busy} onClick={() => void saveManual()}>
-            {busy ? 'Working…' : isIncome
-              ? 'Save income'
-              : `Save expense ${cur !== base ? `(${cur}→${base})` : ''}`}
-          </button>
-          {!isIncome && (
-            <button
-              className="btn ghost sm"
-              style={{ flex: 'none' }}
-              onClick={() => { setIsIncome(true); setCat(''); setAiMsg(null); }}
-            >
-              Add income
-            </button>
-          )}
+          <h1 className="page-title">Expenses &amp; Cashflow</h1>
+          <p className="page-sub">
+            Log daily spending or income, scan receipts, import bank statements, and track category budgets in {base}.
+          </p>
         </div>
       </div>
 
-      <div className="card">
-        <h3>Scan a receipt or payment screenshot</h3>
-        <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }}
-          onChange={(e) => e.target.files?.[0] && void runOcr(e.target.files[0])} />
-        <button className="btn ghost sm" disabled={ocrBusy} onClick={() => fileRef.current?.click()}>
-          {ocrBusy ? `OCR ${ocrProgress != null ? ocrProgress + '%' : '…'}` : 'Choose image'}
-        </button>
-        {ocrResult && (
-          <div className="small muted" style={{ marginTop: 8 }}>
-            Found: {ocrResult.amount != null ? ocrResult.amount : '?'} {ocrResult.currency} @ {ocrResult.merchant}
-          </div>
-        )}
-      </div>
-
-      <div className="card">
-        <h3>Import a bank statement (PDF)</h3>
-        <p className="small muted" style={{ marginTop: 0 }}>
-          Monthly bank / card / e-wallet statement. The PDF is read on your
-          device (never uploaded). Bank tables (Maybank/M2U, CIMB, RHB, card
-          statements) are parsed with built-in rules — the transaction amount is
-          read from the signed amount column, not the running balance; AI is
-          used only to verify/complete uncertain merchants. Auto-categorizes
-          each merchant. Review and edit before importing.
-          {store.llmConfig ? ' Uses your AI key for verification.' : ' No key needed.'}
-        </p>
-        <input ref={pdfRef} type="file" accept="application/pdf" style={{ display: 'none' }}
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            e.target.value = '';
-            if (f) void runPdfImport(f);
-          }} />
-        <button className="btn ghost sm" disabled={pdfBusy} onClick={() => pdfRef.current?.click()}>
-          <IReceipt size={15} />
-          {pdfBusy ? pdfPhase ?? 'Working…' : 'Choose PDF statement'}
-        </button>
-        {pdfBusy && pdfPhase && (
-          <div style={{ marginTop: 8 }}>
-            <div className="row" style={{ gap: 8, alignItems: 'center' }}>
-              <div className="spinner sm" aria-hidden />
-              <span className="small muted grow" style={{ minWidth: 0 }}>{pdfPhase}…</span>
-              {pdfProgress != null && (
-                <span className="small mono">{Math.round(pdfProgress * 100)}%</span>
-              )}
-              <button className="btn ghost sm" onClick={cancelPdfParse} type="button">
-                Cancel
+      <div className="grid-2" style={{ marginBottom: 20, alignItems: 'start' }}>
+        <div className="card" style={{ marginBottom: 0 }}>
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
+            <div className="subtabs" style={{ marginBottom: 0 }}>
+              <button
+                type="button"
+                className={captureTab === 'manual' ? 'on' : ''}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                onClick={() => setCaptureTab('manual')}
+              >
+                <IReceipt size={14} />
+                Type it in
+              </button>
+              <button
+                type="button"
+                className={captureTab === 'ocr' ? 'on' : ''}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                onClick={() => setCaptureTab('ocr')}
+              >
+                <IScan size={14} />
+                Scan receipt
+              </button>
+              <button
+                type="button"
+                className={captureTab === 'pdf' ? 'on' : ''}
+                onClick={() => setCaptureTab('pdf')}
+              >
+                Import PDF
               </button>
             </div>
-            {pdfProgress != null && (
-              <div
-                className="bar"
-                role="progressbar"
-                aria-valuenow={Math.round(pdfProgress * 100)}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                style={{ marginTop: 8 }}
+            {captureTab === 'manual' && (
+              <button
+                className={`btn ghost sm ${isIncome ? '' : 'off'}`}
+                onClick={() => { setIsIncome((v) => !v); if (!isIncome) setCat(''); }}
+                aria-pressed={isIncome}
+                style={{ flex: 'none' }}
               >
-                <i style={{ width: `${Math.round(pdfProgress * 100)}%` }} />
-              </div>
+                {isIncome ? 'Income' : 'Expense'}
+              </button>
             )}
           </div>
-        )}
-        {pdfError && <div className="small" style={{ color: 'var(--bad)', marginTop: 8 }}>{pdfError}</div>}
 
-        {pdfRows && pdfMeta && (
-          <div style={{ marginTop: 12 }}>
-            <div className="row small" style={{ marginBottom: 8 }}>
-              <span className="chip sm">{pdfRows.length} found</span>
-              {pdfRows.filter((r) => r.direction === 'in').length > 0 && (
-                <span className="chip sm" title="Incoming money (deposits, refunds) is not tracked as an expense">
-                  {pdfRows.filter((r) => r.direction === 'in').length} incoming excluded
-                </span>
-              )}
-              <span className="chip sm {pdfMeta.parser === 'llm' ? 'ok' : ''}">
-                {pdfMeta.parser === 'llm' ? 'AI-extracted' : 'rules-parsed'}
-              </span>
-              <span className="muted">{pdfMeta.fileName}</span>
-            </div>
-            {pdfMeta.parser === 'llm' && pdfMeta.llmError && (
-              <div className="small muted" style={{ marginBottom: 8 }}>{pdfMeta.llmError}</div>
-            )}
-            {pdfRows.map((row, i) => {
-              const off = pdfDisabled.has(i);
-              const isIncome = row.direction === 'in';
-              // Incoming rows are never importable — the commit step drops
-              // them, so show that explicitly instead of a live checkbox.
-              return (
-                <div key={i} className="item" style={{ opacity: isIncome ? 0.5 : off ? 0.45 : 1 }}>
-                  {isIncome ? (
-                    <span className="chip sm" style={{ flex: 'none', marginTop: 2 }} title="Incoming money is not tracked as an expense">in</span>
-                  ) : (
-                    <input
-                      type="checkbox"
-                      checked={!off}
-                      onChange={() => toggleRow(i)}
-                      style={{ width: 18, height: 18, flex: 'none', marginTop: 2 }}
-                      aria-label={`Include ${row.merchant}`}
+          {captureTab === 'manual' && (
+            <>
+              <label className="field"><span>{isIncome ? 'Income source' : 'Amount'}</span>
+                <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />
+              </label>
+              <div className="cols">
+                <label className="field"><span>Currency</span>
+                  <ThemedSelect
+                    value={cur}
+                    onChange={(v: string) => setCur(v)}
+                    options={CURRENCIES.map((c) => ({ value: c.code, label: `${c.code} (${c.name})` }))}
+                    aria-label="Currency"
+                  />
+                </label>
+                {!isIncome && (
+                  <label className="field"><span>Payment</span>
+                    <ThemedSelect
+                      value={pm}
+                      onChange={(v: string) => setPm(v as typeof pm)}
+                      options={PAYMENT_METHODS.map((m) => ({ value: m, label: m }))}
+                      aria-label="Payment method"
                     />
-                  )}
-                  <div className="grow" style={{ minWidth: 0 }}>
-                    <div className="title" style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
-                      <input
-                        value={row.merchant}
-                        onChange={(e) => patchRow(i, { merchant: e.target.value })}
-                        style={{ minWidth: 0, flex: 1, padding: '2px 4px', minHeight: 0, fontSize: 14 }}
-                        aria-label="Merchant"
-                      />
-                      <ThemedSelect
-                        compact
-                        value={row.direction}
-                        onChange={(v: string) => patchRow(i, { direction: v as 'in' | 'out', category: v === 'in' ? 'Income' : row.category || 'Other' })}
-                        options={[{ value: 'out', label: 'out' }, { value: 'in', label: 'in' }]}
-                        aria-label="Direction"
-                      />
-                    </div>
-                    <div className="meta" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <input
-                        type="number"
-                        inputMode="decimal"
-                        value={row.amount}
-                        onChange={(e) => patchRow(i, { amount: Number(e.target.value) })}
-                        style={{ width: 92, padding: '2px 6px', minHeight: 0, fontSize: 12.5 }}
-                        aria-label="Amount"
-                      />
-                      <ThemedSelect
-                        compact
-                        value={row.currency || base}
-                        onChange={(v: string) => patchRow(i, { currency: v })}
-                        options={[...new Set([base, ...CURRENCIES.map((c) => c.code)])].map((c) => ({ value: c, label: c }))}
-                        aria-label="Currency"
-                      />
-                      <ThemedSelect
-                        compact
-                        value={row.category || (isIncome ? 'Income' : 'Other')}
-                        onChange={(v: string) => patchRow(i, { category: v })}
-                        options={vault.categories.map((c) => ({ value: c.name, label: `${c.icon} ${c.name}` }))}
-                        aria-label="Category"
-                      />
-                      {row.date && (
-                        <span>{new Date(row.date).toLocaleDateString()}</span>
-                      )}
-                    </div>
+                  </label>
+                )}
+              </div>
+              <label className="field"><span>{isIncome ? 'Source (e.g. salary, freelance)' : 'Merchant (auto-categorized by AI)'}</span>
+                <input value={merchant} onChange={(e) => void categorizeMerchant(e.target.value)} placeholder={isIncome ? 'e.g. salary, freelance, rental' : 'e.g. 7-Eleven, Luno, Grab'} />
+              </label>
+              {isIncome ? (
+                <div className="small muted">Income is tracked separately from spend and excluded from all budget / pace calculations.</div>
+              ) : aiMsg ? <div className="small muted">{aiMsg}</div> : null}
+              {!isIncome && (
+                <label className="field"><span>Category</span>
+                  <ThemedSelect
+                    value={cat}
+                    onChange={(v: string) => setCat(v)}
+                    options={vault.categories
+                      .filter((c) => c.name !== 'Income')
+                      .map((c) => ({ value: c.name, label: `${c.icon} ${c.name}` }))}
+                    aria-label="Category"
+                  />
+                </label>
+              )}
+              <label className="field"><span>Note (optional)</span>
+                <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="receipt text, reference…" />
+              </label>
+              <div className="row" style={{ gap: 8, marginTop: 12 }}>
+                <button className="btn" style={{ flex: 1 }} disabled={busy} onClick={() => void saveManual()}>
+                  {busy ? 'Working…' : isIncome
+                    ? 'Save income'
+                    : `Save expense ${cur !== base ? `(${cur}→${base})` : ''}`}
+                </button>
+                {!isIncome && (
+                  <button
+                    className="btn ghost sm"
+                    style={{ flex: 'none' }}
+                    onClick={() => { setIsIncome(true); setCat(''); setAiMsg(null); }}
+                  >
+                    Add income
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+
+          {captureTab === 'ocr' && (
+            <div>
+              <h3 style={{ marginTop: 4 }}>Scan a receipt or payment screenshot</h3>
+              <p className="small muted" style={{ marginTop: 4 }}>
+                Reads totals and merchant names right on your device and pre-fills the transaction form.
+              </p>
+              <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }}
+                onChange={(e) => e.target.files?.[0] && void runOcr(e.target.files[0])} />
+              <button className="btn ghost sm" disabled={ocrBusy} onClick={() => fileRef.current?.click()}>
+                <IScan size={15} />
+                {ocrBusy ? `OCR ${ocrProgress != null ? ocrProgress + '%' : '…'}` : 'Choose image'}
+              </button>
+              {ocrResult && (
+                <div className="small muted" style={{ marginTop: 10 }}>
+                  Found: {ocrResult.amount != null ? ocrResult.amount : '?'} {ocrResult.currency} @ {ocrResult.merchant}
+                  {' — '}
+                  <button type="button" className="link" onClick={() => setCaptureTab('manual')}>
+                    review &amp; save
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {captureTab === 'pdf' && (
+            <div>
+              <h3 style={{ marginTop: 4 }}>Import a bank statement (PDF)</h3>
+              <p className="small muted" style={{ marginTop: 4 }}>
+                Monthly bank / card / e-wallet statement. The PDF is read on your
+                device (never uploaded). Bank tables (Maybank/M2U, CIMB, RHB, card
+                statements) are parsed with built-in rules — the transaction amount is
+                read from the signed amount column, not the running balance; AI is
+                used only to verify/complete uncertain merchants. Auto-categorizes
+                each merchant. Review and edit before importing.
+                {store.llmConfig ? ' Uses your AI key for verification.' : ' No key needed.'}
+              </p>
+              <input ref={pdfRef} type="file" accept="application/pdf" style={{ display: 'none' }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = '';
+                  if (f) void runPdfImport(f);
+                }} />
+              <button className="btn ghost sm" disabled={pdfBusy} onClick={() => pdfRef.current?.click()}>
+                <IReceipt size={15} />
+                {pdfBusy ? pdfPhase ?? 'Working…' : 'Choose PDF statement'}
+              </button>
+              {pdfBusy && pdfPhase && (
+                <div style={{ marginTop: 8 }}>
+                  <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                    <div className="spinner sm" aria-hidden />
+                    <span className="small muted grow" style={{ minWidth: 0 }}>{pdfPhase}…</span>
+                    {pdfProgress != null && (
+                      <span className="small mono">{Math.round(pdfProgress * 100)}%</span>
+                    )}
+                    <button className="btn ghost sm" onClick={cancelPdfParse} type="button">
+                      Cancel
+                    </button>
                   </div>
-                  <div className="amt">
-                    {isIncome ? '+' : ''}{currencyInfo(row.currency || base).symbol}
-                    {row.amount.toFixed(2)}
-                    {row.currency && row.currency !== base ? (
-                      <div className="meta" style={{ textAlign: 'right' }}>in {row.currency}</div>
-                    ) : null}
+                  {pdfProgress != null && (
+                    <div
+                      className="bar"
+                      role="progressbar"
+                      aria-valuenow={Math.round(pdfProgress * 100)}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      style={{ marginTop: 8 }}
+                    >
+                      <i style={{ width: `${Math.round(pdfProgress * 100)}%` }} />
+                    </div>
+                  )}
+                </div>
+              )}
+              {pdfError && <div className="small" style={{ color: 'var(--bad)', marginTop: 8 }}>{pdfError}</div>}
+
+              {pdfRows && pdfMeta && (
+                <div style={{ marginTop: 12 }}>
+                  <div className="row small" style={{ marginBottom: 8 }}>
+                    <span className="chip sm">{pdfRows.length} found</span>
+                    {pdfRows.filter((r) => r.direction === 'in').length > 0 && (
+                      <span className="chip sm" title="Incoming money (deposits, refunds) is not tracked as an expense">
+                        {pdfRows.filter((r) => r.direction === 'in').length} incoming excluded
+                      </span>
+                    )}
+                    <span className={`chip sm ${pdfMeta.parser === 'llm' ? 'ok' : ''}`}>
+                      {pdfMeta.parser === 'llm' ? 'AI-extracted' : 'rules-parsed'}
+                    </span>
+                    <span className="muted">{pdfMeta.fileName}</span>
+                  </div>
+                  {pdfMeta.parser === 'llm' && pdfMeta.llmError && (
+                    <div className="small muted" style={{ marginBottom: 8 }}>{pdfMeta.llmError}</div>
+                  )}
+                  {pdfRows.map((row, i) => {
+                    const off = pdfDisabled.has(i);
+                    const isRowIncome = row.direction === 'in';
+                    return (
+                      <div key={i} className="item" style={{ opacity: isRowIncome ? 0.5 : off ? 0.45 : 1 }}>
+                        {isRowIncome ? (
+                          <span className="chip sm" style={{ flex: 'none', marginTop: 2 }} title="Incoming money is not tracked as an expense">in</span>
+                        ) : (
+                          <input
+                            type="checkbox"
+                            checked={!off}
+                            onChange={() => toggleRow(i)}
+                            style={{ width: 18, height: 18, flex: 'none', marginTop: 2 }}
+                            aria-label={`Include ${row.merchant}`}
+                          />
+                        )}
+                        <div className="grow" style={{ minWidth: 0 }}>
+                          <div className="title" style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
+                            <input
+                              value={row.merchant}
+                              onChange={(e) => patchRow(i, { merchant: e.target.value })}
+                              style={{ minWidth: 0, flex: 1, padding: '2px 4px', minHeight: 0, fontSize: 14 }}
+                              aria-label="Merchant"
+                            />
+                            <ThemedSelect
+                              compact
+                              value={row.direction}
+                              onChange={(v: string) => patchRow(i, { direction: v as 'in' | 'out', category: v === 'in' ? 'Income' : row.category || 'Other' })}
+                              options={[{ value: 'out', label: 'out' }, { value: 'in', label: 'in' }]}
+                              aria-label="Direction"
+                            />
+                          </div>
+                          <div className="meta" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              value={row.amount}
+                              onChange={(e) => patchRow(i, { amount: Number(e.target.value) })}
+                              style={{ width: 92, padding: '2px 6px', minHeight: 0, fontSize: 12.5 }}
+                              aria-label="Amount"
+                            />
+                            <ThemedSelect
+                              compact
+                              value={row.currency || base}
+                              onChange={(v: string) => patchRow(i, { currency: v })}
+                              options={[...new Set([base, ...CURRENCIES.map((c) => c.code)])].map((c) => ({ value: c, label: c }))}
+                              aria-label="Currency"
+                            />
+                            <ThemedSelect
+                              compact
+                              value={row.category || (isRowIncome ? 'Income' : 'Other')}
+                              onChange={(v: string) => patchRow(i, { category: v })}
+                              options={vault.categories.map((c) => ({ value: c.name, label: `${c.icon} ${c.name}` }))}
+                              aria-label="Category"
+                            />
+                            {row.date && (
+                              <span>{new Date(row.date).toLocaleDateString()}</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="amt">
+                          {isRowIncome ? '+' : ''}{currencyInfo(row.currency || base).symbol}
+                          {row.amount.toFixed(2)}
+                          {row.currency && row.currency !== base ? (
+                            <div className="meta" style={{ textAlign: 'right' }}>in {row.currency}</div>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div className="row" style={{ marginTop: 10, gap: 8 }}>
+                    <button
+                      className="btn sm"
+                      style={{ flex: 1 }}
+                      disabled={pdfImporting}
+                      onClick={() => void importRows()}
+                    >
+                      {pdfImporting
+                        ? 'Importing…'
+                        : `Import ${pdfRows.length - pdfDisabled.size} ${pdfRows.length - pdfDisabled.size === 1 ? 'transaction' : 'transactions'}`}
+                    </button>
+                    <button className="btn ghost sm" onClick={discardPdf}>
+                      Discard
+                    </button>
                   </div>
                 </div>
-              );
-            })}
-            <div className="row" style={{ marginTop: 10, gap: 8 }}>
-              <button
-                className="btn sm"
-                style={{ flex: 1 }}
-                disabled={pdfImporting}
-                onClick={() => void importRows()}
-              >
-                {pdfImporting
-                  ? 'Importing…'
-                  : `Import ${pdfRows.length - pdfDisabled.size} ${pdfRows.length - pdfDisabled.size === 1 ? 'transaction' : 'transactions'}`}
-              </button>
-              <button className="btn ghost sm" onClick={discardPdf}>
-                Discard
-              </button>
+              )}
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
 
-      {/* Spending breakdown: window selector + category / payment-method /
-          merchant aggregation + budget performance. All math lives in the
-          `spendingBreakdown` engine so it stays unit-testable; this is pure
-          presentation. */}
-      <SpendingBreakdown
-        expenses={vault.expenses}
-        budgets={vault.budgets ?? []}
-        baseCurrency={base}
-      />
+        <div style={{ minWidth: 0 }}>
+          {/* Spending breakdown: window selector + category / payment-method /
+              merchant aggregation + budget performance. All math lives in the
+              `spendingBreakdown` engine so it stays unit-testable; this is pure
+              presentation. */}
+          <SpendingBreakdown
+            expenses={vault.expenses}
+            budgets={vault.budgets ?? []}
+            baseCurrency={base}
+          />
+        </div>
+      </div>
 
       {/* Task 007: Order-by control — key selector + direction toggle.
           Rendered UNCONDITIONALLY (outside the collapsible filter bar) so the

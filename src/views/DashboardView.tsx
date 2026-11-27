@@ -226,303 +226,343 @@ export function DashboardView({ onOpenTab }: { onOpenTab: (t: Tab) => void }) {
 
   return (
     <>
-      <h2 className="section-title">Net Worth</h2>
-      <div className="card hero-card">
-        <div className="hero">
-          <div>
-            <div className="hero-lbl">Your total money · {base}</div>
-            <div className="hero-num">{formatMoney(nw.net, base)}</div>
-            <div className="hero-sub">
-              {nw.hasData ? (
-                <>
-                  <span className="muted">invested {formatMoney(nw.investments, base)} · other assets {formatMoney(nw.assets, base)}</span>
-                  {liabilities.length > 0 ? (
-                    <span className="muted"> · debts −{formatMoney(nw.liabilities, base)}</span>
-                  ) : null}
-                </>
-              ) : (
-                <button className="link" onClick={() => onOpenTab('investments')}>
-                  No data yet — add your first asset
-                </button>
-              )}
-            </div>
+      <div className="page-head">
+        <div>
+          <div className="page-badge">
+            <span className="dot" /> Live Financial Overview
           </div>
-          <div className="hero-actions">
-            {ret != null && (
-              <span className={`hero-delta ${ret >= 0 ? 'up' : 'down'}`} title="Portfolio return vs cost">
-                <ITrend size={13} />
-                {ret >= 0 ? '+' : ''}
-                {ret.toFixed(1)}%
+          <h1 className="page-title">Financial Overview</h1>
+          <p className="page-sub">
+            {metaLine || `Net worth, cashflow pacing, and safety net consolidated in ${base}.`}
+          </p>
+        </div>
+        <div className="page-controls">
+          <button className="btn ghost sm" onClick={live.refresh} disabled={live.loading}>
+            <IRefresh size={15} /> {live.loading ? 'Refreshing…' : 'Refresh'}
+          </button>
+          <button className="btn sm" onClick={() => onOpenTab('expenses')}>
+            <IPlus size={15} /> Add expense
+          </button>
+          <button className="btn ghost sm" onClick={() => onOpenTab('investments')}>
+            Portfolio <IChevron size={15} />
+          </button>
+        </div>
+      </div>
+
+      <div className="kpi-grid-4">
+        <div className="kpi-card">
+          <div className="kpi-card-top">
+            <span className="kpi-card-lbl">Net Worth</span>
+            {ret != null ? (
+              <span className={`kpi-pct-pill ${ret >= 0 ? 'up' : 'down'}`} title="Portfolio return vs cost">
+                {ret >= 0 ? '+' : ''}{ret.toFixed(1)}%
               </span>
+            ) : (
+              <span className="kpi-tag">{base}</span>
             )}
-            <button className="btn ghost sm" onClick={live.refresh} disabled={live.loading}>
-              <IRefresh size={16} /> {live.loading ? '…' : 'Refresh'}
-            </button>
+          </div>
+          <div className="kpi-card-val">{formatMoney(nw.net, base)}</div>
+          <div className="kpi-card-sub">
+            {nw.hasData
+              ? `Invested ${formatMoney(nw.investments, base)} · Assets ${formatMoney(nw.assets, base)}${liabilities.length > 0 ? ` · Debts −${formatMoney(nw.liabilities, base)}` : ''}`
+              : 'Add your first asset in Portfolio'}
           </div>
         </div>
 
-        {/* Net-worth trend: polished area chart with period tabs, a
-            gradient fill, and a tap-to-scrub tooltip. */}
-        {netWorthHistory.length >= 2 ? (
-          <div className="hero-chart">
-            <AreaChart
-              points={netWorthHistory.map((p) => ({ at: p.at, value: p.net }))}
-              fmt={(v) => formatMoney(v, base)}
-              fmtDate={(at) =>
-                new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-              }
-              height={148}
-            />
-            {nwDelta && (
-              <div className="hero-delta-row">
+        <div className="kpi-card">
+          <div className="kpi-card-top">
+            <span className="kpi-card-lbl">Spent This Month</span>
+            <span className="kpi-tag">30d pace</span>
+          </div>
+          <div className="kpi-card-val">{formatMoney(spentThisMonth, base)}</div>
+          <div className="kpi-card-sub">
+            ~{sym}{dailyPace.toFixed(0)}/day · Est. {formatMoney(projected, base)}
+          </div>
+        </div>
+
+        <div className="kpi-card">
+          <div className="kpi-card-top">
+            <span className="kpi-card-lbl">Monthly Runway</span>
+            <span className="kpi-tag">{forecast?.incomeSource === 'salary' ? 'salary' : 'forecast'}</span>
+          </div>
+          <div className="kpi-card-val">
+            {!forecast ? (
+              '—'
+            ) : nw.net < 0 && forecast.netPerMonth < 0 ? (
+              'In the red'
+            ) : forecast.firstNegativeMonth != null ? (
+              `~${forecast.firstNegativeMonth} mo`
+            ) : nw.net < 0 && forecast.netPerMonth >= 0 ? (
+              'Recovering'
+            ) : (
+              `${forecast.points.length}+ mo`
+            )}
+          </div>
+          <div className="kpi-card-sub">
+            {forecast ? (
+              <>
+                {forecast.incomeSource === 'salary'
+                  ? <>salary {sym}{forecast.monthlyIncome.toFixed(0)}/mo</>
+                  : <>income {sym}{forecast.monthlyIncome.toFixed(0)}/mo{!forecast.salarySet && forecast.incomeRowCount === 0 ? ' (none logged)' : ''}</>}
+                {' · '}spend {sym}{forecast.monthlyExpenses.toFixed(0)}/mo
+              </>
+            ) : (
+              'Log expenses to project cashflow'
+            )}
+          </div>
+        </div>
+
+        <div className="kpi-card">
+          <div className="kpi-card-top">
+            <span className="kpi-card-lbl">Emergency Fund</span>
+            <span className="kpi-tag">
+              {emRes.coverageMonths != null ? `${emRes.coverageMonths.toFixed(1)} mo` : 'Reserve'}
+            </span>
+          </div>
+          <div className="kpi-card-val">{formatMoney(emRes.reserve, base)}</div>
+          <div className="kpi-card-sub">
+            {emRes.lines.length === 0
+              ? 'Add safety net accounts in Portfolio'
+              : emRes.target > 0
+                ? `${Math.min(100, Math.round(emRes.pctOfTarget))}% of ${formatMoney(emRes.target, base)} goal`
+                : `${emRes.lines.length} reserve account${emRes.lines.length === 1 ? '' : 's'}`}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid-12">
+        {/* Left column (7/12): Net worth trend + Cashflow forecast + Recent highlights */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
+          <div className="card" style={{ marginBottom: 0 }}>
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: 16 }}>Net Worth Trend</h2>
+                <div className="small muted">Daily snapshot history in {base}</div>
+              </div>
+              {nwDelta ? (
                 <span className={`hero-delta ${nwDelta.up ? 'up' : 'down'}`}>
                   {nwDelta.up ? '▲' : '▼'} {formatMoney(Math.abs(nwDelta.d), base)}
                   {Math.abs(nwDelta.pct) >= 0.05 ? ` (${nwDelta.up ? '+' : ''}${nwDelta.pct.toFixed(1)}%)` : ''}
                 </span>
-                <span className="muted small">vs previous day</span>
+              ) : !nw.hasData ? (
+                <button className="btn ghost sm" onClick={() => onOpenTab('investments')}>
+                  Add first asset
+                </button>
+              ) : null}
+            </div>
+
+            {netWorthHistory.length >= 2 ? (
+              <AreaChart
+                points={netWorthHistory.map((p) => ({ at: p.at, value: p.net }))}
+                fmt={(v) => formatMoney(v, base)}
+                fmtDate={(at) =>
+                  new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+                }
+                height={180}
+              />
+            ) : (
+              <div className="subpanel">
+                <div className="small muted">
+                  Trend chart activates after 2 days of visits — snapshots are captured automatically each time you open Overview.
+                </div>
               </div>
             )}
           </div>
-        ) : (
-          <div className="small muted" style={{ marginTop: 10 }}>
-            Trend appears after 2 days of visits — captured automatically on each Home load.
-          </div>
-        )}
 
-        {metaLine ? (
-          <div className="row small muted meta-row">
-            <span>{metaLine}</span>
-          </div>
-        ) : null}
-      </div>
-
-      {aiLoading ? (
-        <div className="card ai-summary-card" style={{ marginBottom: 16 }}>
-          <span className="spinner sm" />
-          <span className="muted" style={{ marginLeft: 8, fontSize: 13 }}>Getting your summary…</span>
-        </div>
-      ) : aiSummary ? (
-        <div className="card ai-summary-card" style={{ marginBottom: 16 }}>
-          <div className="ai-summary-header">
-            <span className={`chip sm ${aiSummary.source === 'llm' ? 'ok' : ''}`}>
-              {aiSummary.source === 'llm' ? 'AI summary' : 'Quick summary'}
-            </span>
-          </div>
-          <p className="ai-summary-text">
-            <Markdown text={aiSummary.text} className="md" />
-          </p>
-        </div>
-      ) : null}
-
-      <h2 className="section-title">Spending</h2>
-      <div className="card">
-        <div className="hero">
-          <div>
-            <div className="hero-lbl">Spent this month</div>
-            <div className="hero-num">{formatMoney(spentThisMonth, base)}</div>
-            <div className="hero-sub">
-              <span className="muted">About {sym}{dailyPace.toFixed(0)}/day</span>
-              {' · '}
-              <span className="muted">Expected {formatMoney(projected, base)}</span>
-            </div>
-          </div>
-        </div>
-        <div className="bar"><i style={{ width: `${pacePct}%` }} /></div>
-      </div>
-
-      {forecast && (
-        <>
-          <h2 className="section-title">Money coming in</h2>
-          <div className="card">
-            <div className="hero">
-              <div>
-                <div className="hero-lbl">Net monthly money</div>
-                <div className="hero-num">
-                  {nw.net < 0 && forecast.netPerMonth < 0
-                    ? 'Already in the red'
-                    : forecast.firstNegativeMonth != null
-                      ? `Broke in ~${forecast.firstNegativeMonth} mo`
-                      : nw.net < 0 && forecast.netPerMonth >= 0
-                        ? 'Recovering (in the red)'
-                        : `Holds ${forecast.points.length} mo at current pace`}
-                </div>
-                <div className="hero-sub">
-                  <span className="muted">
+          {forecast && (
+            <div className="card" style={{ marginBottom: 0 }}>
+              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: 16 }}>6-Month Cashflow Projection</h2>
+                  <div className="small muted">
                     {forecast.incomeSource === 'salary'
                       ? <>salary {sym}{forecast.monthlyIncome.toFixed(0)}/mo</>
                       : <>income {sym}{forecast.monthlyIncome.toFixed(0)}/mo{!forecast.salarySet && forecast.incomeRowCount === 0 ? ' (none logged)' : ''}</>}
                     {' · '}spend {sym}{forecast.monthlyExpenses.toFixed(0)}/mo
-                  </span>
-                </div>
-              </div>
-            </div>
-            <div className="fc-bars">
-              {forecast.points.map((p) => {
-                const maxAbs = Math.max(1, ...forecast.points.map((x) => Math.abs(x.balance)));
-                const h = Math.max(6, (Math.abs(p.balance) / maxAbs) * 100);
-                const neg = p.balance < 0;
-                return (
-                  <div key={p.label} className="fc-col" title={`${p.label}: ${formatMoney(p.balance, base)}`}>
-                    <div className={`fc-bar${neg ? ' neg' : ''}`} style={{ height: `${h}%` }} />
-                    <div className="fc-lbl">{p.label.slice(5)}</div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* ---- Salary / income input ----------------------------------------
-          The cash-flow forecast's income rate should reflect the user's REAL
-          earnings, not the (often sparse) logged Income rows. A compact,
-          always-visible card on the dashboard lets them declare a salary;
-          the engine uses it as the authoritative income rate and the
-          "salary …/mo" label appears in the hero when active. */}
-      <SalaryInputCard baseCurrency={base} store={store} />
-
-      {budgetLines.length > 0 && (
-        <>
-          <h2 className="section-title">Budgets</h2>
-          <div className="card">
-            {budgetLines.map((b) => (
-              <div key={b.id} style={{ marginBottom: 10 }}>
-                <div className="row" style={{ marginBottom: 4 }}>
-                  <span className="grow small" style={{ fontWeight: 600 }}>{b.category}</span>
-                  <span className="small muted">
-                    {sym}{b.spent.toFixed(0)} of {sym}{b.cap.toFixed(0)}
-                    {b.status === 'over' && <span className="neg" style={{ marginLeft: 6 }}>over budget</span>}
-                    {b.status === 'watch' && <span style={{ marginLeft: 6, color: '#e08600' }}>almost there</span>}
-                  </span>
-                </div>
-                <div className="bar" style={{ height: 5 }}>
-                  <i style={{
-                    width: `${Math.min(100, b.pct * 100)}%`,
-                    background: b.status === 'over' ? 'var(--bad, #e5484d)' : b.status === 'watch' ? '#e08600' : 'var(--ok, #30a46c)',
-                  }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      {nextBills.length > 0 && (
-        <>
-          <h2 className="section-title">Bills coming up</h2>
-          <div className="card list">
-            {nextBills.map((b) => (
-              <div key={b.id} className="item">
-                <div className="grow">
-                  <div className="title">{b.name}</div>
-                  <div className="meta">
-                    {b.daysUntilDue < 0
-                      ? `${-b.daysUntilDue} days overdue`
-                      : b.daysUntilDue === 0
-                        ? 'due today'
-                        : `due in ${b.daysUntilDue} days`}
                   </div>
                 </div>
-                <div className="amt">{sym}{b.baseAmount.toFixed(0)}</div>
+                <span className="kpi-tag">
+                  {nw.net < 0 && forecast.netPerMonth < 0
+                    ? 'In the red'
+                    : forecast.firstNegativeMonth != null
+                      ? `Broke in ~${forecast.firstNegativeMonth} mo`
+                      : `Holds ${forecast.points.length} mo`}
+                </span>
               </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      {debtPlan && debtPlan.months > 0 && (
-        <>
-          <h2 className="section-title">Debts</h2>
-          <div className="card">
-            <div className="hero">
-              <div>
-                <div className="hero-lbl">Time to be debt-free</div>
-                <div className="hero-num">
-                  {Math.floor(debtPlan.months / 12) > 0 ? `${Math.floor(debtPlan.months / 12)} years ${debtPlan.months % 12} months` : `${debtPlan.months} months`}
+              <div className="fc-bars">
+                {forecast.points.map((p) => {
+                  const maxAbs = Math.max(1, ...forecast.points.map((x) => Math.abs(x.balance)));
+                  const h = Math.max(6, (Math.abs(p.balance) / maxAbs) * 100);
+                  const neg = p.balance < 0;
+                  return (
+                    <div key={p.label} className="fc-col" title={`${p.label}: ${formatMoney(p.balance, base)}`}>
+                      <div className={`fc-bar${neg ? ' neg' : ''}`} style={{ height: `${h}%` }} />
+                      <div className="fc-lbl">{p.label.slice(5)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop: 14 }}>
+                <div className="row" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
+                  <span className="small muted">Monthly spend vs expected pace</span>
+                  <span className="small muted mono">{Math.round(pacePct)}%</span>
                 </div>
-                <div className="hero-sub">
-                  <span className="muted">
-                    {liabilities.length} debt{liabilities.length === 1 ? '' : 's'} · {sym}{debtPlan.totalInterest.toFixed(0)} interest total
-                  </span>
-                </div>
+                <div className="bar"><i style={{ width: `${pacePct}%` }} /></div>
               </div>
             </div>
-          </div>
-        </>
-      )}
+          )}
 
-      <h2 className="section-title">Safety net</h2>
-      <div className="card">
-        <div className="hero">
-          <div>
-            <div className="hero-lbl">Emergency fund · {base}</div>
-            <div className="hero-num">{formatMoney(emRes.reserve, base)}</div>
-            <div className="hero-sub">
-              {emRes.lines.length === 0 ? (
-                <span className="muted">No safety net yet — add some under Portfolio</span>
-              ) : emRes.coverageMonths != null ? (
-                <span>{emRes.coverageMonths.toFixed(1)} months of essentials covered</span>
-              ) : (
-                <span className="muted">Not enough data yet</span>
-              )}
+          {topExpenses.length > 0 && (
+            <div className="card" style={{ marginBottom: 0 }}>
+              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <h2 style={{ margin: 0, fontSize: 16 }}>Biggest Spending (7d)</h2>
+                <button className="btn ghost sm" onClick={() => onOpenTab('expenses')}>
+                  View ledger <IChevron size={14} />
+                </button>
+              </div>
+              <div className="list">
+                {topExpenses.map((e) => (
+                  <div className="item" key={e.id}>
+                    <div className="grow">
+                      <div className="title">{e.merchant}</div>
+                      <div className="meta">{e.category} · {e.paymentMethod}</div>
+                    </div>
+                    <div className="amt">{sym}{e.baseAmount.toFixed(2)}</div>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-          <button className="btn ghost sm" onClick={() => onOpenTab('investments')}>
-            Manage <IChevron size={16} />
-          </button>
+          )}
         </div>
-        {emRes.lines.length > 0 && emRes.target > 0 ? (
-          <>
-            <div className="bar"><i style={{ width: `${Math.min(100, Math.round(emRes.pctOfTarget))}%` }} /></div>
-            <div className="small muted" style={{ marginTop: 6 }}>
-              {Math.min(100, Math.round(emRes.pctOfTarget))}% of your {formatMoney(emRes.target, base)} goal
-              {emRes.gap > 0 ? ` · still need ${formatMoney(emRes.gap, base)}` : ' · goal reached!'}
+
+        {/* Right column (5/12): AI Summary + Salary + Safety Net + Budgets + Bills + Debts + Tips */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
+          {aiLoading ? (
+            <div className="card ai-summary-card" style={{ marginBottom: 0 }}>
+              <span className="spinner sm" />
+              <span className="muted" style={{ marginLeft: 8, fontSize: 13 }}>Getting your summary…</span>
             </div>
-          </>
-        ) : null}
-      </div>
+          ) : aiSummary ? (
+            <div className="card ai-summary-card" style={{ marginBottom: 0 }}>
+              <div className="ai-summary-header">
+                <span className={`chip sm ${aiSummary.source === 'llm' ? 'ok' : ''}`}>
+                  {aiSummary.source === 'llm' ? 'AI summary' : 'Quick summary'}
+                </span>
+              </div>
+              <div className="ai-summary-text">
+                <Markdown text={aiSummary.text} className="md" />
+              </div>
+            </div>
+          ) : null}
 
-      {advice.length > 0 && (
-        <>
-          <h2 className="section-title">Tips</h2>
-          <div className="list">
-            {advice.map((a) => (
-              <div className="item" key={a.id}>
-                <span className={`prio ${a.priority}`} aria-label={`${a.priority} priority`} />
-                <div className="grow">
-                  <div className="title">{a.title}</div>
-                  <div className="meta">{a.detail}</div>
+          <SalaryInputCard baseCurrency={base} store={store} />
+
+          <div className="card" style={{ marginBottom: 0 }}>
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <h2 style={{ margin: 0, fontSize: 16 }}>Safety Net</h2>
+              <button className="btn ghost sm" onClick={() => onOpenTab('investments')}>
+                Manage <IChevron size={14} />
+              </button>
+            </div>
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <strong style={{ fontSize: 20, fontFamily: 'var(--font-display)' }}>{formatMoney(emRes.reserve, base)}</strong>
+              <span className="small muted">
+                {emRes.coverageMonths != null ? `${emRes.coverageMonths.toFixed(1)} mo essentials` : 'No data yet'}
+              </span>
+            </div>
+            {emRes.lines.length > 0 && emRes.target > 0 ? (
+              <div style={{ marginTop: 10 }}>
+                <div className="bar"><i style={{ width: `${Math.min(100, Math.round(emRes.pctOfTarget))}%` }} /></div>
+                <div className="small muted" style={{ marginTop: 6 }}>
+                  {Math.min(100, Math.round(emRes.pctOfTarget))}% of {formatMoney(emRes.target, base)} goal
+                  {emRes.gap > 0 ? ` · need ${formatMoney(emRes.gap, base)}` : ' · goal reached!'}
                 </div>
               </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      {topExpenses.length > 0 && (
-        <>
-          <h2 className="section-title">Biggest spending this week</h2>
-          <div className="list">
-            {topExpenses.map((e) => (
-              <div className="item" key={e.id}>
-                <div className="grow">
-                  <div className="title">{e.merchant}</div>
-                  <div className="meta">{e.category} · {e.paymentMethod}</div>
-                </div>
-                <div className="amt">{sym}{e.baseAmount.toFixed(2)}</div>
+            ) : emRes.lines.length === 0 ? (
+              <div className="small muted" style={{ marginTop: 6 }}>
+                Tag cash or emergency accounts in Portfolio to track runway.
               </div>
-            ))}
+            ) : null}
           </div>
-        </>
-      )}
 
-      <div className="row" style={{ marginTop: 20, gap: 10 }}>
-        <button className="btn sm" onClick={() => onOpenTab('expenses')} style={{ flex: 1, justifyContent: 'center' }}>
-          <IPlus size={16} /> Add expense
-        </button>
-        <button className="btn ghost sm" onClick={() => onOpenTab('investments')} style={{ flex: 1, justifyContent: 'center' }}>
-          Portfolio <IChevron size={16} />
-        </button>
+          {budgetLines.length > 0 && (
+            <div className="card" style={{ marginBottom: 0 }}>
+              <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>Budgets</h2>
+              {budgetLines.map((b) => (
+                <div key={b.id} style={{ marginBottom: 10 }}>
+                  <div className="row" style={{ marginBottom: 4 }}>
+                    <span className="grow small" style={{ fontWeight: 600 }}>{b.category}</span>
+                    <span className="small muted">
+                      {sym}{b.spent.toFixed(0)} of {sym}{b.cap.toFixed(0)}
+                      {b.status === 'over' && <span className="neg" style={{ marginLeft: 6 }}>over</span>}
+                      {b.status === 'watch' && <span style={{ marginLeft: 6, color: 'var(--warn)' }}>watch</span>}
+                    </span>
+                  </div>
+                  <div className="bar" style={{ height: 5 }}>
+                    <i style={{
+                      width: `${Math.min(100, b.pct * 100)}%`,
+                      background: b.status === 'over' ? 'var(--bad)' : b.status === 'watch' ? 'var(--warn)' : 'var(--good)',
+                    }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {nextBills.length > 0 && (
+            <div className="card" style={{ marginBottom: 0 }}>
+              <h2 style={{ margin: '0 0 10px', fontSize: 16 }}>Upcoming Bills</h2>
+              <div className="list">
+                {nextBills.map((b) => (
+                  <div key={b.id} className="item">
+                    <div className="grow">
+                      <div className="title">{b.name}</div>
+                      <div className="meta">
+                        {b.daysUntilDue < 0
+                          ? `${-b.daysUntilDue} days overdue`
+                          : b.daysUntilDue === 0
+                            ? 'due today'
+                            : `due in ${b.daysUntilDue} days`}
+                      </div>
+                    </div>
+                    <div className="amt">{sym}{b.baseAmount.toFixed(0)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {debtPlan && debtPlan.months > 0 && (
+            <div className="card" style={{ marginBottom: 0 }}>
+              <h2 style={{ margin: '0 0 6px', fontSize: 16 }}>Debt Payoff</h2>
+              <div style={{ fontSize: 20, fontWeight: 800, fontFamily: 'var(--font-display)' }}>
+                {Math.floor(debtPlan.months / 12) > 0
+                  ? `${Math.floor(debtPlan.months / 12)} yr ${debtPlan.months % 12} mo`
+                  : `${debtPlan.months} months`}
+              </div>
+              <div className="small muted" style={{ marginTop: 4 }}>
+                {liabilities.length} debt{liabilities.length === 1 ? '' : 's'} · {sym}{debtPlan.totalInterest.toFixed(0)} interest total
+              </div>
+            </div>
+          )}
+
+          {advice.length > 0 && (
+            <div className="card" style={{ marginBottom: 0 }}>
+              <h2 style={{ margin: '0 0 10px', fontSize: 16 }}>Insights &amp; Alerts</h2>
+              <div className="list">
+                {advice.map((a) => (
+                  <div className="item" key={a.id}>
+                    <span className={`prio ${a.priority}`} aria-label={`${a.priority} priority`} />
+                    <div className="grow">
+                      <div className="title">{a.title}</div>
+                      <div className="meta">{a.detail}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </>
   );

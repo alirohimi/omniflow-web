@@ -1,5 +1,5 @@
 // ============================================================================
-// App shell — brand bar, tab navigation (SVG icons), content, PWA install hint.
+// App shell — crisp top navigation + responsive shell, light/dark theme, tabs.
 // ============================================================================
 
 import { useEffect, useState } from 'react';
@@ -15,25 +15,43 @@ import { SettingsView } from './views/SettingsView';
 import { CoachView } from './views/CoachView';
 import { currencyInfo } from './domain/enums';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { IHome, IWallet, ITrend, IGear, ILock, ICoach } from './icons';
+import { IHome, IWallet, ITrend, IGear, ILock, ICoach, ISun, IMoon } from './icons';
 
 type Tab = 'dashboard' | 'expenses' | 'investments' | 'coach' | 'settings';
 
 const TABS: { id: Tab; label: string; ico: (p: { size?: number }) => JSX.Element }[] = [
   { id: 'dashboard', label: 'Home', ico: IHome },
-  { id: 'expenses', label: 'Expenses', ico: IWallet },
   { id: 'investments', label: 'Portfolio', ico: ITrend },
+  { id: 'expenses', label: 'Expenses', ico: IWallet },
   { id: 'coach', label: 'Coach', ico: ICoach },
   { id: 'settings', label: 'Settings', ico: IGear },
 ];
+
+function readSavedTheme(): 'dark' | 'light' {
+  try {
+    return localStorage.getItem('of:theme') === 'light' ? 'light' : 'dark';
+  } catch {
+    return 'dark';
+  }
+}
 
 function Shell() {
   const store = useVaultStore();
   const auth = useAuthStore();
   const [tab, setTab] = useState<Tab>('dashboard');
+  const [theme, setTheme] = useState<'dark' | 'light'>(readSavedTheme);
   const base = store.vault?.prefs.baseCurrency ?? 'MYR';
   const symbol = currencyInfo(base).symbol;
   const cloudOn = auth.cloudAvailable && store.cloudSynced;
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem('of:theme', theme);
+    } catch {
+      /* ignore */
+    }
+  }, [theme]);
 
   // Auto-lock: disabled on the user's request. The vault stays unlocked on an
   // open session across idle periods. Manual lock (the lock button / "Lock now")
@@ -72,47 +90,79 @@ function Shell() {
 
   if (store.status !== 'unlocked') return <VaultGate onReady={() => {}} />;
 
+  const syncLabel = !cloudOn
+    ? 'Session only'
+    : store.syncState === 'syncing'
+      ? 'Syncing…'
+      : store.syncState === 'error'
+        ? 'Sync error'
+        : 'Encrypted & Synced';
+
   return (
     <div className="app-shell">
-      <header className="brandbar">
-        <div className="logo">O</div>
-        <div>
-          <h1>OmniFlow</h1>
-          <div className="sub">
-            {base} · {symbol} · encrypted{cloudOn ? ' · stored in your account' : ' · this session only'}
+      <header className="topbar">
+        <div className="topbar-inner">
+          <div className="topbar-brand">
+            <div className="logo">O</div>
+            <div>
+              <div className="topbar-title-row">
+                <h1>OmniFlow</h1>
+                <span className={`status-pill${store.syncState === 'error' ? ' err' : ''}`}>
+                  <span className="status-dot" aria-hidden="true" />
+                  {base} ({symbol}) · {syncLabel}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <nav className="topnav" aria-label="Primary navigation">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                className={`topnav-btn${tab === t.id ? ' on' : ''}`}
+                aria-current={tab === t.id ? 'page' : undefined}
+                onClick={() => setTab(t.id)}
+              >
+                <t.ico size={16} />
+                <span>{t.label}</span>
+              </button>
+            ))}
+          </nav>
+
+          <div className="topbar-actions">
+            <button
+              type="button"
+              className="theme-btn"
+              onClick={() => setTheme((m) => (m === 'dark' ? 'light' : 'dark'))}
+              aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+              title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            >
+              {theme === 'dark' ? <ISun size={15} /> : <IMoon size={15} />}
+              <span>{theme === 'dark' ? 'Light' : 'Dark'}</span>
+            </button>
+            <button
+              className="lockbtn"
+              title="Lock now"
+              aria-label="Lock the app now (wipes in-memory passphrase; re-asked on return)"
+              onClick={() => store.lock()}
+            >
+              <ILock size={16} />
+            </button>
           </div>
         </div>
-        <button
-          className="lockbtn"
-          title="Lock now"
-          aria-label="Lock the app now (wipes in-memory passphrase; re-asked on return)"
-          onClick={() => store.lock()}
-        >
-          <ILock size={18} />
-        </button>
       </header>
 
       <main className="content">
         {store.error && store.cloudSynced && (
           <div
             role="alert"
-            style={{
-              margin: '0 12px 8px',
-              padding: '8px 12px',
-              borderRadius: 10,
-              border: '1px solid var(--bad)',
-              background: 'color-mix(in srgb, var(--bad) 12%, transparent)',
-              fontSize: 13,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              flexWrap: 'wrap',
-            }}
+            className="alert-banner"
           >
             <span style={{ flex: 1, minWidth: 180 }}>{store.error}</span>
             <button
               className="btn ghost sm"
-              style={{ padding: '3px 10px' }}
+              style={{ padding: '4px 12px' }}
               onClick={() => store.retrySync()}
             >
               Retry

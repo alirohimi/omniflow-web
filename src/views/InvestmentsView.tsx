@@ -1,6 +1,7 @@
 // ============================================================================
-// Investments — platform-agnostic portfolio view + holding CRUD.
-// Grouped by platformName, with live quotes and FX-converted base values.
+// Investments — Executive Portfolio Allocation, Rebalancer & Account CRUD.
+// Clean 4-KPI header, Capital Rebalancer simulator, interactive Donut/Pie +
+// Inspector card, Complete Portfolio Breakdown table, and tabbed Management.
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -13,45 +14,34 @@ import { Modal } from '../components/Sheet';
 import { EmergencyPanel } from './EmergencyPanel';
 import { SavingsGoalsPanel } from './SavingsGoalsPanel';
 import { AutoInvestPanel, ContributionPanel } from './AutoInvestPanel';
-import { AllocationPie, type PieSlice } from '../components/AllocationPie';
-import { colorForClass } from '../components/AllocationPie';
+import { AllocationPie, colorForClass, type PieSlice } from '../components/AllocationPie';
 import { fxService, marketDataService } from '../services';
-import {
-  portfolioPnl,
-  dueAutoInvests,
-  advanceNextDue,
-  periodsBetween,
-  autoInvestMonthlyTotal,
-} from '../insights';
+import { portfolioPnl, computeEmergency } from '../insights';
 import { valueInBase } from '../ai/portfolio';
 import type { AccountLine } from '../ai/portfolio';
-import { CURRENCIES, currencyInfo, formatMoney, FAMED_STRATEGIES } from '../domain/enums';
+import { CURRENCIES, currencyInfo, EMERGENCY_DEFAULT, FAMED_STRATEGIES, formatMoney } from '../domain/enums';
 import { ThemedSelect } from '../components/ThemedSelect';
 import { IRefresh, IPlus, IPencil, IDots, ICheck } from '../icons';
 import type { InvestmentAccount, InvestmentHolding } from '../domain/types';
 
 const ASSET_CLASSES = ['equity-us', 'equity-local', 'etf', 'crypto', 'gold', 'cash', 'mmf'] as const;
-/** Cash / MMF rows: single "amount" input, symbol + price pinned to the par
- *  convention (symbol = class name, price = 1) so value = amount · FX. */
 const PAR_CLASSES: InvestmentHolding['assetClass'][] = ['cash', 'mmf'];
 const isParClass = (c: InvestmentHolding['assetClass']) => PAR_CLASSES.includes(c);
 
-/** StashAway-style section grouping for the portfolio cards. Mirrors the
- *  real app: robo-advisor portfolios (StashAway/Hata) live under
- *  "Satellite" (target specific sectors), cash/MMF under "Cash", and
- *  brokers/crypto/manual under "More ways to invest". */
+const parSymbolFor = (c: InvestmentHolding['assetClass']) =>
+  c === 'cash' ? 'CASH' : c === 'mmf' ? 'MMF' : c.toUpperCase();
+
 type PortfolioSection = 'satellite' | 'cash' | 'more';
 const sectionForType = (t: InvestmentAccount['accountType']): PortfolioSection =>
   t === 'robo' ? 'satellite' : t === 'cash' ? 'cash' : 'more';
 const SECTION_META: Record<PortfolioSection, { title: string; subtitle: string }> = {
-  satellite: { title: 'Satellite', subtitle: 'Target specific sectors' },
-  cash: { title: 'Cash', subtitle: 'Earn yield at ultra-low risk' },
-  more: { title: 'More ways to invest', subtitle: 'Build long-term wealth' },
+  satellite: { title: 'Satellite', subtitle: 'Robo-advisor & target strategies' },
+  cash: { title: 'Cash & Reserves', subtitle: 'Liquid cash & money market' },
+  more: { title: 'Direct Brokers & Crypto', subtitle: 'Equities, ETFs & digital assets' },
 };
 
-/** Compact "daily change" pill for a portfolio card — StashAway shows a
- *  coloured delta under each portfolio value (green = up, red = down).
- *  `null` renders nothing (no prior snapshot yet). */
+const BUCKET_PALETTE = ['#4f46e5', '#f59e0b', '#10b981', '#06b6d4', '#8b5cf6', '#ec4899', '#64748b'];
+
 function DailyChangePill({ delta, base }: { delta: number | null; base: string }) {
   if (delta == null) return null;
   if (delta === 0) return <span className="pill-flat" title="No change since yesterday">—</span>;
@@ -63,9 +53,6 @@ function DailyChangePill({ delta, base }: { delta: number | null; base: string }
     </span>
   );
 }
-/** Pinned symbol for par rows — matches the marketData par-price path. */
-const parSymbolFor = (c: InvestmentHolding['assetClass']) =>
-  c === 'cash' ? 'CASH' : c === 'mmf' ? 'MMF' : c.toUpperCase();
 
 export function InvestmentsView() {
   const store = useVaultStore();
@@ -74,9 +61,48 @@ export function InvestmentsView() {
   const { vault } = store;
   if (!vault) return null;
   const base = vault.prefs.baseCurrency;
-  const sym = currencyInfo(base).symbol;
 
-  // ---- account + holding form state
+  // ---- Display & Simulator controls (mirroring reference UI) ----
+  const [displayCur, setDisplayCur] = useState<string>(base);
+  useEffect(() => { setDisplayCur(base); }, [base]);
+
+  const displayCurrencies = useMemo(() => {
+    const candidates = [base, 'USD', 'MYR', 'IDR', 'SGD'];
+    const uniq: string[] = [];
+    for (const c of candidates) {
+      if (!uniq.includes(c)) uniq.push(c);
+      if (uniq.length === 3) break;
+    }
+    return uniq;
+  }, [base]);
+
+  const convertFromBase = (amountBase: number, targetCur: string): number => {
+    if (targetCur === base || !live.fx) return amountBase;
+    try {
+      const oneTargetInBase = fxService.toBase(1, targetCur, live.fx);
+      return oneTargetInBase > 0 ? amountBase / oneTargetInBase : amountBase;
+    } catch {
+      return amountBase;
+    }
+  };
+  const fmtDisplay = (amountBase: number) =>
+    formatMoney(convertFromBase(amountBase, displayCur), displayCur);
+
+  const [chartMode, setChartMode] = useState<'donut' | 'pie'>('donut');
+  const [activePie, setActivePie] = useState<'account' | 'class' | 'holding'>('account');
+  const [selectedSlice, setSelectedSlice] = useState<string | null>(null);
+  const [manageTab, setManageTab] = useState<'accounts' | 'add' | 'tools'>('accounts');
+
+  // Rebalancer simulator
+  const [deployEnabled, setDeployEnabled] = useState(false);
+  const [newCapitalStr, setNewCapitalStr] = useState('5000');
+  const [targetPrimaryPct, setTargetPrimaryPct] = useState(85);
+  const newCapitalBase = useMemo(() => {
+    const n = parseFloat(newCapitalStr);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }, [newCapitalStr]);
+
+  // ---- Account + Holding form state ----
   const [platform, setPlatform] = useState('');
   const [acctType, setAcctType] = useState<InvestmentAccount['accountType']>('broker');
   const [deposit, setDeposit] = useState('');
@@ -86,23 +112,11 @@ export function InvestmentsView() {
   const [holdCur, setHoldCur] = useState(base);
   const [units, setUnits] = useState('');
   const [entry, setEntry] = useState('');
-  /** Cash/MMF rows: a single "amount in holding currency" input (price pinned
-   *  to par=1, symbol pinned to the class). Non-par rows ignore this. */
   const [amount, setAmount] = useState('');
-  /** Robo-advisor value entry: "this fund is worth X" — stores units=1,
-   *  entry=X so the fund's current value is exactly X. No buy price needed. */
   const [roboValue, setRoboValue] = useState('');
-  /** The holding (with its current values) being edited in the modal pop-up. */
   const [editHolding, setEditHolding] = useState<InvestmentHolding | null>(null);
   const parMode = isParClass(assetClass);
 
-  // ---- StashAway / robo-advisor allocation mix ----
-  // When the account type is 'robo' the creation form shows this inline mix
-  // editor (pick the assets, set the % of each). Tapping the "+ StashAway"
-  // chip auto-sets type=robo, so one flow creates the account AND its asset
-  // allocation — no separate "New Portfolio" modal. Each sleeve's live value
-  // = pct/100 × net deposit × (liveTicker / refPrice); refPrice is seeded
-  // best-effort per class so the sleeve tracks its REAL index.
   const [saRefs, setSaRefs] = useState<Record<string, number>>({});
   const [roboRows, setRoboRows] = useState<{ assetClass: InvestmentHolding['assetClass']; pct: string }[]>([
     { assetClass: 'equity-us', pct: '60' },
@@ -113,44 +127,185 @@ export function InvestmentsView() {
   const seedRoboRefs = async (classes: string[]) => {
     await Promise.all(
       classes.map(async (c) => {
-        if (saRefs[c] && saRefs[c] > 0) return; // already seeded
+        if (saRefs[c] && saRefs[c] > 0) return;
         try {
           const p = await marketDataService.referencePriceFor(c, base);
           if (p > 0) setSaRefs((prev) => ({ ...prev, [c]: p }));
-        } catch { /* offline -> leave 0, store seeds refPrice=1 (flat) */ }
+        } catch { /* offline */ }
       }),
     );
   };
-  // Seed the reference tickers whenever the mix editor becomes visible.
   useEffect(() => {
     if (isRobo) void seedRoboRefs(roboRows.map((r) => r.assetClass));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isRobo]);
 
-  const startEdit = (h: InvestmentHolding) => {
-    openEdit(h);
-  };
-
-  /** Keep symbol pinned for par classes; clear it back to free entry otherwise. */
   const pickAssetClass = (c: InvestmentHolding['assetClass']) => {
     setAssetClass(c);
     if (isParClass(c)) setSymbol(parSymbolFor(c));
   };
 
-  const [activePie, setActivePie] = useState<'class' | 'holding'>('class');
+  // ---- Live portfolio computations ----
+  const accLines = useMemo(() => {
+    const m = new Map<string, AccountLine>();
+    if (live.portfolio) for (const a of live.portfolio.byAccount) m.set(a.account.id, a);
+    return m;
+  }, [live.portfolio]);
 
-  // Pie slices: one per asset class (or per holding), each carrying the
-  // individual holdings inside it for the drill-down. Reuses valueInBase so
-  // the chart reconciles with the per-row list below (same NaN-safe math).
+  const dailyChange = useMemo(() => {
+    const m = new Map<string, number | null>();
+    const hist = vault.accountHistory ?? {};
+    for (const [accId, pts] of Object.entries(hist)) {
+      if (pts.length < 2) { m.set(accId, null); continue; }
+      const today = pts[pts.length - 1];
+      const yesterday = pts[pts.length - 2];
+      m.set(accId, today.valueBase - yesterday.valueBase);
+    }
+    return m;
+  }, [vault.accountHistory]);
+
+  const lastCaptured = useRef<string>('');
+  useEffect(() => {
+    if (!live.portfolio) return;
+    const values: Record<string, number> = {};
+    for (const line of live.portfolio.byAccount) {
+      values[line.account.id] = Math.round(line.valueBase * 100) / 100;
+    }
+    const sig = JSON.stringify(values);
+    if (sig === lastCaptured.current) return;
+    lastCaptured.current = sig;
+    store.captureAccountValues(values);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live.portfolio]);
+
+  const pnl = useMemo(() => {
+    if (!live.portfolio) return null;
+    return portfolioPnl(live.portfolio, vault.accounts, vault.contributions ?? []);
+  }, [live.portfolio, vault.accounts, vault.contributions]);
+
+  const reservedIds = useMemo(
+    () => new Set((vault.emergency?.items ?? []).filter((i) => i.kind === 'account' && i.accountId).map((i) => i.accountId!)),
+    [vault.emergency],
+  );
+
+  const emRes = useMemo(
+    () =>
+      computeEmergency({
+        emergency: vault.emergency ?? EMERGENCY_DEFAULT,
+        expenses: vault.expenses,
+        accounts: vault.accounts,
+        portfolio: live.portfolio,
+        fx: live.fx,
+        base,
+        now: Date.now(),
+      }),
+    [vault, live.portfolio, live.fx, base],
+  );
+
+  // De-duplicated account lines (non-sleeve) for KPIs, breakdown table, and rebalancer
+  const accountRows = useMemo(() => {
+    const lines = pnl?.accounts ?? [];
+    return lines
+      .filter((l) => !l.account.isSubView)
+      .map((l, idx) => {
+        const isEmergency = reservedIds.has(l.account.id) || l.account.accountType === 'cash';
+        const deposit = l.capitalBase > 0 ? l.capitalBase : l.costBase;
+        const val = l.valueBase;
+        const profit = deposit > 0 ? val - deposit : null;
+        const retPct = deposit > 0 && profit != null ? (profit / deposit) * 100 : null;
+        return {
+          account: l.account,
+          isEmergency,
+          depositBase: deposit,
+          valueBase: val,
+          pnlBase: profit,
+          retPct,
+          color: BUCKET_PALETTE[idx % BUCKET_PALETTE.length],
+        };
+      });
+  }, [pnl, reservedIds]);
+
+  const investRows = useMemo(() => accountRows.filter((r) => !r.isEmergency), [accountRows]);
+  const emergencyRows = useMemo(() => accountRows.filter((r) => r.isEmergency), [accountRows]);
+
+  // Rebalancer plan between the top 2 investment accounts (or classes)
+  const rebalancerPlan = useMemo(() => {
+    const sorted = [...investRows].sort((a, b) => b.valueBase - a.valueBase);
+    const primary = sorted[0] ?? null;
+    const secondary = sorted[1] ?? null;
+    if (!primary || !secondary) return null;
+    const pVal = primary.valueBase;
+    const sVal = secondary.valueBase;
+    const postTotal = pVal + sVal + newCapitalBase;
+    const targetP = (targetPrimaryPct / 100) * postTotal;
+    let addPrimary = Math.max(0, Math.min(newCapitalBase, targetP - pVal));
+    let addSecondary = Math.max(0, newCapitalBase - addPrimary);
+    return {
+      primary,
+      secondary,
+      addPrimary,
+      addSecondary,
+      postPrimary: pVal + addPrimary,
+      postSecondary: sVal + addSecondary,
+      postTotal,
+      postPrimaryPct: postTotal > 0 ? ((pVal + addPrimary) / postTotal) * 100 : 0,
+      postSecondaryPct: postTotal > 0 ? ((sVal + addSecondary) / postTotal) * 100 : 0,
+    };
+  }, [investRows, newCapitalBase, targetPrimaryPct]);
+
+  const deployDeltaFor = (accId: string): number => {
+    if (!deployEnabled || !rebalancerPlan) return 0;
+    if (accId === rebalancerPlan.primary.account.id) return rebalancerPlan.addPrimary;
+    if (accId === rebalancerPlan.secondary.account.id) return rebalancerPlan.addSecondary;
+    return 0;
+  };
+
+  // Totals (include simulated new capital when switch is ON)
+  const simAddTotal = deployEnabled && rebalancerPlan ? newCapitalBase : 0;
+  const totalCurrentBase = useMemo(
+    () => accountRows.reduce((s, r) => s + r.valueBase, 0) + simAddTotal,
+    [accountRows, simAddTotal],
+  );
+  const totalDepositBase = useMemo(
+    () => accountRows.reduce((s, r) => s + r.depositBase, 0) + simAddTotal,
+    [accountRows, simAddTotal],
+  );
+  const totalPnlBase = totalDepositBase > 0 ? totalCurrentBase - totalDepositBase : null;
+  const totalPnlPct = totalDepositBase > 0 && totalPnlBase != null ? (totalPnlBase / totalDepositBase) * 100 : null;
+
+  const investTotalBase = useMemo(
+    () => investRows.reduce((s, r) => s + r.valueBase, 0) + simAddTotal,
+    [investRows, simAddTotal],
+  );
+  const emergencyTotalBase = useMemo(
+    () => emergencyRows.reduce((s, r) => s + r.valueBase, 0),
+    [emergencyRows],
+  );
+  const emergencyRatioBase = emergencyTotalBase > 0 ? emergencyTotalBase : emRes.reserve;
+  const splitDenom = investTotalBase + emergencyRatioBase;
+  const investSharePct = splitDenom > 0 ? (investTotalBase / splitDenom) * 100 : 0;
+  const emergencySharePct = splitDenom > 0 ? 100 - investSharePct : 0;
+
+  // Pie slices for AllocationPie
+  const rateToBase = (code: string): number =>
+    live.fx ? fxService.toBase(1, code, live.fx) : code === base ? 1 : 0;
+
   const pieSlices = useMemo<PieSlice[]>(() => {
-    if (!live.portfolio) return [];
-    const rateToBaseLocal = (code: string): number =>
-      live.fx ? fxService.toBase(1, code, live.fx) : code === base ? 1 : 0;
+    if (activePie === 'account') {
+      return accountRows
+        .map((r) => ({
+          key: r.account.id,
+          label: r.account.platformName,
+          valueBase: r.valueBase + deployDeltaFor(r.account.id),
+          color: r.color,
+        }))
+        .filter((s) => s.valueBase > 0);
+    }
     if (activePie === 'holding') {
       return vault.holdings
         .map((h) => {
           const q = live.quotes[h.symbol];
-          const { valueBase, ok } = valueInBase(h, q, base, rateToBaseLocal);
+          const { valueBase, ok } = valueInBase(h, q, base, rateToBase);
           return {
             key: h.id,
             label: h.symbol,
@@ -160,11 +315,10 @@ export function InvestmentsView() {
         })
         .filter((s) => s.valueBase > 0);
     }
-    // Per class: group holdings, sum their base values, attach sub-breakdown.
     const byClass = new Map<string, { valueBase: number; sub: { label: string; valueBase: number }[] }>();
     for (const h of vault.holdings) {
       const q = live.quotes[h.symbol];
-      const { valueBase, ok } = valueInBase(h, q, base, rateToBaseLocal);
+      const { valueBase, ok } = valueInBase(h, q, base, rateToBase);
       const v = ok ? valueBase : 0;
       const row = byClass.get(h.assetClass) ?? { valueBase: 0, sub: [] };
       row.valueBase += v;
@@ -180,40 +334,64 @@ export function InvestmentsView() {
         color: colorForClass(cls, 0),
         sub: v.sub,
       }));
-  }, [activePie, vault.holdings, live.quotes, live.fx, base]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePie, accountRows, vault.holdings, live.quotes, live.fx, base, deployEnabled, rebalancerPlan]);
 
   const totalPieValue = useMemo(() => pieSlices.reduce((s, x) => s + x.valueBase, 0), [pieSlices]);
 
-  const grouped = useMemo(() => {
-    const byPlat = new Map<string, InvestmentHolding[]>();
-    for (const h of vault.holdings) {
-      const acc = vault.accounts.find((a) => a.id === h.accountId);
-      const key = acc?.platformName ?? 'Unassigned';
-      byPlat.set(key, [...(byPlat.get(key) ?? []), h]);
+  // Selected slice details for Inspector card
+  const inspector = useMemo(() => {
+    const slice = selectedSlice ? pieSlices.find((s) => s.key === selectedSlice) ?? null : null;
+    if (!slice) {
+      return {
+        tag: 'Overall View',
+        title: `Combined Portfolio (${accountRows.length} ${accountRows.length === 1 ? 'Bucket' : 'Buckets'})`,
+        subtitle: vault.holdings.length > 0
+          ? `${vault.holdings.length} holdings across ${vault.accounts.length} accounts`
+          : 'No holdings tracked yet',
+        sharePct: totalPieValue > 0 ? 100 : 0,
+        valueBase: totalCurrentBase,
+        depositBase: totalDepositBase,
+        pnlBase: totalPnlBase,
+        retPct: totalPnlPct,
+      };
     }
-    return byPlat;
-  }, [vault.holdings, vault.accounts]);
+    const accRow = activePie === 'account' ? accountRows.find((r) => r.account.id === slice.key) : null;
+    const val = slice.valueBase;
+    const dep = accRow ? accRow.depositBase + deployDeltaFor(accRow.account.id) : 0;
+    const profit = dep > 0 ? val - dep : null;
+    const ret = dep > 0 && profit != null ? (profit / dep) * 100 : null;
+    return {
+      tag: accRow ? (accRow.isEmergency ? 'Emergency Buffer' : 'Investment Account') : activePie === 'holding' ? 'Holding' : 'Asset Class',
+      title: slice.label,
+      subtitle: accRow ? accRow.account.accountType : `${((val / (totalPieValue || 1)) * 100).toFixed(1)}% of portfolio`,
+      sharePct: totalPieValue > 0 ? (val / totalPieValue) * 100 : 0,
+      valueBase: val,
+      depositBase: dep,
+      pnlBase: profit,
+      retPct: ret,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSlice, pieSlices, activePie, accountRows, totalPieValue, totalCurrentBase, totalDepositBase, totalPnlBase, totalPnlPct, vault.holdings.length, vault.accounts.length]);
 
-  /** NaN-safe per-row valuation shared by the KPI panel and the holdings
-   *  list: corrupt rows / missing FX rates contribute 0 and flag ok=false. */
-  const rateToBase = (code: string): number =>
-    live.fx ? fxService.toBase(1, code, live.fx) : code === base ? 1 : 0;
+  const otherCurrenciesLine = (amountBase: number) => {
+    const others = ['USD', 'MYR', 'EUR', 'SGD', 'IDR'].filter((c) => c !== displayCur).slice(0, 2);
+    return others.map((c) => `${formatMoney(convertFromBase(amountBase, c), c)} ${c}`).join(' • ');
+  };
 
+  // ---- CRUD handlers ----
   const addAccount = () => {
     const name = platform.trim();
     if (!name) return;
     const d = parseFloat(deposit);
     const depositOk = Number.isFinite(d) && d > 0;
     if (isRobo) {
-      // StashAway / robo-advisor: create the account AND its asset allocation
-      // in one shot. Each row with a %>0 becomes a sleeve tracking its real
-      // index; net deposit = the amount you put in (the cost basis).
       const sleeves = roboRows
         .filter((r) => Number.isFinite(parseFloat(r.pct)) && parseFloat(r.pct) > 0)
         .map((r) => ({
           assetClass: r.assetClass,
           allocationPct: parseFloat(r.pct),
-          refPrice: saRefs[r.assetClass] || 0, // 0 -> store seeds 1 (flat until live)
+          refPrice: saRefs[r.assetClass] || 0,
         }));
       if (sleeves.length === 0) {
         toast('Pick at least one asset to allocate to');
@@ -242,105 +420,6 @@ export function InvestmentsView() {
     toast(`Account "${name}" created and set as target`);
   };
 
-  /** Per-account live lines (account id -> AccountLine) so the account rows
-   *  can show live value + P&L against the recorded deposit. */
-  const accLines = useMemo(() => {
-    const m = new Map<string, AccountLine>();
-    if (live.portfolio) for (const a of live.portfolio.byAccount) m.set(a.account.id, a);
-    return m;
-  }, [live.portfolio]);
-
-  /** Per-account "daily change" — today's live value minus the previous
-   *  day's snapshot (StashAway shows e.g. "-RM3,678.75" on each card).
-   *  Returns null when there's no prior snapshot to compare against. */
-  const dailyChange = useMemo(() => {
-    const m = new Map<string, number | null>();
-    const hist = vault.accountHistory ?? {};
-    for (const [accId, pts] of Object.entries(hist)) {
-      if (pts.length < 2) { m.set(accId, null); continue; }
-      const today = pts[pts.length - 1];
-      const yesterday = pts[pts.length - 2];
-      m.set(accId, today.valueBase - yesterday.valueBase);
-    }
-    return m;
-  }, [vault.accountHistory]);
-
-  // Snapshot each account's live value once per day so the cards can compute
-  // a "daily change" figure on the next visit (mirrors the real StashAway
-  // app's per-portfolio daily delta). Guarded: `live.portfolio` is a fresh
-  // object every render, so we only persist when the per-account values
-  // actually changed since the last capture (prevents an infinite
-  // capture -> setVault -> re-render -> capture loop).
-  const lastCaptured = useRef<string>('');
-  useEffect(() => {
-    if (!live.portfolio) return;
-    const values: Record<string, number> = {};
-    for (const line of live.portfolio.byAccount) {
-      values[line.account.id] = Math.round(line.valueBase * 100) / 100;
-    }
-    const sig = JSON.stringify(values);
-    if (sig === lastCaptured.current) return;
-    lastCaptured.current = sig;
-    store.captureAccountValues(values);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live.portfolio]);
-
-  // Contribution-aware portfolio P&L: live value vs total invested capital
-  // (manual initial balances + every settled contribution). `null` when no
-  // account has a recorded capital yet — the UI then prompts the user.
-  const pnl = useMemo(() => {
-    if (!live.portfolio) return null;
-    return portfolioPnl(
-      live.portfolio,
-      vault.accounts,
-      vault.contributions ?? [],
-    );
-  }, [live.portfolio, vault.accounts, vault.contributions]);
-
-  /** Total value where any account has a recorded broker value
-   *  (brokerValueBase): use the broker's own current value for those
-   *  accounts and the live-quote value for the rest, so the hero number
-   *  matches what the user sees on their broker. Falls back to the pure
-   *  quote-derived total when no broker values are recorded. */
-  const displayTotalValueBase = useMemo(() => {
-    // The hero VALUE must sit on the EXACT same base as the hero P&L, or
-    // value − P&L ≠ capital and the numbers don't reconcile.
-    //
-    // `pnl.totalValueBase` (autoinvest.portfolioPnl) is that base:
-    //   - it EXCLUDES isSubView sleeves (a "Monthly" sleeve already inside
-    //     "Simple" is not summed again — that was the double-count), and
-    //   - each line's value already uses the broker value when recorded
-    //     (valueBase = brokerValue ?? quoteValue), so broker-adjusted
-    //     accounts are correct without a separate `brokerTotal` branch.
-    //
-    // The old `brokerTotal` branch summed over ALL non-sleeve accounts
-    // while `pnl.totalValueBase` sums over non-sleeve WITH recorded
-    // capital — the two disagreed, so the hero value and P&L were on
-    // different bases (value looked too big / P&L looked too small).
-    // Using `pnl.totalValueBase` unifies value + P&L + return% + the
-    // per-account list on one consistent base.
-    if (!pnl) return live.portfolio?.totalValueBase ?? 0;
-    return Number.isFinite(pnl.totalValueBase) ? pnl.totalValueBase! : (live.portfolio?.totalValueBase ?? 0);
-  }, [pnl, live.portfolio]);
-
-  /** Net worth reconciled to the Home page: investment value (the same
-   *  allocation-aware buildPortfolio math Home uses) + manual "other assets"
-   *  − liabilities. Using live.portfolio.totalValueBase (not a naive
-   *  valueInBase loop) is critical so allocation/robo sleeves are counted
-   *  with their live scale factor and the two pages always reconcile. */
-  const netWorth = useMemo(() => {
-    const investments = live.portfolio?.totalValueBase ?? 0;
-    const assets = (vault.assets ?? []).reduce((s, a) => s + (Number.isFinite(a.value) ? a.value : 0), 0);
-    const liabilities = (vault.liabilities ?? []).reduce((s, l) => s + (Number.isFinite(l.balance) ? l.balance : 0), 0);
-    return { investments, assets, liabilities, net: investments + assets - liabilities, hasDebt: liabilities > 0, hasAssets: assets > 0 };
-  }, [vault, live.portfolio]);
-
-  /** Accounts already designated as emergency-reserve lines. */
-  const reservedIds = useMemo(
-    () => new Set((vault.emergency?.items ?? []).filter((i) => i.kind === 'account').map((i) => i.accountId)),
-    [vault.emergency],
-  );
-
   const toReserve = (id: string) => {
     const acc = vault.accounts.find((a) => a.id === id);
     if (!acc) return;
@@ -354,9 +433,6 @@ export function InvestmentsView() {
     toast(`"${acc.platformName}" added to the emergency reserve.`);
   };
 
-  /** Reverse of toReserve. Tapping the reserved account row again removes its
-   *  reserve line so the button never becomes a dead "In reserve" state that
-   *  only EmergencyPanel can undo. */
   const unReserve = (id: string) => {
     const removed = (vault.emergency?.items ?? []).filter(
       (i) => i.kind === 'account' && i.accountId === id,
@@ -367,20 +443,15 @@ export function InvestmentsView() {
   };
 
   const addHolding = async () => {
-    // Par rows (cash/MMF): a single amount input, price pinned to 1, symbol
-    // pinned to the class. value = amount · FX(1 holding cur -> base).
     const par = isParClass(assetClass);
     const am = parseFloat(amount);
     if (par && (!accountId || !isFinite(am) || am <= 0)) return;
-    // Non-par rows: symbol + units + entry.
     const u = parseFloat(units);
     const e = parseFloat(entry);
     if (!par && (!accountId || !symbol.trim() || !isFinite(u) || u <= 0)) return;
-    // For par rows, units ARE the amount and entry/price are pinned to 1.
     const finalUnits = par ? am : u;
     const finalEntry = par ? 1 : e;
     const finalSymbol = (par ? parSymbolFor(assetClass) : symbol.trim()).toUpperCase();
-    // Pull an initial live quote so currentPriceBase is seeded (best-effort).
     let local = par ? 1 : e || 0;
     let priceBase = local;
     try {
@@ -389,8 +460,8 @@ export function InvestmentsView() {
         const r = fxService.toBase(1, holdCur, rates);
         priceBase = Number.isFinite(r) ? local * r : 0;
       }
-    } catch { /* offline: keep entry as a rough base price */ }
-    const payload = {
+    } catch { /* offline */ }
+    store.addHolding({
       accountId,
       symbol: finalSymbol,
       assetClass,
@@ -399,25 +470,17 @@ export function InvestmentsView() {
       averageEntryPrice: finalEntry,
       currentPriceLocal: local || undefined,
       currentPriceBase: priceBase || undefined,
-    };
-    store.addHolding(payload);
+    });
     setSymbol(''); setUnits(''); setEntry(''); setAmount('');
     toast(`Added ${finalSymbol} to target account`);
   };
 
-  // The currently-selected target account, and whether it's a robo-advisor
-  // (drives the simplified value-entry flow — no buy price, no units).
   const targetAcct = vault.accounts.find((a) => a.id === accountId) ?? null;
   const targetIsRobo = targetAcct?.accountType === 'robo';
 
-  /** Robo-advisor value entry: the user knows "this fund is worth X", not a
-   *  per-share price. Store it as units=1 × price=X so the holding's current
-   *  value is exactly X and it feeds the allocation breakdown. P&L still
-   *  comes from the account's "amount put in", not these rows. */
   const addRoboValue = async () => {
     const v = parseFloat(roboValue);
     if (!accountId || !isFinite(v) || v <= 0) return;
-    // A free-typed symbol is best; default to the fund type when blank.
     const sym = symbol.trim().toUpperCase() || (assetClass === 'equity-local' ? 'LOCAL EQUITY FUND' : assetClass === 'equity-us' ? 'GLOBAL EQUITY FUND' : 'FUND');
     let priceBase = v;
     try {
@@ -426,72 +489,52 @@ export function InvestmentsView() {
         const r = fxService.toBase(1, holdCur, rates);
         priceBase = Number.isFinite(r) ? v * r : v;
       }
-    } catch { /* offline: value is already in holding currency */ }
+    } catch { /* offline */ }
     store.addHolding({
       accountId,
       symbol: sym,
       assetClass,
       holdingCurrency: holdCur,
       units: 1,
-      averageEntryPrice: v,          // 1 × X = X — current value is exactly X
+      averageEntryPrice: v,
       currentPriceLocal: v,
       currentPriceBase: priceBase,
     });
     setSymbol(''); setRoboValue('');
-    toast(`Added ${sym} (worth ${v.toLocaleString()}) to ${targetAcct!.platformName}`);
+    toast(`Added ${sym} to ${targetAcct!.platformName}`);
   };
 
-  // ---- StashAway / robo allocation creation is now inline in addAccount
-  // ---- (see the isRobo branch above); the old separate "New Portfolio"
-  //      modal + openStashaway/createStashaway helpers were removed.
-
-
-  // ---- Edit-holding modal (pop-up) state + save -----------------------------
+  // ---- Modals state ----
   const [mSymbol, setMSymbol] = useState('');
   const [mClass, setMClass] = useState<InvestmentHolding['assetClass']>('equity-us');
   const [mCur, setMCur] = useState(base);
   const [mUnits, setMUnits] = useState('');
   const [mEntry, setMEntry] = useState('');
   const [mAmount, setMAmount] = useState('');
-  /** Robo-account edit: a single "how much is it worth" value (units=1 × X). */
   const [mValue, setMValue] = useState('');
-  /** Whether the holding being edited lives in a robo-advisor account. */
   const [mIsRobo, setMIsRobo] = useState(false);
   const mPar = isParClass(mClass);
 
-  /** Prefill the modal from the holding being edited; close it (and reset
-   *  the old inline edit state) on mount of the modal. */
   const openEdit = (h: InvestmentHolding) => {
     setMSymbol(h.symbol);
     setMClass(h.assetClass);
     setMCur(h.holdingCurrency);
-    // Is this holding in a robo-advisor account? -> value-based edit.
     const acct = vault.accounts.find((a) => a.id === h.accountId);
     const robo = acct?.accountType === 'robo' && !isParClass(h.assetClass);
     setMIsRobo(robo);
     if (robo) {
-      // Show the holding's current value in its holding currency: units × entry
-      // (the seeded current price) — that's the figure the user edits.
-      const curVal = (h.units || 0) * (h.currentPriceLocal || h.averageEntryPrice || 0);
-      setMValue(curVal > 0 ? String(curVal) : '');
-      setMUnits(''); setMEntry(''); setMAmount('');
+      const v = (Number.isFinite(h.currentPriceLocal) ? h.currentPriceLocal : h.averageEntryPrice) * (Number.isFinite(h.units) ? h.units : 1);
+      setMValue(String(Math.round(v * 100) / 100));
     } else if (isParClass(h.assetClass)) {
-      setMAmount(String(h.units || ''));
-      setMUnits(''); setMEntry(''); setMValue('');
-      setMSymbol(parSymbolFor(h.assetClass));
+      setMAmount(String(h.units));
     } else {
       setMUnits(String(h.units));
-      setMEntry(String(h.averageEntryPrice || ''));
-      setMAmount(''); setMValue('');
+      setMEntry(String(h.averageEntryPrice));
     }
     setEditHolding(h);
   };
+  const closeEdit = () => setEditHolding(null);
 
-  const closeEdit = () => {
-    setEditHolding(null);
-  };
-
-  // ---- Set starting capital modal ------------------------------------------
   const [depOpen, setDepOpen] = useState(false);
   const [depFocusId, setDepFocusId] = useState<string | null>(null);
   const openDeposit = (focusAccountId?: string) => {
@@ -499,24 +542,10 @@ export function InvestmentsView() {
     setDepOpen(true);
   };
 
-  // ---- Set cost basis fast path ---------------------------------------------
-  // Enter total invested per account (from StashAway's "Total invested"), and
-  // it back-fills each holding's entry price proportionally by current value,
-  // so cost-basis P&L matches the broker without editing every row.
   const [costOpen, setCostOpen] = useState(false);
-  // Per-account "total invested" draft, keyed by account id (base currency).
   const [costDrafts, setCostDrafts] = useState<Record<string, string>>({});
-  // Per-account "current value from broker" draft, keyed by account id. When
-  // set, the P&L for that account uses this exact broker value instead of the
-  // live-quote-derived value, so it matches StashAway 1:1 despite FX / fund-NAV
-  // drift. Optional per account — leave blank to keep using the live quote.
   const [brokerValueDrafts, setBrokerValueDrafts] = useState<Record<string, string>>({});
   const openCostBasis = () => {
-    // Seed each account's "total invested" with the best known figure, in
-    // priority order: recorded starting capital -> settled contributions ->
-    // existing cost basis -> live value (last resort, labelled). Never seed
-    // live value as if it were the investment amount, or saving would make
-    // P&L read 0.00%.
     const seeds: Record<string, string> = {};
     const brokerSeeds: Record<string, string> = {};
     for (const a of vault.accounts) {
@@ -529,8 +558,6 @@ export function InvestmentsView() {
       seeds[a.id] = preferred != null
         ? String(Math.round(preferred * 100) / 100)
         : (line && line.costBase > 0 ? String(Math.round(line.costBase * 100) / 100) : '');
-      // Seed the broker-value field with the recorded broker value, else the
-      // live quote so the user sees a sensible starting number they can edit.
       const broker = Number.isFinite(a.brokerValueBase) && (a.brokerValueBase ?? 0) > 0
         ? String(Math.round(a.brokerValueBase! * 100) / 100)
         : (line && line.valueBase > 0 ? String(Math.round(line.valueBase * 100) / 100) : '');
@@ -541,18 +568,12 @@ export function InvestmentsView() {
     setCostOpen(true);
   };
 
-  /** Save the fast path: set initialDepositBase + distribute total invested
-   *  across each account's holdings as entry prices (proportional to their
-   *  current value, so the sum of holding costs ≈ the total invested). */
   const saveCostBasis = async () => {
     let touched = 0;
     let brokerSet = 0;
     for (const a of vault.accounts) {
       const raw = (costDrafts[a.id] ?? '').trim();
       const totalInvested = parseFloat(raw);
-      // ---- Save the broker's "current value" for this account (optional).
-      // This drives P&L directly so it matches the broker even when our
-      // live quote / FX / fund-NAV prices drift. A blank field clears it.
       const braw = (brokerValueDrafts[a.id] ?? '').trim();
       const brokerVal = parseFloat(braw);
       const patch: Partial<InvestmentAccount> = {};
@@ -560,33 +581,17 @@ export function InvestmentsView() {
         patch.brokerValueBase = brokerVal;
         brokerSet++;
       } else if (a.brokerValueBase != null) {
-        patch.brokerValueBase = undefined; // clear a previously-set override
+        patch.brokerValueBase = undefined;
       }
-      // ---- "Total invested" — skip when blank, but still allow saving the
-      // broker value above on its own.
       if (raw !== '' && Number.isFinite(totalInvested) && totalInvested > 0) {
-        // Guard: a "total invested" far above this account's own current value
-        // is the classic sign the user pasted a PLATFORM-WIDE figure (StashAway
-        // "Net deposits" across all accounts) into a single sub-account. That
-        // made Monthly Portofolio read 39,253 instead of its own 6,000. Flag it
-        // loudly instead of silently writing it.
         const line = live.portfolio?.byAccount.find((l) => l.account.id === a.id);
         const acctValue = braw !== '' && Number.isFinite(brokerVal) && brokerVal > 0
           ? brokerVal
           : (line?.valueBase ?? 0);
-        const suspicious = acctValue > 0 && totalInvested > acctValue * 1.05;
-        patch.initialDepositBase = totalInvested;
-        if (suspicious) {
-          toast(
-            `Heads-up: "${a.platformName}" total invested (${formatMoney(totalInvested, base)}) ` +
-            `is ${(totalInvested / acctValue).toFixed(1)}× its own value (${formatMoney(acctValue, base)}). ` +
-            `That usually means a platform-wide figure was pasted into one account.`,
-            'warn',
-          );
+        if (acctValue > 0 && totalInvested > acctValue * 1.05) {
+          toast(`Heads-up: "${a.platformName}" total invested exceeds its value by ${(totalInvested / acctValue).toFixed(1)}×.`, 'warn');
         }
-        // 2) Distribute the total invested across non-par holdings in
-        //    proportion to their value, so the sum of holding costs ≈ the
-        //    total invested. Par (cash/MMF) rows keep entry = 1.
+        patch.initialDepositBase = totalInvested;
         const distributable = (line?.lines ?? []).filter(
           (l) => !isParClass(l.holding.assetClass) && l.valueBase > 0 && Number.isFinite(l.holding.units) && l.holding.units > 0,
         );
@@ -605,7 +610,6 @@ export function InvestmentsView() {
           }
         }
       }
-      // Single updateAccount call applies both the deposit and the broker value.
       if (Object.keys(patch).length > 0) store.updateAccount(a.id, patch);
     }
     setCostOpen(false);
@@ -614,7 +618,7 @@ export function InvestmentsView() {
     if (touched > 0) bits.push(`${touched} holding${touched === 1 ? '' : 's'}`);
     toast(bits.length > 0 ? `Saved · ${bits.join(', ')}` : 'Cost basis saved');
   };
-  // When opened focused on a specific account, scroll it into view + focus it.
+
   useEffect(() => {
     if (!depOpen || !depFocusId) return;
     const el = document.querySelector(`[data-dep-focus="1"] .dep-input`);
@@ -624,12 +628,10 @@ export function InvestmentsView() {
     }
   }, [depOpen, depFocusId]);
 
-  /** Persist the modal edits back to the holding via updateHolding. */
   const saveHoldingEdit = async () => {
     const h = editHolding;
     if (!h) return;
     const par = isParClass(mClass);
-    // Robo-account value edit: a single "worth X" -> units=1 × X.
     if (mIsRobo) {
       const v = parseFloat(mValue);
       if (!isFinite(v) || v <= 0) { toast('Enter how much it is worth.', 'err'); return; }
@@ -637,7 +639,7 @@ export function InvestmentsView() {
       try {
         const rates = await fxService.latest(base);
         if (mCur !== base) { const r = fxService.toBase(1, mCur, rates); priceBase = Number.isFinite(r) ? v * r : v; }
-      } catch { /* offline: value already in holding currency */ }
+      } catch { /* offline */ }
       store.updateHolding(h.id, {
         accountId: h.accountId,
         symbol: mSymbol.trim().toUpperCase() || h.symbol,
@@ -649,24 +651,17 @@ export function InvestmentsView() {
         currentPriceBase: priceBase,
       });
       closeEdit();
-      toast(`Updated ${mSymbol.trim().toUpperCase() || h.symbol} (worth ${v.toLocaleString()})`);
+      toast(`Updated ${mSymbol.trim().toUpperCase() || h.symbol}`);
       return;
     }
     const am = parseFloat(mAmount);
     const u = parseFloat(mUnits);
     const e = parseFloat(mEntry);
-    if (par && (!isFinite(am) || am <= 0)) {
-      toast('Amount must be a positive number.', 'err');
-      return;
-    }
-    if (!par && (!mSymbol.trim() || !isFinite(u) || u <= 0)) {
-      toast('Symbol and positive units are required.', 'err');
-      return;
-    }
+    if (par && (!isFinite(am) || am <= 0)) { toast('Amount must be positive.', 'err'); return; }
+    if (!par && (!mSymbol.trim() || !isFinite(u) || u <= 0)) { toast('Symbol and units required.', 'err'); return; }
     const finalUnits = par ? am : u;
     const finalEntry = par ? 1 : e;
     const finalSymbol = (par ? parSymbolFor(mClass) : mSymbol.trim()).toUpperCase();
-    // Seed a live quote best-effort (same as addHolding).
     let local = par ? 1 : e || 0;
     let priceBase = local;
     try {
@@ -698,805 +693,938 @@ export function InvestmentsView() {
     toast(`Deleted "${acc?.platformName ?? 'account'}"` + (count > 0 ? ` and ${count} holding${count === 1 ? '' : 's'}` : ''));
   };
 
+  const grouped = useMemo(() => {
+    const byPlat = new Map<string, InvestmentHolding[]>();
+    for (const h of vault.holdings) {
+      const acc = vault.accounts.find((a) => a.id === h.accountId);
+      const key = acc?.platformName ?? 'Unassigned';
+      byPlat.set(key, [...(byPlat.get(key) ?? []), h]);
+    }
+    return byPlat;
+  }, [vault.holdings, vault.accounts]);
+
+  const manageRef = useRef<HTMLDivElement>(null);
+  const jumpToAdd = () => {
+    setManageTab('add');
+    manageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const usdToBase = live.fx ? fxService.toBase(1, 'USD', live.fx) : null;
+  const baseToIdr = live.fx ? convertFromBase(1, 'IDR') : null;
+
   return (
     <>
-      <h2 className="section-title">Your Portfolio</h2>
-      <div className="card">
-        {/* Hero band: big number + tinted delta + a 3-cell stats strip. */}
-        <div className="pf-hero">
-          <div className="pf-hero-main">
-            <div className="pf-hero-lbl">Investment value · {base}</div>
-            <div className="pf-hero-num">{formatMoney(displayTotalValueBase, base)}</div>
-            <div className="pf-hero-delta">
-              {/* Primary KPI: P&L against "Total invested" (initialDepositBase
-                  = the broker's own net deposits, e.g. StashAway "Total
-                  invested"). For a robo-advisor the per-holding entry prices
-                  are the fund NAV, not your cash cost — so this figure, not
-                  the holding sum, is what reconciles to the broker. Falls
-                  back to cost-basis P&L only when no account has a recorded
-                  total invested yet. */}
-              {pnl && pnl.totalPnlBase != null ? (
-                <span className={`pf-delta ${pnl.totalPnlBase >= 0 ? 'up' : 'down'}`}>
-                  {pnl.totalPnlBase >= 0 ? '▲' : '▼'}{' '}
-                  {Math.abs(pnl.totalPnlBase) > 0
-                    ? `${pnl.totalPnlBase >= 0 ? '+' : '−'}${formatMoney(Math.abs(pnl.totalPnlBase), base)}`
-                    : 'Breakeven'}
-                  {pnl.totalReturnPct != null ? (
-                    <span className="pf-delta-pct">
-                      {pnl.totalReturnPct >= 0 ? '+' : '−'}{Math.abs(pnl.totalReturnPct).toFixed(1)}%
-                    </span>
-                  ) : null}
-                </span>
-              ) : pnl && pnl.totalCostPnlBase != null ? (
-                <span className={`pf-delta ${pnl.totalCostPnlBase >= 0 ? 'up' : 'down'}`}>
-                  {pnl.totalCostPnlBase >= 0 ? '▲' : '▼'}{' '}
-                  {Math.abs(pnl.totalCostPnlBase) > 0
-                    ? `${pnl.totalCostPnlBase >= 0 ? '+' : '−'}${formatMoney(Math.abs(pnl.totalCostPnlBase), base)}`
-                    : 'Breakeven'}
-                  {pnl.totalCostReturnPct != null ? (
-                    <span className="pf-delta-pct">
-                      {pnl.totalCostReturnPct >= 0 ? '+' : '−'}{Math.abs(pnl.totalCostReturnPct).toFixed(1)}%
-                    </span>
-                  ) : null}
-                </span>
-              ) : (
-                <span className="muted small">No amount put in yet</span>
-              )}
-            </div>
+      {/* ==================== PAGE HEADER & CONTROLS ==================== */}
+      <div className="page-head">
+        <div>
+          <div className="page-badge">
+            <span className="dot" />
+            <span>{vault.prefs.displayName ? `${vault.prefs.displayName}'s Portfolio` : 'Personal Portfolio'}</span>
+            <span>•</span>
+            <span>{vault.holdings.length} holdings · {vault.accounts.length} accounts</span>
+            {deployEnabled && rebalancerPlan && (
+              <span className="chip sm ok" style={{ marginLeft: 4 }}>+{formatMoney(newCapitalBase, base)} Active</span>
+            )}
           </div>
-          <div className="pf-hero-stats">
-            <div className="pf-stat">
-              <div className="pf-stat-num">{vault.holdings.length}</div>
-              <div className="pf-stat-lbl">Holdings</div>
-            </div>
-            <div className="pf-stat">
-              <div className="pf-stat-num">{live.portfolio?.liveQuoteCount ?? 0}</div>
-              <div className="pf-stat-lbl">Live quotes</div>
-            </div>
-            <div className="pf-stat">
-              <div className="pf-stat-num">{vault.accounts.length}</div>
-              <div className="pf-stat-lbl">Accounts</div>
-            </div>
-          </div>
+          <h1 className="page-title">Portfolio Allocation &amp; Rebalancer</h1>
+          <p className="page-sub">
+            Unified view of your investments, emergency buffer, P&amp;L, and capital deployment.
+          </p>
         </div>
 
-        {/* Net-worth sub-card: reconciles to the Home page. Home's "Net
-            worth" = investment value + other assets − liabilities, using the
-            SAME valueInBase math as this page. Show the same figure here so
-            the two headlines match, and explain why Portfolio was smaller
-            before (it only counted the investment accounts). */}
-        {(netWorth.hasDebt || netWorth.hasAssets) ? (
-          <div className="card" style={{ marginTop: 10, marginBottom: 10 }}>
-            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-              <div>
-                <div className="small muted">Net worth (incl. assets & debts) · {base}</div>
-                <div style={{ fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 800, marginTop: 2 }}>
-                  {formatMoney(netWorth.net, base)}
-                </div>
-              </div>
-              <div className="row small muted" style={{ gap: 12, flexWrap: 'wrap' }}>
-                <span>invest {formatMoney(netWorth.investments, base)}</span>
-                {netWorth.hasAssets && <span>other assets {formatMoney(netWorth.assets, base)}</span>}
-                {netWorth.hasDebt && <span className="neg">debts −{formatMoney(netWorth.liabilities, base)}</span>}
-              </div>
-            </div>
+        <div className="page-controls">
+          <div className="seg" role="group" aria-label="Display currency">
+            {displayCurrencies.map((c) => (
+              <button
+                key={c}
+                type="button"
+                aria-pressed={displayCur === c}
+                onClick={() => setDisplayCur(c)}
+              >
+                {c} ({currencyInfo(c).symbol})
+              </button>
+            ))}
           </div>
-        ) : null}
-
-        {/* P&L is undefined until at least one account has a recorded
-            invested capital. Surface that as an actionable prompt so the
-            user knows exactly what to do, and show it whenever some but not
-            all accounts are covered. */}
-        {pnl && pnl.totalCapitalBase === 0 && vault.accounts.length > 0 && (
-          <div className="row small" style={{ marginBottom: 8, gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span className="chip sm">No amount set yet</span>
-            <span className="muted grow">Add how much you’ve put in so we can show your profit or loss.</span>
-            <button className="btn sm" onClick={() => openDeposit()}>Add amount put in</button>
+          <div className="seg" role="group" aria-label="Chart mode">
+            <button type="button" aria-pressed={chartMode === 'donut'} onClick={() => setChartMode('donut')}>Donut</button>
+            <button type="button" aria-pressed={chartMode === 'pie'} onClick={() => setChartMode('pie')}>Pie</button>
           </div>
-        )}
-        {pnl && pnl.missingCapitalCount > 0 && pnl.totalCapitalBase > 0 && (
-          <div className="row small muted" style={{ marginBottom: 8 }}>
-            Showing profit/loss for {pnl.accounts.length - pnl.missingCapitalCount} of {pnl.accounts.length} accounts · {pnl.missingCapitalCount} still missing an amount
-          </div>
-        )}
-
-        {/* Per-account P&L breakdown — shows each account's gain/loss
-            side by side so the user can see "StashAway −RM X · HATA ±RM Y"
-            instead of a blended aggregate that masks which leg is down.
-            Primary metric: pnlBase (value − initialDepositBase = broker's
-            "Total invested / Net deposits"). This is the correct cost basis
-            for a robo-advisor account like StashAway where per-holding
-            averageEntryPrice is the fund NAV, not your actual cash cost.
-            Falls back to costPnlBase (value − sum of entry prices) when no
-            total invested has been recorded for that account. */}
-        {pnl && pnl.accounts.some((l) => l.valueBase > 0 || l.pnlBase != null || l.costPnlBase != null) && (
-          <div className="card" style={{ marginBottom: 14 }}>
-            <div style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Per-account P&amp;L</div>
-            {pnl.accounts.map((l) => {
-              // Primary: pnlBase (value − initialDepositBase = broker's
-              // "Total invested / Net deposits"). This is the correct cost
-              // basis for a robo-advisor like StashAway: per-holding
-              // averageEntryPrice is the fund NAV at purchase, NOT your
-              // actual cash cost, so costPnlBase (value − Σ entry×units) is
-              // unreliable and can read +88% / −24% nonsense. Only when the
-              // account has no recorded "total invested" do we fall back.
-              const hasInvested = l.pnlBase != null;
-              const pnlVal = hasInvested ? l.pnlBase : l.costPnlBase;
-              const retPct = hasInvested ? l.returnPct : l.costReturnPct;
-              const neg = (pnlVal ?? 0) < 0;
-              // Flag accounts with no per-holding cost basis — the number
-              // shown is the manual initial deposit, not the holding sum.
-              const usingFallback = !hasInvested;
-              return (
-                <div key={l.account.id} className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
-                  <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600, fontSize: 14 }}>
-                    {l.account.platformName}
-                    {usingFallback && l.costPnlBase != null && (
-                      <span className="small" style={{ color: 'var(--warn, #d4a76a)', marginLeft: 6, fontWeight: 500 }}>· est.</span>
-                    )}
-                    {l.account.isSubView && (
-                      <span className="small" style={{ color: 'var(--muted, #8b93a7)', marginLeft: 6, fontWeight: 500 }}>· sleeve</span>
-                    )}
-                  </div>
-                  <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    <div className="row" style={{ gap: 8, justifyContent: 'flex-end', alignItems: 'baseline' }}>
-                      <span style={{ color: neg ? 'var(--bad)' : 'var(--good)', fontWeight: 700, fontSize: 14 }}>
-                        {pnlVal != null ? `${neg ? '−' : '+'}${formatMoney(Math.abs(pnlVal!), base)}` : 'n/a'}
-                      </span>
-                      {retPct != null && (
-                        <span className="small" style={{ color: neg ? 'var(--bad)' : 'var(--good)' }}>
-                          ({retPct >= 0 ? '+' : '−'}{Math.abs(retPct).toFixed(1)}%)
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Allocation by asset class — the single hero chart of the page:
-            a smooth segmented bar with an interactive per-class breakdown.
-            (Replaces the old stacked bar + separate donut pair.) */}
-        {pieSlices.length > 0 ? (
-          <div className="pf-breakdown" style={{ marginTop: 18 }}>
-            <div className="pf-breakdown-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 10, flexWrap: 'wrap' }}>
-              <div>
-                <div style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 700, letterSpacing: '-0.2px' }}>Your mix</div>
-                <div className="small muted" style={{ margin: '2px 0 0' }}>
-                  Tap a slice to pin it — the donut and bar highlight it
-                </div>
-              </div>
-              <div className="seg" role="tablist" aria-label="Allocation view">
-                <button
-                  type="button"
-                  aria-pressed={activePie === 'class'}
-                  onClick={() => setActivePie('class')}
-                >
-                  By class
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={activePie === 'holding'}
-                  onClick={() => setActivePie('holding')}
-                >
-                  By holding
-                </button>
-              </div>
-            </div>
-            <AllocationPie
-              slices={pieSlices}
-              total={totalPieValue}
-              base={base}
-              title={activePie === 'class' ? 'portfolio' : 'holdings'}
-            />
-          </div>
-        ) : null}
-
-        {/* ================= PERFORMANCE =================
-            The "am I gaining or losing money?" section. Three parts:
-              1) A big GAIN / LOSS headline — primary metric is P&L vs.
-                 "Total invested" (initialDepositBase = broker's Net deposits).
-                 Falls back to cost-basis P&L when no account has a recorded
-                 initial balance yet.
-              2) A per-account P&L breakdown (value, cost, P&L, return %).
-              3) A cost-basis audit: any holding with a missing entry price
-                 is what makes the number read green when it should be red.
-        */}
-        {(() => {
-          // Primary: P&L vs "Total invested" (broker's own cost basis,
-          // initialDepositBase) — matches StashAway 1:1. For a robo-advisor
-          // the per-holding entry prices are fund NAV, not your cash cost,
-          // so the holding-sum costPnlBase is unreliable. Only when no
-          // account has a recorded "total invested" do we fall back.
-          const primaryPnl = pnl?.totalPnlBase != null ? pnl.totalPnlBase : pnl?.totalCostPnlBase ?? null;
-          const primaryRet = pnl?.totalPnlBase != null ? pnl.totalReturnPct : pnl?.totalCostReturnPct ?? null;
-          const totalValue = live.portfolio?.totalValueBase ?? 0;
-          const totalCost = live.portfolio?.totalCostBase ?? 0;
-
-          // Cost-basis audit: non-par holdings with no recorded entry price.
-          // For robo-advisor accounts this is EXPECTED — P&L is measured at
-          // the account level (value − amount invested), not per holding, so a
-          // missing per-fund buy price is fine. We still surface it for direct
-          // broker accounts where a real cost basis is expected.
-          const roboAccountIds = new Set(
-            vault.accounts.filter((a) => a.accountType === 'robo').map((a) => a.id),
-          );
-          const auditGaps = vault.holdings
-            .filter((h) => h.assetClass !== 'cash' && h.assetClass !== 'mmf')
-            .filter((h) => !(Number.isFinite(h.averageEntryPrice) && h.averageEntryPrice > 0))
-            .filter((h) => !roboAccountIds.has(h.accountId))
-            .map((h) => ({ symbol: h.symbol, units: h.units }));
-
-          const isLoss = primaryPnl != null && primaryPnl < 0;
-          const isGain = primaryPnl != null && primaryPnl > 0;
-
-          return (
-            <div style={{ marginTop: 18 }}>
-              <h2 className="section-title">Performance</h2>
-
-              {/* Headline card: the single most important number. */}
-              <div className="card" style={{ marginBottom: 10 }}>
-                <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                  <div>
-                    <div className="small muted">{pnl?.totalPnlBase != null ? 'Profit or loss vs. what you put in' : 'Profit or loss vs. what you paid'}</div>
-                    {primaryPnl != null ? (
-                      <div style={{ fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 800, letterSpacing: '-0.5px', marginTop: 4, color: isLoss ? 'var(--bad)' : isGain ? 'var(--good)' : 'var(--text)' }}>
-                        {isLoss ? '▼ You’re down' : isGain ? '▲ You’re up' : '— Break-even'}
-                        <span style={{ fontSize: 18, marginLeft: 8, fontWeight: 700 }}>
-                          {isLoss ? '−' : isGain ? '+' : ''}{formatMoney(Math.abs(primaryPnl), base)}
-                        </span>
-                        {primaryRet != null && (
-                          <span className="muted" style={{ fontSize: 14, marginLeft: 6, fontWeight: 600 }}>
-                            ({primaryRet >= 0 ? '+' : '−'}{Math.abs(primaryRet).toFixed(1)}%)
-                          </span>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="muted" style={{ fontSize: 16, marginTop: 4 }}>Add how much you’ve put in to see your profit or loss</div>
-                    )}
-                    <div className="small muted" style={{ marginTop: 6 }}>
-                      Value {formatMoney(totalValue, base)} · Invested {pnl?.totalPnlBase != null ? formatMoney(pnl.totalCapitalBase ?? 0, base) : formatMoney(totalCost, base)}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Actionable fix when the audit finds gaps (the usual reason
-                    for a false "green" or 0.00% reading). */}
-                {auditGaps.length > 0 && (
-                  <div className="row small" style={{ marginTop: 12, gap: 8, flexWrap: 'wrap', alignItems: 'center', padding: 10, borderRadius: 10, background: 'var(--bad-soft, rgba(239,68,68,0.12))', border: '1px solid color-mix(in srgb, var(--bad) 30%, transparent)' }}>
-                    <span style={{ fontWeight: 600, color: 'var(--bad)' }}>⚠ {auditGaps.length} holding{auditGaps.length === 1 ? '' : 's'} missing entry price</span>
-                    <span className="muted grow">
-                      {auditGaps.slice(0, 4).map((g) => g.symbol).join(', ')}{auditGaps.length > 4 ? ` +${auditGaps.length - 4} more` : ''}
-                    </span>
-                    <button className="btn sm" onClick={() => openCostBasis()}>Use amount from broker</button>
-                  </div>
-                )}
-              </div>
-
-            </div>
-          );
-        })()}
-
-        {(() => {
-          const withDep = live.portfolio?.byAccount.filter((a) => a.depositBase != null && a.valueBase > 0) ?? [];
-          if (withDep.length === 0) return null;
-          const dep = withDep.reduce((s, a) => s + (a.depositBase ?? 0), 0);
-          const pnl = withDep.reduce((s, a) => s + (a.valueBase - (a.depositBase ?? 0)), 0);
-          const pct = dep > 0 ? (pnl / dep) * 100 : 0;
-          return (
-            <div className="row" style={{ marginTop: 10 }}>
-              <span className="small muted">
-                {'Profit / Loss: '}<span className={pnl >= 0 ? 'pos' : 'neg'}>{pnl >= 0 ? '+' : ''}{formatMoney(pnl, base)} ({pct >= 0 ? '+' : ''}{pct.toFixed(1)}%)</span>
-                {withDep.length < (live.portfolio?.byAccount.length ?? 0) && (
-                  <span> · {withDep.length} of {live.portfolio?.byAccount.length} accounts</span>
-                )}
-              </span>
-            </div>
-          );
-        })()}
-        {live.error && <div className="small neg" style={{ marginTop: 10 }}>{live.error}</div>}
-        <div className="row small muted" style={{ marginTop: 10 }}>
-          <span>
-            {live.fxSource === 'offline' ? 'Prices may be delayed' : 'Live prices'}
-            {live.portfolio && live.portfolio.uncounted > 0 && (
-              <span> · {live.portfolio.uncounted} asset{live.portfolio.uncounted === 1 ? '' : 's'} without a price</span>
-            )}
-          </span>
-          <button className="btn ghost sm" onClick={live.refresh} disabled={live.loading}><IRefresh size={16} /> Refresh</button>
+          <button className="btn ghost sm" onClick={live.refresh} disabled={live.loading}>
+            <IRefresh size={15} /> {live.loading ? 'Refreshing…' : 'Refresh'}
+          </button>
+          <button className="btn sm" onClick={jumpToAdd}>
+            <IPlus size={15} /> Add Asset
+          </button>
         </div>
       </div>
 
-      {/* ---- Portfolio strategy + target allocation -------------------------
-          The user picks a famous strategy (or "my own targets") and that
-          target drives both the rebalance engine and the coach's new-money
-          advice. Persisted in prefs.coachStrategy / prefs.targetAllocation. */}
-      <h2 className="section-title">Strategy & targets</h2>
-      <div className="card">
-        <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span className="chip sm">Strategy</span>
-          <ThemedSelect
-            value={vault.prefs.coachStrategy ?? '60-40'}
-            onChange={(v: string) => store.setPrefs({ coachStrategy: v })}
-            options={(Object.values(FAMED_STRATEGIES)).map((s) => ({ value: s.key, label: s.name }))}
-            aria-label="Portfolio strategy"
-          />
+      {/* ==================== FX RATES INLINE BAR ==================== */}
+      <div className="fx-bar">
+        <div className="fx-bar-title">
+          <span className="fx-bar-dot" />
+          <span>{live.fxSource === 'offline' ? 'FX Snapshot (Offline Fallback):' : 'Live FX Rates:'}</span>
         </div>
-        {(() => {
-          const key = vault.prefs.coachStrategy ?? '60-40';
-          const strat = FAMED_STRATEGIES[key as keyof typeof FAMED_STRATEGIES];
-          if (!strat) return null;
-          if (key === 'custom') {
-            return (
-              <div style={{ marginTop: 10 }}>
-                <div className="small muted" style={{ marginBottom: 8 }}>
-                  Set your target weights per asset class (sums to 100%).
-                  These drive the rebalance engine and the coach's new-money advice.
-                </div>
-                {(() => {
-                  const custom = vault.prefs.targetAllocation ?? {};
-                  // All known asset classes — show every row so the user can
-                  // add/remove by setting 0 or a value.
-                  const allClasses = [...ASSET_CLASSES] as readonly string[];
-                  return (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8 }}>
-                      {allClasses.map((cls) => {
-                        const cur = custom[cls] != null ? Math.round((custom[cls] as number) * 100) : 0;
-                        return (
-                          <label key={cls} className="field" style={{ marginBottom: 0 }}>
-                            <span style={{ textTransform: 'capitalize' }}>{cls}</span>
-                            <input
-                              type="number"
-                              inputMode="decimal"
-                              min={0}
-                              max={100}
-                              value={cur === 0 ? '' : cur}
-                              placeholder="0"
-                              onChange={(e) => {
-                                const raw = e.target.value;
-                                const v = raw === '' ? undefined : Number(raw) / 100;
-                                const next = { ...custom };
-                                if (v === undefined || Number.isNaN(v)) delete next[cls];
-                                else next[cls] = Math.max(0, Math.min(1, v));
-                                store.setPrefs({ targetAllocation: next });
-                              }}
-                              style={{ width: '100%' }}
-                            />
-                          </label>
-                        );
-                      })}
-                    </div>
-                  );
-                })()}
-                {(() => {
-                  const custom = vault.prefs.targetAllocation ?? {};
-                  const total = Object.values(custom).reduce((s, w) => s + (Number.isFinite(w) ? w : 0), 0);
-                  const totalPct = Math.round(total * 100);
-                  return (
-                    <div style={{ marginTop: 8 }} className={`small ${totalPct === 100 ? 'pos' : totalPct === 0 ? 'muted' : 'neg'}`}>
-                      {totalPct === 0
-                        ? 'No targets set — set at least one class above.'
-                        : totalPct === 100
-                          ? 'Targets sum to 100% — saved.'
-                          : `Targets currently sum to ${totalPct}% — the rebalance engine normalises automatically, but 100% is cleanest.`}
-                    </div>
-                  );
-                })()}
+        <div className="fx-bar-pills">
+          {usdToBase != null && Number.isFinite(usdToBase) && base !== 'USD' && (
+            <span className="fx-chip">1 USD = <strong>{usdToBase.toFixed(4)}</strong> {base}</span>
+          )}
+          {baseToIdr != null && Number.isFinite(baseToIdr) && base !== 'IDR' && (
+            <span className="fx-chip">1 {base} = <strong className="pos">{baseToIdr.toFixed(2)}</strong> IDR</span>
+          )}
+          <span className="fx-chip">Live quotes: <strong>{live.portfolio?.liveQuoteCount ?? 0}</strong></span>
+          {vault.accounts.length > 0 && (
+            <button type="button" className="btn ghost sm" onClick={() => openCostBasis()}>
+              Match Broker Value
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ==================== 4 TOP KPI CARDS ==================== */}
+      <section className="kpi-grid-4" aria-label="Portfolio KPI Summary">
+        <div className="kpi-card">
+          <div className="kpi-card-top">
+            <p className="kpi-card-lbl">Total Portfolio Value</p>
+            <span className="kpi-tag">{deployEnabled && rebalancerPlan ? 'Projected' : 'Current'}</span>
+          </div>
+          <p className="kpi-card-val">{fmtDisplay(totalCurrentBase)}</p>
+          <p className="kpi-card-sub">{otherCurrenciesLine(totalCurrentBase)}</p>
+        </div>
+
+        <div className="kpi-card">
+          <div className="kpi-card-top">
+            <p className="kpi-card-lbl">Total Net Deposits</p>
+          </div>
+          <p className="kpi-card-val">{fmtDisplay(totalDepositBase)}</p>
+          <p className="kpi-card-sub">{otherCurrenciesLine(totalDepositBase)}</p>
+        </div>
+
+        <div className="kpi-card">
+          <div className="kpi-card-top">
+            <p className="kpi-card-lbl">Total Net Profit / Loss</p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+            <p
+              className="kpi-card-val"
+              style={{
+                marginTop: 0,
+                color: totalPnlBase == null ? 'var(--muted)' : totalPnlBase >= 0 ? 'var(--good)' : 'var(--bad)',
+              }}
+            >
+              {totalPnlBase != null
+                ? `${totalPnlBase >= 0 ? '+' : '−'}${fmtDisplay(Math.abs(totalPnlBase))}`
+                : '—'}
+            </p>
+            {totalPnlPct != null && (
+              <span className={`kpi-pct-pill ${totalPnlPct >= 0 ? 'up' : 'down'}`}>
+                {totalPnlPct >= 0 ? '+' : '−'}{Math.abs(totalPnlPct).toFixed(2)}%
+              </span>
+            )}
+          </div>
+          <p className="kpi-card-sub">
+            {totalPnlBase != null ? otherCurrenciesLine(totalPnlBase) : 'Add holdings & deposits to track P&L'}
+          </p>
+        </div>
+
+        <div className="kpi-card">
+          <div className="kpi-card-top">
+            <p className="kpi-card-lbl">Investments vs. Emergency</p>
+          </div>
+          <p className="kpi-card-val" style={{ color: 'var(--good)' }}>
+            {splitDenom > 0 ? `${investSharePct.toFixed(1)}% / ${emergencySharePct.toFixed(1)}%` : '0% / 0%'}
+          </p>
+          <p className="kpi-card-sub">
+            Emergency Buffer: {fmtDisplay(emergencyRatioBase)}
+          </p>
+        </div>
+      </section>
+
+      {/* ==================== CAPITAL DEPLOYMENT REBALANCER ==================== */}
+      {rebalancerPlan && (
+        <section className="rebalancer-card" aria-label="New Investment Rebalancer">
+          <div className="rebalancer-bar" />
+          <div className="rebalancer-head">
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>New Investment Rebalancer</h2>
+                <span className={`kpi-tag`}>{deployEnabled ? 'Simulation Active' : 'Preview Only'}</span>
               </div>
-            );
-          }
-          return (
-            <div style={{ marginTop: 10 }}>
-              <div className="small muted">{strat.blurb}</div>
-              <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
-                {Object.entries(strat.allocation).map(([cls, w]) => (
-                  <span key={cls} className="chip sm ok">{cls} {Math.round(w * 100)}%</span>
+              <p className="small muted" style={{ margin: '4px 0 0' }}>
+                Split fresh capital between <strong>{rebalancerPlan.primary.account.platformName}</strong> and{' '}
+                <strong>{rebalancerPlan.secondary.account.platformName}</strong> toward your target ratio.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={deployEnabled}
+              className="switch-pill"
+              onClick={() => setDeployEnabled((v) => !v)}
+            >
+              <div>
+                <div style={{ fontSize: 12.5, fontWeight: 700 }}>Simulate Deploying Capital</div>
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                  {deployEnabled ? `ON — Previewing +${formatMoney(newCapitalBase, base)}` : 'OFF — Showing current snapshot'}
+                </div>
+              </div>
+              <span className="switch-track"><span className="switch-thumb" /></span>
+            </button>
+          </div>
+
+          <div className="rebalancer-body">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div className="grid-2">
+                <div className="subpanel">
+                  <label className="small muted" style={{ fontWeight: 700, display: 'block', marginBottom: 6 }}>
+                    NEW CAPITAL ({base})
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={100}
+                    value={newCapitalStr}
+                    onChange={(e) => setNewCapitalStr(e.target.value)}
+                    aria-label="New capital to deploy"
+                  />
+                </div>
+                <div className="subpanel">
+                  <span className="small muted" style={{ fontWeight: 700, display: 'block', marginBottom: 6 }}>
+                    TARGET SPLIT
+                  </span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                    <div>
+                      <span style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700, display: 'block' }}>
+                        {rebalancerPlan.primary.account.platformName}
+                      </span>
+                      <span className="font-display" style={{ fontSize: 20, fontWeight: 800, color: 'var(--accent)' }}>
+                        {targetPrimaryPct.toFixed(0)}%
+                      </span>
+                    </div>
+                    <span className="muted">/</span>
+                    <div style={{ textAlign: 'right' }}>
+                      <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 700, display: 'block' }}>
+                        {rebalancerPlan.secondary.account.platformName}
+                      </span>
+                      <span className="font-display" style={{ fontSize: 20, fontWeight: 800, color: '#f59e0b' }}>
+                        {(100 - targetPrimaryPct).toFixed(0)}%
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div className="row small" style={{ marginBottom: 6 }}>
+                  <span className="muted">Target {rebalancerPlan.primary.account.platformName} Share</span>
+                  <strong style={{ color: 'var(--accent)' }}>{targetPrimaryPct}% / {100 - targetPrimaryPct}%</strong>
+                </div>
+                <input
+                  type="range"
+                  min={50}
+                  max={95}
+                  step={1}
+                  value={targetPrimaryPct}
+                  onChange={(e) => setTargetPrimaryPct(Number(e.target.value))}
+                  className="custom-slider"
+                  aria-label="Target allocation split"
+                />
+              </div>
+
+              <div className="preset-chips">
+                {[
+                  { label: '85% / 15% (Recommended)', v: 85 },
+                  { label: '80% / 20% (Growth)', v: 80 },
+                  { label: '90% / 10% (Conservative)', v: 90 },
+                  { label: '70% / 30% (Balanced)', v: 70 },
+                ].map((p) => (
+                  <button
+                    key={p.v}
+                    type="button"
+                    className={`preset-btn${targetPrimaryPct === p.v ? ' on' : ''}`}
+                    onClick={() => setTargetPrimaryPct(p.v)}
+                  >
+                    {p.label}
+                  </button>
                 ))}
               </div>
             </div>
-          );
-        })()}
-      </div>
 
-      <Disclosure id="accounts" title={`Your Accounts${vault.accounts.length ? ` (${vault.accounts.length})` : ''}`} defaultOpen={vault.accounts.length === 0 || vault.holdings.length === 0}>
-      <div className="card">
-        {/* One-tap presets so a fresh user doesn't have to type the broker
-            name — the top platforms map to the right account type, and the
-            "amount you've put in" is right there instead of a buried modal. */}
-        <div className="row small" style={{ gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-          {[
-            { name: 'StashAway', type: 'robo' as const },
-            { name: 'Hata', type: 'robo' as const },
-            { name: 'Luno', type: 'crypto' as const },
-            { name: 'IBKR', type: 'broker' as const },
-            { name: 'Moomoo', type: 'broker' as const },
-            { name: 'Cash', type: 'cash' as const },
-          ].map((p) => (
-            <button
-              key={p.name}
-              type="button"
-              className="chip sm"
-              aria-pressed={platform.toLowerCase() === p.name.toLowerCase() && acctType === p.type}
-              onClick={() => { setPlatform(p.name); setAcctType(p.type); }}
-            >
-              + {p.name}
-            </button>
-          ))}
-        </div>
-        <div className="cols">
-          <label className="field"><span>Where is it?</span>
-            <input value={platform} onChange={(e) => setPlatform(e.target.value)} placeholder="StashAway, Luno, IBKR…" />
-          </label>
-          <label className="field"><span>Type</span>
-            <ThemedSelect
-              value={acctType}
-              onChange={(v: string) => setAcctType(v as typeof acctType)}
-              options={[
-                { value: 'robo', label: 'Robo-advisor (StashAway)' },
-                { value: 'broker', label: 'Broker' },
-                { value: 'crypto', label: 'Crypto wallet' },
-                { value: 'cash', label: 'Cash / MMF' },
-                { value: 'other', label: 'Other' },
-              ]}
-              aria-label="Account type"
-            />
-          </label>
-          <label className="field"><span>How much have you put in? ({base})</span>
-            <input type="number" inputMode="decimal" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="e.g. 15000" />
-          </label>
-        </div>
-        {isRobo && (
-          <div className="field" style={{ marginTop: 10 }}>
-            <span>Assets &amp; allocation %</span>
-            <div style={{ marginTop: 6 }}>
-              {roboRows.map((r, i) => (
-                <div key={i} className="row" style={{ gap: 8, alignItems: 'center', marginBottom: 6 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <ThemedSelect
-                      value={r.assetClass}
-                      onChange={(v: string) => {
-                        setRoboRows((prev) => prev.map((row, j) => (j === i ? { ...row, assetClass: v as typeof r.assetClass } : row)));
-                        void seedRoboRefs([v]);
-                      }}
-                      options={[
-                        { value: 'equity-us', label: 'Global equities' },
-                        { value: 'equity-local', label: 'Local equities' },
-                        { value: 'etf', label: 'ETF / index fund' },
-                        { value: 'bond', label: 'Bonds' },
-                        { value: 'gold', label: 'Gold' },
-                        { value: 'crypto', label: 'Crypto' },
-                        { value: 'cash', label: 'Cash / MMF' },
-                        { value: 'mmf', label: 'Money market' },
-                      ]}
-                      aria-label="Asset class"
-                    />
-                  </div>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    value={r.pct}
-                    onChange={(e) => setRoboRows((prev) => prev.map((row, j) => (j === i ? { ...row, pct: e.target.value } : row)))}
-                    style={{ width: 64, textAlign: 'right' }}
-                    aria-label="Allocation percent"
-                  />
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    aria-label="Remove asset"
-                    onClick={() => setRoboRows((prev) => prev.filter((_, j) => j !== i))}
-                    disabled={roboRows.length <= 1}
-                  >✕</button>
+            <div className="grid-2" style={{ alignContent: 'start' }}>
+              <div className="subpanel" style={{ borderColor: 'color-mix(in srgb, var(--accent) 35%, var(--line))', background: 'var(--accent-soft)' }}>
+                <div className="row">
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--accent)' }}>
+                    Add to {rebalancerPlan.primary.account.platformName}
+                  </span>
+                  <span className="chip sm">{newCapitalBase > 0 ? `${((rebalancerPlan.addPrimary / newCapitalBase) * 100).toFixed(1)}%` : '0%'}</span>
                 </div>
-              ))}
-              <button
-                type="button"
-                className="btn sm ghost"
-                onClick={() => setRoboRows((prev) => [...prev, { assetClass: 'equity-us', pct: '0' }])}
-              >
-                <IPlus size={14} /> Add asset
-              </button>
+                <div className="font-display" style={{ fontSize: 24, fontWeight: 800, marginTop: 8, color: 'var(--accent)' }}>
+                  {fmtDisplay(rebalancerPlan.addPrimary)}
+                </div>
+                <div className="small muted" style={{ marginTop: 4 }}>
+                  New Value: {fmtDisplay(rebalancerPlan.postPrimary)} ({rebalancerPlan.postPrimaryPct.toFixed(1)}%)
+                </div>
+              </div>
+
+              <div className="subpanel" style={{ borderColor: 'rgba(245, 158, 11, 0.35)', background: 'var(--warn-soft)' }}>
+                <div className="row">
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--warn)' }}>
+                    Add to {rebalancerPlan.secondary.account.platformName}
+                  </span>
+                  <span className="chip sm">{newCapitalBase > 0 ? `${((rebalancerPlan.addSecondary / newCapitalBase) * 100).toFixed(1)}%` : '0%'}</span>
+                </div>
+                <div className="font-display" style={{ fontSize: 24, fontWeight: 800, marginTop: 8, color: 'var(--warn)' }}>
+                  {fmtDisplay(rebalancerPlan.addSecondary)}
+                </div>
+                <div className="small muted" style={{ marginTop: 4 }}>
+                  New Value: {fmtDisplay(rebalancerPlan.postSecondary)} ({rebalancerPlan.postSecondaryPct.toFixed(1)}%)
+                </div>
+              </div>
             </div>
           </div>
-        )}
-        <div className="row" style={{ gap: 8, marginTop: 10 }}>
-          <button className="btn sm" onClick={addAccount} style={{ flex: 1 }}><IPlus size={16} /> {isRobo ? 'Create portfolio' : 'Create account'}</button>
-        </div>
-
-        {vault.accounts.length > 0 && (
-          <div className="list">
-            {(Object.keys(SECTION_META) as PortfolioSection[]).map((section) => {
-              const sectionAccounts = vault.accounts.filter((a) => sectionForType(a.accountType) === section);
-              if (sectionAccounts.length === 0) return null;
-              const meta = SECTION_META[section];
-              return (
-                <div key={section} className="pf-section">
-                  <div className="pf-section-head">
-                    <div>
-                      <div className="pf-section-title">{meta.title}</div>
-                      <div className="pf-section-sub">{meta.subtitle}</div>
-                    </div>
-                    {section === 'more' && <span className="pf-new-badge">NEW</span>}
-                  </div>
-                  {sectionAccounts.map((a) => {
-              const holdings = vault.holdings.filter((h) => h.accountId === a.id).length;
-              const isTarget = a.id === accountId;
-              const line = accLines.get(a.id);
-              const hasDeposit = typeof a.initialDepositBase === 'number' && a.initialDepositBase > 0;
-              const reserved = reservedIds.has(a.id);
-              const pnlGood = line?.pnlBase != null && line.pnlBase >= 0;
-              const pnlBad = line?.pnlBase != null && line.pnlBase < 0;
-              return (
-                <div className="acc-card" key={a.id}>
-                  <div className="acc-head">
-                    <div className="acc-name grow">
-                      {a.platformName}
-                      {isTarget && (
-                        <button className={`chip sm ${isTarget ? 'on' : ''}`} aria-pressed={isTarget} onClick={() => setAccountId(a.id)} title="Holding form target">
-                          <ICheck size={12} /> target
-                        </button>
-                      )}
-                      {reserved && (
-                        <button className="chip sm ok" aria-pressed title="Remove from emergency reserve" onClick={() => unReserve(a.id)}>
-                          in reserve
-                        </button>
-                      )}
-                    </div>
-                    <MenuButton
-                      items={[
-                        {
-                          label: reserved ? 'Remove from reserve' : 'Add to reserve',
-                          icon: ICheck,
-                          onClick: () => (reserved ? unReserve(a.id) : toReserve(a.id)),
-                        },
-                        {
-                          label: 'Add assets here',
-                          icon: ICheck,
-                          hide: isTarget,
-                          onClick: () => setAccountId(a.id),
-                        },
-                      {
-                          label: 'Edit amount put in',
-                          icon: IPlus,
-                          onClick: () => openDeposit(a.id),
-                        },
-                        // Robo-advisors (StashAway) drift from live quotes —
-                        // this one-tap control pins the account to the value
-                        // StashAway itself displays, so P&L matches 1:1.
-                        {
-                          label: a.accountType === 'robo' ? "Match StashAway's value" : 'Use broker value',
-                          icon: IPlus,
-                          hide: a.accountType === 'robo' ? (Number.isFinite(a.brokerValueBase) && (a.brokerValueBase ?? 0) > 0) : undefined,
-                          onClick: () => openCostBasis(),
-                        },
-                        { label: 'Delete account', danger: true, onClick: () => removeAccount(a.id) },
-                      ]}
-                    />
-                  </div>
-                  <div className="acc-value">
-                    {line && line.valueBase > 0 ? (
-                      <span className="val">
-                        {formatMoney(line.valueBase, base)}
-                        {Number.isFinite(a.brokerValueBase) && (a.brokerValueBase ?? 0) > 0 && (
-                          <>
-                            <span title="P&L uses your broker's value for this account" style={{ marginLeft: 6, fontSize: 11, color: 'var(--warn)' }}>broker</span>
-                            {/* Clear the pasted broker value so P&L falls back
-                                to the live quote vs your invested cost. The user
-                                often only knows what they invested, not the
-                                broker's current value — this one-tap control
-                                (the in-app equivalent of editing the vault)
-                                removes the stale override. */}
-                            <button
-                              type="button"
-                              className="chip sm"
-                              title="Clear broker value (use live price vs your invested amount)"
-                              aria-label={`Clear broker value for ${a.platformName}`}
-                              onClick={() => {
-                                store.updateAccount(a.id, { brokerValueBase: undefined });
-                                toast(`${a.platformName}: broker value cleared — P&L now uses the live price vs your invested amount.`, 'ok');
-                              }}
-                              style={{ marginLeft: 4, cursor: 'pointer', opacity: 0.8 }}
-                            >
-                              ✕
-                            </button>
-                          </>
-                        )}
-                      </span>
-                    ) : (
-                      <span className="muted">—</span>
-                    )}
-                    {line?.depositBase != null && (
-                      <span className={`ret ${pnlGood ? 'pos' : pnlBad ? 'neg' : ''}`}>
-                        {(pnlGood ? 'Up ' : pnlBad ? 'Down ' : 'Break-even ')}
-                        {line.pnlBase! >= 0 ? '+' : ''}{formatMoney(line.pnlBase!, base)} ({line.depositReturnPct! >= 0 ? '+' : ''}{line.depositReturnPct!.toFixed(1)}%)
-                      </span>
-                    )}
-                  </div>
-                  {/* StashAway-style "daily change" — today's value minus the
-                      previous day's snapshot. Hidden until a 2nd-day snapshot
-                      exists (first visit shows no delta). */}
-                  <div className="acc-daily">
-                    <DailyChangePill delta={dailyChange.get(a.id) ?? null} base={base} />
-                  </div>
-                  {/* Per-account share of the total portfolio value. */}
-                  {line && live.portfolio && live.portfolio.totalValueBase > 0 ? (
-                    <div style={{ marginTop: 8 }}>
-                      <div className="bar" style={{ height: 5 }}>
-                        <i style={{
-                          width: `${Math.min(100, (line.valueBase / live.portfolio.totalValueBase) * 100)}%`,
-                        }} />
-                      </div>
-                      <div className="muted small" style={{ marginTop: 2 }}>
-                        {((line.valueBase / live.portfolio.totalValueBase) * 100).toFixed(1)}% of portfolio
-                      </div>
-                    </div>
-                  ) : null}
-                  <div className="acc-foot">
-                    <span className="muted small">
-                      {a.accountType === 'robo' ? 'Robo-advisor' : a.accountType}
-                      {holdings > 0 ? ` · ${holdings} ${holdings === 1 ? 'asset' : 'assets'}` : ''}
-                    </span>
-                    <button
-                      className={`dep-edit${hasDeposit ? '' : ' empty'}`}
-                      onClick={() => openDeposit(a.id)}
-                      title="How much have you put in total?"
-                    >
-                      {hasDeposit ? (
-                        <>
-                          <span className="val">Put in {formatMoney(a.initialDepositBase!, base)}</span>
-                          <IPencil size={13} />
-                        </>
-                      ) : (
-                        <>
-                          How much have you put in?
-                          <IPlus size={13} />
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              );
-                  })}
-                </div>
-              );
-            })}
-          </div>
-        )}
-        {vault.accounts.length === 0 && (
-          <div className="empty">No accounts yet — create one above.</div>
-        )}
-      </div>
-      </Disclosure>
-
-      <h2 className="section-title">Emergency reserve</h2>
-      <EmergencyPanel />
-
-      <h2 className="section-title">Savings goals</h2>
-      <SavingsGoalsPanel />
-
-      {/* Contributions come first: this is how the client records money
-          actually invested (with a date) so P&L stays honest. Standing
-          auto-invest plans follow (the client's own scheduler, optional). */}
-      <h2 className="section-title">Money in</h2>
-      <ContributionPanel fx={live.fx} />
-
-      {vault.autoInvests && vault.autoInvests.length > 0 && (
-        <>
-          <h2 className="section-title">Auto-invest</h2>
-          <AutoInvestPanel fx={live.fx} />
-        </>
+        </section>
       )}
 
-      <Disclosure id="add-holding" title="Add an asset" defaultOpen={accountId !== ''}>
-      <div className="card">
-        {!accountId && (
-          <div className="small muted" style={{ marginBottom: 8 }}>
-            Pick an account above, then add your assets to it.
+      {/* ==================== MAIN 2-COL GRID: ALLOCATION + INSPECTOR ==================== */}
+      <div className="grid-12">
+        <section className="card" style={{ margin: 0 }}>
+          <div className="row" style={{ marginBottom: 14, flexWrap: 'wrap' }}>
+            <div>
+              <h2 style={{ margin: 0 }}>Asset Allocation</h2>
+              <div className="small muted">
+                {activePie === 'account' ? 'By Account Bucket' : activePie === 'class' ? 'By Asset Class' : 'By Individual Holding'}
+              </div>
+            </div>
+            <div className="seg" role="tablist" aria-label="Allocation view">
+              <button type="button" aria-pressed={activePie === 'account'} onClick={() => { setActivePie('account'); setSelectedSlice(null); }}>By Account</button>
+              <button type="button" aria-pressed={activePie === 'class'} onClick={() => { setActivePie('class'); setSelectedSlice(null); }}>By Class</button>
+              <button type="button" aria-pressed={activePie === 'holding'} onClick={() => { setActivePie('holding'); setSelectedSlice(null); }}>By Holding</button>
+            </div>
           </div>
-        )}
-        {targetIsRobo ? (
-          <>
-            <div className="small muted" style={{ marginBottom: 8 }}>
-              StashAway — just say what it is and how much it’s worth now. No buy
-              price needed; your profit/loss comes from the total you’ve put in.
+
+          <AllocationPie
+            slices={pieSlices}
+            total={totalPieValue}
+            base={base}
+            mode={chartMode}
+            selectedKey={selectedSlice}
+            onSelect={setSelectedSlice}
+            formatValue={fmtDisplay}
+            title={activePie === 'account' ? 'buckets' : activePie === 'class' ? 'classes' : 'holdings'}
+          />
+        </section>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* Selected Asset / Overall Detail Inspector */}
+          <section className="card" style={{ margin: 0 }}>
+            <div className="row" style={{ alignItems: 'flex-start', marginBottom: 14 }}>
+              <div>
+                <span className="kpi-tag">{inspector.tag}</span>
+                <h2 style={{ margin: '8px 0 2px', fontSize: 20, fontWeight: 800 }}>{inspector.title}</h2>
+                <div className="small muted">{inspector.subtitle}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div className="small muted">Value Share</div>
+                <div className="font-display" style={{ fontSize: 24, fontWeight: 800 }}>
+                  {inspector.sharePct.toFixed(2)}%
+                </div>
+              </div>
             </div>
-            <div className="cols">
-              <label className="field"><span>What is it?</span>
+
+            <dl className="detail-dl">
+              <div className="detail-dl-row">
+                <dt>Current Value</dt>
+                <dd>{fmtDisplay(inspector.valueBase)}</dd>
+              </div>
+              <div className="detail-dl-row">
+                <dt>Net Deposits (Cost Basis)</dt>
+                <dd>{inspector.depositBase > 0 ? fmtDisplay(inspector.depositBase) : '—'}</dd>
+              </div>
+              <div className="detail-dl-row">
+                <dt>Net Profit / Loss</dt>
+                <dd style={{ color: inspector.pnlBase == null ? 'var(--muted)' : inspector.pnlBase >= 0 ? 'var(--good)' : 'var(--bad)' }}>
+                  {inspector.pnlBase != null
+                    ? `${inspector.pnlBase >= 0 ? '+' : '−'}${fmtDisplay(Math.abs(inspector.pnlBase))}${inspector.retPct != null ? ` (${inspector.retPct >= 0 ? '+' : '−'}${Math.abs(inspector.retPct).toFixed(2)}%)` : ''}`
+                    : '—'}
+                </dd>
+              </div>
+              <div className="detail-dl-row" style={{ paddingTop: 10, borderTop: '1px solid var(--line)', fontSize: 12 }}>
+                <dt>Other Currencies</dt>
+                <dd style={{ fontWeight: 600, color: 'var(--text-2)' }}>{otherCurrenciesLine(inspector.valueBase)}</dd>
+              </div>
+            </dl>
+          </section>
+
+          {/* Compact Strategy & Target Selector */}
+          <section className="card" style={{ margin: 0 }}>
+            <div className="row" style={{ marginBottom: 10 }}>
+              <h2 style={{ margin: 0 }}>Target Strategy</h2>
+              <div style={{ minWidth: 180 }}>
                 <ThemedSelect
-                  value={assetClass}
-                  onChange={(v: string) => pickAssetClass(v as typeof assetClass)}
-                  options={ASSET_CLASSES.map((c) => ({
-                    value: c,
-                    label: c === 'equity-us' ? 'Global stocks' : c === 'equity-local' ? 'Malaysian stocks' : c === 'etf' ? 'ETF / Fund' : c === 'crypto' ? 'Crypto' : c === 'cash' ? 'Cash' : 'Money market',
-                  }))}
-                  aria-label="What is it?"
+                  value={vault.prefs.coachStrategy ?? '60-40'}
+                  onChange={(v: string) => store.setPrefs({ coachStrategy: v })}
+                  options={Object.values(FAMED_STRATEGIES).map((s) => ({ value: s.key, label: s.name }))}
+                  aria-label="Portfolio strategy"
                 />
-              </label>
-              <label className="field"><span>Name (optional)</span>
-                <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="e.g. Global Equity Fund" />
-              </label>
-              <label className="field"><span>How much is it worth? ({holdCur})</span>
-                <input type="number" inputMode="decimal" value={roboValue} onChange={(e) => setRoboValue(e.target.value)} placeholder="e.g. 4200" />
-              </label>
-              <label className="field"><span>Currency</span>
-                <ThemedSelect
-                  value={holdCur}
-                  onChange={(v: string) => setHoldCur(v)}
-                  options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))}
-                  aria-label="Currency"
-                />
-              </label>
+              </div>
             </div>
-            <button className={`btn sm${accountId ? '' : ' ghost'}`} style={{ width: '100%', marginTop: 10 }} disabled={!accountId} onClick={() => void addRoboValue()}>
-              {accountId ? 'Add to portfolio' : 'Pick an account first'}
+            {(() => {
+              const key = vault.prefs.coachStrategy ?? '60-40';
+              const strat = FAMED_STRATEGIES[key as keyof typeof FAMED_STRATEGIES];
+              if (!strat) return null;
+              if (key === 'custom') {
+                const custom = vault.prefs.targetAllocation ?? {};
+                return (
+                  <div className="cols">
+                    {ASSET_CLASSES.map((cls) => {
+                      const cur = Math.round(((custom[cls] ?? 0) as number) * 100);
+                      return (
+                        <label key={cls} className="field" style={{ margin: 0 }}>
+                          <span>{cls} %</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={cur === 0 ? '' : cur}
+                            placeholder="0"
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              const v = raw === '' ? undefined : Number(raw) / 100;
+                              const next = { ...custom };
+                              if (v === undefined || Number.isNaN(v)) delete next[cls];
+                              else next[cls] = Math.max(0, Math.min(1, v));
+                              store.setPrefs({ targetAllocation: next });
+                            }}
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                );
+              }
+              return (
+                <>
+                  <p className="small muted" style={{ margin: '0 0 8px' }}>{strat.blurb}</p>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {Object.entries(strat.allocation).map(([cls, w]) => (
+                      <span key={cls} className="chip sm ok">{cls} {Math.round(w * 100)}%</span>
+                    ))}
+                  </div>
+                </>
+              );
+            })()}
+          </section>
+        </div>
+      </div>
+
+      {/* ==================== COMPLETE PORTFOLIO BREAKDOWN TABLE ==================== */}
+      {accountRows.length > 0 && (
+        <section className="pf-table-card" aria-label="Complete Portfolio Breakdown">
+          <div className="pf-table-head">
+            <div>
+              <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800 }}>Complete Portfolio Breakdown</h2>
+              <div className="small muted">
+                {deployEnabled && rebalancerPlan ? 'Projected post-deployment snapshot' : 'Current live valuation across Investments & Emergency Buffer'}
+              </div>
+            </div>
+            <span className="kpi-tag">Currency: {displayCur} ({currencyInfo(displayCur).symbol})</span>
+          </div>
+
+          <div className="pf-table-wrap">
+            <table className="pf-table">
+              <thead>
+                <tr>
+                  <th>Asset / Bucket</th>
+                  <th className="num">Net Deposits</th>
+                  <th className="num">Current Value</th>
+                  <th className="num">Profit / Loss</th>
+                  <th className="num">Return %</th>
+                  <th className="num">Allocation %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { label: 'Subtotal: Investments', rows: investRows },
+                  { label: 'Subtotal: Emergency Buffer', rows: emergencyRows },
+                ].map((group) => {
+                  if (group.rows.length === 0) return null;
+                  const subDep = group.rows.reduce((s, r) => s + r.depositBase + deployDeltaFor(r.account.id), 0);
+                  const subVal = group.rows.reduce((s, r) => s + r.valueBase + deployDeltaFor(r.account.id), 0);
+                  const subPnl = subDep > 0 ? subVal - subDep : null;
+                  const subRet = subDep > 0 && subPnl != null ? (subPnl / subDep) * 100 : null;
+                  const subAlloc = totalCurrentBase > 0 ? (subVal / totalCurrentBase) * 100 : 0;
+                  return (
+                    <>
+                      {group.rows.map((r) => {
+                        const dAdd = deployDeltaFor(r.account.id);
+                        const val = r.valueBase + dAdd;
+                        const dep = r.depositBase + dAdd;
+                        const profit = dep > 0 ? val - dep : null;
+                        const ret = dep > 0 && profit != null ? (profit / dep) * 100 : null;
+                        const alloc = totalCurrentBase > 0 ? (val / totalCurrentBase) * 100 : 0;
+                        return (
+                          <tr
+                            key={r.account.id}
+                            onClick={() => { setActivePie('account'); setSelectedSlice(r.account.id); }}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            <td>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <span className="legend-dot" style={{ background: r.color }} />
+                                <div>
+                                  <div style={{ fontWeight: 650 }}>{r.account.platformName}</div>
+                                  <div className="small muted">{r.account.accountType}</div>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="num muted">{dep > 0 ? fmtDisplay(dep) : '—'}</td>
+                            <td className="num" style={{ fontWeight: 700 }}>{fmtDisplay(val)}</td>
+                            <td className="num" style={{ color: profit == null ? 'var(--muted)' : profit >= 0 ? 'var(--good)' : 'var(--bad)', fontWeight: 650 }}>
+                              {profit != null ? `${profit >= 0 ? '+' : '−'}${fmtDisplay(Math.abs(profit))}` : '—'}
+                            </td>
+                            <td className="num" style={{ color: ret == null ? 'var(--muted)' : ret >= 0 ? 'var(--good)' : 'var(--bad)', fontWeight: 650 }}>
+                              {ret != null ? `${ret >= 0 ? '+' : '−'}${Math.abs(ret).toFixed(2)}%` : '—'}
+                            </td>
+                            <td className="num" style={{ fontWeight: 700 }}>{alloc.toFixed(2)}%</td>
+                          </tr>
+                        );
+                      })}
+                      <tr key={group.label} className="sub-row">
+                        <td style={{ fontSize: 11.5, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--muted)' }}>{group.label}</td>
+                        <td className="num">{subDep > 0 ? fmtDisplay(subDep) : '—'}</td>
+                        <td className="num">{fmtDisplay(subVal)}</td>
+                        <td className="num" style={{ color: subPnl == null ? 'var(--muted)' : subPnl >= 0 ? 'var(--good)' : 'var(--bad)' }}>
+                          {subPnl != null ? `${subPnl >= 0 ? '+' : '−'}${fmtDisplay(Math.abs(subPnl))}` : '—'}
+                        </td>
+                        <td className="num" style={{ color: subRet == null ? 'var(--muted)' : subRet >= 0 ? 'var(--good)' : 'var(--bad)' }}>
+                          {subRet != null ? `${subRet >= 0 ? '+' : '−'}${Math.abs(subRet).toFixed(2)}%` : '—'}
+                        </td>
+                        <td className="num" style={{ color: 'var(--accent)' }}>{subAlloc.toFixed(2)}%</td>
+                      </tr>
+                    </>
+                  );
+                })}
+                <tr className="grand-row">
+                  <td style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.6px' }}>Grand Total ({accountRows.length} Buckets)</td>
+                  <td className="num">{totalDepositBase > 0 ? fmtDisplay(totalDepositBase) : '—'}</td>
+                  <td className="num">{fmtDisplay(totalCurrentBase)}</td>
+                  <td className="num" style={{ color: totalPnlBase == null ? 'var(--muted)' : totalPnlBase >= 0 ? 'var(--good)' : 'var(--bad)' }}>
+                    {totalPnlBase != null ? `${totalPnlBase >= 0 ? '+' : '−'}${fmtDisplay(Math.abs(totalPnlBase))}` : '—'}
+                  </td>
+                  <td className="num" style={{ color: totalPnlPct == null ? 'var(--muted)' : totalPnlPct >= 0 ? 'var(--good)' : 'var(--bad)' }}>
+                    {totalPnlPct != null ? `${totalPnlPct >= 0 ? '+' : '−'}${Math.abs(totalPnlPct).toFixed(2)}%` : '—'}
+                  </td>
+                  <td className="num">{totalCurrentBase > 0 ? '100.00%' : '0.00%'}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* ==================== MANAGE PORTFOLIO (CLEAN TABBED WORKSPACE) ==================== */}
+      <div ref={manageRef}>
+        <div className="row" style={{ margin: '24px 0 12px', flexWrap: 'wrap' }}>
+          <h2 className="section-title" style={{ margin: 0 }}>Manage Portfolio</h2>
+          <div className="subtabs" role="tablist" aria-label="Manage portfolio tabs">
+            <button type="button" className={manageTab === 'accounts' ? 'on' : ''} onClick={() => setManageTab('accounts')}>
+              Accounts &amp; Holdings ({vault.accounts.length})
             </button>
-          </>
-        ) : (
-          <div className="cols">
-            <label className="field"><span>Symbol</span>
-              <input
-                value={symbol}
-                onChange={(e) => setSymbol(e.target.value)}
-                disabled={parMode}
-                placeholder={parMode ? 'auto (par)' : 'AAPL / CSPX.L / BTC / 1155.KL'}
-              />
-            </label>
-            <label className="field"><span>What is it?</span>
-              <ThemedSelect
-                value={assetClass}
-                onChange={(v: string) => pickAssetClass(v as typeof assetClass)}
-                options={ASSET_CLASSES.map((c) => ({
-                  value: c,
-                  label: c === 'equity-us' ? 'US stocks' : c === 'equity-local' ? 'Local stocks' : c === 'etf' ? 'ETF / Fund' : c === 'crypto' ? 'Crypto' : c === 'cash' ? 'Cash' : 'Money market',
-                }))}
-                aria-label="What is it?"
-              />
-            </label>
-            {parMode ? (
-              <label className="field"><span>Amount ({holdCur})</span>
-                <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="1500" />
-              </label>
-            ) : (
-              <>
-                <label className="field"><span>How many</span>
-                  <input type="number" inputMode="decimal" value={units} onChange={(e) => setUnits(e.target.value)} placeholder="10" />
-                </label>
-                <label className="field"><span>Buy price</span>
-                  <input type="number" inputMode="decimal" value={entry} onChange={(e) => setEntry(e.target.value)} placeholder="12.40" />
-                </label>
-              </>
-            )}
-            <label className="field"><span>Currency</span>
-              <ThemedSelect
-                value={holdCur}
-                onChange={(v: string) => setHoldCur(v)}
-                options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))}
-                aria-label="Currency"
-              />
-            </label>
+            <button type="button" className={manageTab === 'add' ? 'on' : ''} onClick={() => setManageTab('add')}>
+              + Add Account / Asset
+            </button>
+            <button type="button" className={manageTab === 'tools' ? 'on' : ''} onClick={() => setManageTab('tools')}>
+              Reserve, Goals &amp; Auto-Invest
+            </button>
+          </div>
+        </div>
+
+        {manageTab === 'add' && (
+          <div className="grid-2">
+            <Disclosure id="accounts" title="1. Create Account" defaultOpen>
+              <div className="card" style={{ margin: 0 }}>
+                <h2>1. Create Account</h2>
+                <div className="row small" style={{ gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                  {[
+                    { name: 'StashAway', type: 'robo' as const },
+                    { name: 'Hata', type: 'robo' as const },
+                    { name: 'Luno', type: 'crypto' as const },
+                    { name: 'IBKR', type: 'broker' as const },
+                    { name: 'Moomoo', type: 'broker' as const },
+                    { name: 'Cash', type: 'cash' as const },
+                  ].map((p) => (
+                    <button
+                      key={p.name}
+                      type="button"
+                      className={`chip sm${platform.toLowerCase() === p.name.toLowerCase() && acctType === p.type ? ' on' : ''}`}
+                      onClick={() => { setPlatform(p.name); setAcctType(p.type); }}
+                    >
+                      + {p.name}
+                    </button>
+                  ))}
+                </div>
+                <div className="cols">
+                  <label className="field"><span>Where is it?</span>
+                    <input value={platform} onChange={(e) => setPlatform(e.target.value)} placeholder="StashAway, Luno, IBKR…" />
+                  </label>
+                  <label className="field"><span>Type</span>
+                    <ThemedSelect
+                      value={acctType}
+                      onChange={(v: string) => setAcctType(v as typeof acctType)}
+                      options={[
+                        { value: 'robo', label: 'Robo-advisor (StashAway)' },
+                        { value: 'broker', label: 'Broker' },
+                        { value: 'crypto', label: 'Crypto wallet' },
+                        { value: 'cash', label: 'Cash / MMF' },
+                        { value: 'other', label: 'Other' },
+                      ]}
+                      aria-label="Account type"
+                    />
+                  </label>
+                  <label className="field"><span>Put in ({base})</span>
+                    <input type="number" inputMode="decimal" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="e.g. 15000" />
+                  </label>
+                </div>
+                {isRobo && (
+                  <div className="field" style={{ marginTop: 10 }}>
+                    <span>Assets &amp; allocation %</span>
+                    {roboRows.map((r, i) => (
+                      <div key={i} className="row" style={{ gap: 8, marginBottom: 6 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <ThemedSelect
+                            value={r.assetClass}
+                            onChange={(v: string) => {
+                              setRoboRows((prev) => prev.map((row, j) => (j === i ? { ...row, assetClass: v as typeof r.assetClass } : row)));
+                              void seedRoboRefs([v]);
+                            }}
+                            options={[
+                              { value: 'equity-us', label: 'Global equities' },
+                              { value: 'equity-local', label: 'Local equities' },
+                              { value: 'etf', label: 'ETF / index fund' },
+                              { value: 'gold', label: 'Gold' },
+                              { value: 'crypto', label: 'Crypto' },
+                              { value: 'cash', label: 'Cash / MMF' },
+                              { value: 'mmf', label: 'Money market' },
+                            ]}
+                            aria-label="Asset class"
+                          />
+                        </div>
+                        <input
+                          type="number"
+                          value={r.pct}
+                          onChange={(e) => setRoboRows((prev) => prev.map((row, j) => (j === i ? { ...row, pct: e.target.value } : row)))}
+                          style={{ width: 68, textAlign: 'right' }}
+                          aria-label="Allocation percent"
+                        />
+                        <button
+                          type="button"
+                          className="btn ghost sm"
+                          onClick={() => setRoboRows((prev) => prev.filter((_, j) => j !== i))}
+                          disabled={roboRows.length <= 1}
+                        >✕</button>
+                      </div>
+                    ))}
+                    <button type="button" className="btn ghost sm" onClick={() => setRoboRows((prev) => [...prev, { assetClass: 'equity-us', pct: '0' }])}>
+                      <IPlus size={14} /> Add sleeve
+                    </button>
+                  </div>
+                )}
+                <button className="btn sm" style={{ width: '100%', marginTop: 12 }} onClick={addAccount}>
+                  <IPlus size={15} /> {isRobo ? 'Create portfolio' : 'Create account'}
+                </button>
+              </div>
+            </Disclosure>
+
+            <Disclosure id="add-holding" title="2. Add Asset to Account" defaultOpen>
+              <div className="card" style={{ margin: 0 }}>
+                <h2>2. Add Asset to Account</h2>
+                {vault.accounts.length > 0 && (
+                  <label className="field"><span>Target Account</span>
+                    <ThemedSelect
+                      value={accountId}
+                      onChange={(v: string) => setAccountId(v)}
+                      options={vault.accounts.map((a) => ({ value: a.id, label: a.platformName }))}
+                      placeholder="Select an account…"
+                      aria-label="Target account"
+                    />
+                  </label>
+                )}
+                {targetIsRobo ? (
+                  <>
+                    <div className="cols">
+                      <label className="field"><span>Asset class</span>
+                        <ThemedSelect
+                          value={assetClass}
+                          onChange={(v: string) => pickAssetClass(v as typeof assetClass)}
+                          options={ASSET_CLASSES.map((c) => ({ value: c, label: c }))}
+                          aria-label="What is it?"
+                        />
+                      </label>
+                      <label className="field"><span>Name (optional)</span>
+                        <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="Global Equity Fund" />
+                      </label>
+                      <label className="field"><span>Worth ({holdCur})</span>
+                        <input type="number" inputMode="decimal" value={roboValue} onChange={(e) => setRoboValue(e.target.value)} placeholder="4200" />
+                      </label>
+                      <label className="field"><span>Currency</span>
+                        <ThemedSelect value={holdCur} onChange={(v: string) => setHoldCur(v)} options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))} aria-label="Currency" />
+                      </label>
+                    </div>
+                    <button className="btn sm" style={{ width: '100%', marginTop: 12 }} disabled={!accountId} onClick={() => void addRoboValue()}>
+                      Add to portfolio
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="cols">
+                      <label className="field"><span>Symbol</span>
+                        <input value={symbol} onChange={(e) => setSymbol(e.target.value)} disabled={parMode} placeholder={parMode ? 'auto (par)' : 'AAPL / BTC / 1155.KL'} />
+                      </label>
+                      <label className="field"><span>Asset class</span>
+                        <ThemedSelect value={assetClass} onChange={(v: string) => pickAssetClass(v as typeof assetClass)} options={ASSET_CLASSES.map((c) => ({ value: c, label: c }))} aria-label="What is it?" />
+                      </label>
+                      {parMode ? (
+                        <label className="field"><span>Amount ({holdCur})</span>
+                          <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="4000" />
+                        </label>
+                      ) : (
+                        <>
+                          <label className="field"><span>Units</span>
+                            <input type="number" inputMode="decimal" value={units} onChange={(e) => setUnits(e.target.value)} placeholder="10" />
+                          </label>
+                          <label className="field"><span>Avg buy price</span>
+                            <input type="number" inputMode="decimal" value={entry} onChange={(e) => setEntry(e.target.value)} placeholder="12.40" />
+                          </label>
+                        </>
+                      )}
+                      <label className="field"><span>Currency</span>
+                        <ThemedSelect value={holdCur} onChange={(v: string) => setHoldCur(v)} options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))} aria-label="Currency" />
+                      </label>
+                    </div>
+                    <button className="btn sm" style={{ width: '100%', marginTop: 12 }} disabled={!accountId} onClick={() => void addHolding()}>
+                      {accountId ? 'Add asset' : 'Pick an account first'}
+                    </button>
+                  </>
+                )}
+              </div>
+            </Disclosure>
           </div>
         )}
-        {!targetIsRobo && (
-          <button className={`btn sm${accountId ? '' : ' ghost'}`} style={{ width: '100%', marginTop: 10 }} disabled={!accountId} onClick={() => void addHolding()}>
-            {accountId ? 'Add asset' : 'Pick an account first'}
-          </button>
+
+        {manageTab === 'accounts' && (
+          <div className="grid-2">
+            <div className="card" style={{ margin: 0 }}>
+              <div className="row" style={{ marginBottom: 8 }}>
+                <h2 style={{ margin: 0 }}>Your Accounts ({vault.accounts.length})</h2>
+                <button className="btn ghost sm" onClick={() => setManageTab('add')}>+ New</button>
+              </div>
+              {vault.accounts.length === 0 ? (
+                <div className="empty">No accounts yet — switch to "+ Add Account / Asset" to create one.</div>
+              ) : (
+                <div>
+                  {(Object.keys(SECTION_META) as PortfolioSection[]).map((section) => {
+                    const sectionAccounts = vault.accounts.filter((a) => sectionForType(a.accountType) === section);
+                    if (sectionAccounts.length === 0) return null;
+                    const meta = SECTION_META[section];
+                    return (
+                      <div key={section} className="pf-section">
+                        <div className="pf-section-head">
+                          <div>
+                            <div className="pf-section-title">{meta.title}</div>
+                            <div className="pf-section-sub">{meta.subtitle}</div>
+                          </div>
+                        </div>
+                        {sectionAccounts.map((a) => {
+                          const holdings = vault.holdings.filter((h) => h.accountId === a.id).length;
+                          const isTarget = a.id === accountId;
+                          const line = accLines.get(a.id);
+                          const hasDeposit = typeof a.initialDepositBase === 'number' && a.initialDepositBase > 0;
+                          const reserved = reservedIds.has(a.id);
+                          const pnlGood = line?.pnlBase != null && line.pnlBase >= 0;
+                          const pnlBad = line?.pnlBase != null && line.pnlBase < 0;
+                          return (
+                            <div className="acc-card" key={a.id}>
+                              <div className="acc-head">
+                                <div className="acc-name grow">
+                                  {a.platformName}
+                                  {isTarget && (
+                                    <button className="chip sm on" aria-pressed onClick={() => setAccountId(a.id)} title="Holding form target">
+                                      <ICheck size={12} /> target
+                                    </button>
+                                  )}
+                                  {reserved && (
+                                    <button className="chip sm ok" aria-pressed title="Remove from emergency reserve" onClick={() => unReserve(a.id)}>
+                                      in reserve
+                                    </button>
+                                  )}
+                                </div>
+                                <MenuButton
+                                  items={[
+                                    { label: reserved ? 'Remove from reserve' : 'Add to reserve', icon: ICheck, onClick: () => (reserved ? unReserve(a.id) : toReserve(a.id)) },
+                                    { label: 'Add assets here', icon: ICheck, hide: isTarget, onClick: () => { setAccountId(a.id); setManageTab('add'); } },
+                                    { label: 'Edit amount put in', icon: IPlus, onClick: () => openDeposit(a.id) },
+                                    {
+                                      label: a.accountType === 'robo' ? "Match StashAway's value" : 'Use broker value',
+                                      icon: IPlus,
+                                      hide: a.accountType === 'robo' ? (Number.isFinite(a.brokerValueBase) && (a.brokerValueBase ?? 0) > 0) : undefined,
+                                      onClick: () => openCostBasis(),
+                                    },
+                                    { label: 'Delete account', danger: true, onClick: () => removeAccount(a.id) },
+                                  ]}
+                                />
+                              </div>
+                              <div className="acc-value">
+                                {line && line.valueBase > 0 ? (
+                                  <span className="val">
+                                    {formatMoney(line.valueBase, base)}
+                                    {Number.isFinite(a.brokerValueBase) && (a.brokerValueBase ?? 0) > 0 && (
+                                      <>
+                                        <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--warn)' }}>broker</span>
+                                        <button
+                                          type="button"
+                                          className="chip sm"
+                                          aria-label={`Clear broker value for ${a.platformName}`}
+                                          onClick={() => {
+                                            store.updateAccount(a.id, { brokerValueBase: undefined });
+                                            toast(`${a.platformName}: broker value cleared.`, 'ok');
+                                          }}
+                                          style={{ marginLeft: 4, cursor: 'pointer' }}
+                                        >
+                                          ✕
+                                        </button>
+                                      </>
+                                    )}
+                                  </span>
+                                ) : (
+                                  <span className="muted">—</span>
+                                )}
+                                {line?.depositBase != null && line.valueBase > 0 && (
+                                  <span className={`ret ${pnlGood ? 'pos' : pnlBad ? 'neg' : ''}`}>
+                                    {line.pnlBase! >= 0 ? '+' : ''}{formatMoney(line.pnlBase!, base)} ({line.depositReturnPct! >= 0 ? '+' : ''}{line.depositReturnPct!.toFixed(1)}%)
+                                  </span>
+                                )}
+                              </div>
+                              <div className="acc-daily">
+                                <DailyChangePill delta={dailyChange.get(a.id) ?? null} base={base} />
+                              </div>
+                              <div className="acc-foot">
+                                <span className="muted small">
+                                  {a.accountType === 'robo' ? 'Robo-advisor' : a.accountType}
+                                  {holdings > 0 ? ` · ${holdings} ${holdings === 1 ? 'asset' : 'assets'}` : ' · 0 assets'}
+                                </span>
+                                <button
+                                  className={`dep-edit${hasDeposit ? '' : ' empty'}`}
+                                  onClick={() => openDeposit(a.id)}
+                                >
+                                  {hasDeposit ? (
+                                    <>
+                                      <span className="val">Put in {formatMoney(a.initialDepositBase!, base)}</span>
+                                      <IPencil size={13} />
+                                    </>
+                                  ) : (
+                                    <>
+                                      How much have you put in?
+                                      <IPlus size={13} />
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="card" style={{ margin: 0 }}>
+              <div className="row" style={{ marginBottom: 8 }}>
+                <h2 style={{ margin: 0 }}>Holdings ({vault.holdings.length})</h2>
+                <button className="btn ghost sm" onClick={() => setManageTab('add')}>+ Add asset</button>
+              </div>
+              {vault.holdings.length === 0 ? (
+                <div className="empty">No holdings yet — add one under "+ Add Account / Asset".</div>
+              ) : (
+                [...grouped.entries()].map(([plat, holds]) => (
+                  <div key={plat} style={{ marginTop: 12 }}>
+                    <div className="small muted" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6 }}>
+                      {plat}
+                    </div>
+                    <div className="list" style={{ marginTop: 0 }}>
+                      {holds.map((h) => {
+                        const q = live.quotes[h.symbol];
+                        const { valueBase: val, costBase: cost, ok } = valueInBase(h, q, base, rateToBase);
+                        const ret = ok && cost > 0 ? ((val - cost) / cost) * 100 : 0;
+                        const profit = ok && cost > 0 ? val - cost : 0;
+                        const par = isParClass(h.assetClass);
+                        const showVal = ok ? formatMoney(val, base) : '—';
+                        return (
+                          <div className="item" key={h.id}>
+                            <div className="grow">
+                              <div className="title">{h.symbol} <span className="muted small">× {Number.isFinite(h.units) ? h.units : '—'}</span></div>
+                              <div className="meta">
+                                {!par && cost > 0 && (
+                                  <span className={profit >= 0 ? 'pos' : 'neg'}>
+                                    {profit >= 0 ? '+' : ''}{formatMoney(profit, base)} ({ret >= 0 ? '+' : ''}{ret.toFixed(1)}%)
+                                  </span>
+                                )}
+                                {!ok && ' · awaiting price'}
+                              </div>
+                            </div>
+                            <div className="amt">{showVal}</div>
+                            <button className="edit" aria-label={`Edit ${h.symbol}`} onClick={() => openEdit(h)}>
+                              <IPencil size={15} />
+                            </button>
+                            <DelButton
+                              label={`Delete ${h.symbol}`}
+                              onConfirm={() => {
+                                store.deleteHolding(h.id);
+                                if (editHolding?.id === h.id) closeEdit();
+                                toast(`Deleted ${h.symbol}`);
+                              }}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {manageTab === 'tools' && (
+          <div className="grid-2">
+            <div>
+              <h3 className="section-title" style={{ marginTop: 0 }}>Emergency Reserve</h3>
+              <EmergencyPanel />
+              <h3 className="section-title">Savings Goals</h3>
+              <SavingsGoalsPanel />
+            </div>
+            <div>
+              <h3 className="section-title" style={{ marginTop: 0 }}>Money In (Contributions)</h3>
+              <ContributionPanel fx={live.fx} />
+              {vault.autoInvests && vault.autoInvests.length > 0 && (
+                <>
+                  <h3 className="section-title">Auto-Invest</h3>
+                  <AutoInvestPanel fx={live.fx} />
+                </>
+              )}
+            </div>
+          </div>
         )}
       </div>
-      </Disclosure>
 
-      {/* Edit holding — pop-up (bottom sheet on phones, centered card on desktop). */}
+      {/* ==================== MODALS ==================== */}
       {editHolding && (
         <Modal title={`Edit ${editHolding.symbol} holding`} onClose={closeEdit}>
           <div className="cols">
             <label className="field"><span>Symbol</span>
-              <input
-                value={mSymbol}
-                onChange={(e) => setMSymbol(e.target.value)}
-                disabled={mPar || mIsRobo}
-                placeholder={mPar ? 'auto (par)' : mIsRobo ? 'optional' : 'AAPL / CSPX.L / BTC / 1155.KL'}
-              />
+              <input value={mSymbol} onChange={(e) => setMSymbol(e.target.value)} disabled={mPar || mIsRobo} />
             </label>
-            <label className="field"><span>What is it?</span>
+            <label className="field"><span>Asset class</span>
               <ThemedSelect
                 value={mClass}
                 onChange={(v: string) => {
@@ -1504,46 +1632,32 @@ export function InvestmentsView() {
                   setMClass(c);
                   if (isParClass(c)) setMSymbol(parSymbolFor(c));
                 }}
-                options={ASSET_CLASSES.map((c) => ({
-                  value: c,
-                  label: c === 'equity-us' ? 'US stocks' : c === 'equity-local' ? 'Local stocks' : c === 'etf' ? 'ETF / Fund' : c === 'crypto' ? 'Crypto' : c === 'cash' ? 'Cash' : 'Money market',
-                }))}
+                options={ASSET_CLASSES.map((c) => ({ value: c, label: c }))}
                 aria-label="What is it?"
               />
             </label>
             {mIsRobo ? (
-              <label className="field"><span>How much is it worth? ({mCur})</span>
-                <input type="number" inputMode="decimal" value={mValue} onChange={(e) => setMValue(e.target.value)} placeholder="e.g. 4200" />
+              <label className="field"><span>Worth ({mCur})</span>
+                <input type="number" inputMode="decimal" value={mValue} onChange={(e) => setMValue(e.target.value)} />
               </label>
             ) : mPar ? (
               <label className="field"><span>Amount ({mCur})</span>
-                <input type="number" inputMode="decimal" value={mAmount} onChange={(e) => setMAmount(e.target.value)} placeholder="1500" />
+                <input type="number" inputMode="decimal" value={mAmount} onChange={(e) => setMAmount(e.target.value)} />
               </label>
             ) : (
               <>
-                <label className="field"><span>How many</span>
-                  <input type="number" inputMode="decimal" value={mUnits} onChange={(e) => setMUnits(e.target.value)} placeholder="10" />
+                <label className="field"><span>Units</span>
+                  <input type="number" inputMode="decimal" value={mUnits} onChange={(e) => setMUnits(e.target.value)} />
                 </label>
                 <label className="field"><span>Buy price</span>
-                  <input type="number" inputMode="decimal" value={mEntry} onChange={(e) => setMEntry(e.target.value)} placeholder="12.40" />
+                  <input type="number" inputMode="decimal" value={mEntry} onChange={(e) => setMEntry(e.target.value)} />
                 </label>
               </>
             )}
             <label className="field"><span>Currency</span>
-              <ThemedSelect
-                value={mCur}
-                onChange={(v: string) => setMCur(v)}
-                options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))}
-                aria-label="Currency"
-              />
+              <ThemedSelect value={mCur} onChange={(v: string) => setMCur(v)} options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))} aria-label="Currency" />
             </label>
           </div>
-          {mIsRobo && (
-            <div className="small muted" style={{ marginTop: 8 }}>
-              No buy price needed — set this fund’s current worth. Your profit/loss
-              for the account comes from the total you’ve put in.
-            </div>
-          )}
           <div className="row" style={{ marginTop: 14, gap: 10 }}>
             <button className="btn ghost sm" style={{ flex: 1 }} onClick={closeEdit}>Cancel</button>
             <button className="btn sm" style={{ flex: 1 }} onClick={() => void saveHoldingEdit()}>Save changes</button>
@@ -1551,28 +1665,17 @@ export function InvestmentsView() {
         </Modal>
       )}
 
-      {/* "How much have you put in" — one input per account. This is the
-          account-level P&L baseline (value − amount-in), matching how
-          StashAway / robo-advisors report gain/loss: they don't track a
-          per-fund buy price, only the total you've deposited. */}
       {depOpen && (
         <Modal title="How much have you put in?" onClose={() => setDepOpen(false)}>
           <p className="small muted" style={{ marginTop: 0 }}>
-            Enter the total you've deposited into each account. This is what your
-            profit or loss is measured against — the same "amount invested" your
-            broker (like StashAway) shows. Leave blank to clear.
+            Enter the total net deposits per account. Profit/loss is measured against this baseline.
           </p>
-          {vault.accounts.length === 0 && (
-            <div className="row small muted" style={{ marginBottom: 8 }}>
-              Create an account above first — starting capital is set per account.
-            </div>
-          )}
           <div className="list" style={{ marginTop: 8 }}>
             {vault.accounts.map((a) => (
               <div className="item" key={a.id} data-dep-focus={a.id === depFocusId ? '1' : undefined}>
                 <div className="grow">
                   <div className="title">{a.platformName}</div>
-                  <div className="meta muted small">{a.accountType} · {formatMoney(a.baseCurrencyValue || 0, base)}</div>
+                  <div className="meta muted small">{a.accountType}</div>
                 </div>
                 <input
                   type="number"
@@ -1581,9 +1684,7 @@ export function InvestmentsView() {
                   value={typeof a.initialDepositBase === 'number' ? String(a.initialDepositBase) : ''}
                   onChange={(e) => {
                     const v = e.target.value;
-                    store.updateAccount(a.id, {
-                      initialDepositBase: v.trim() === '' ? undefined : parseFloat(v),
-                    });
+                    store.updateAccount(a.id, { initialDepositBase: v.trim() === '' ? undefined : parseFloat(v) });
                   }}
                   placeholder={base}
                   aria-label={`Starting capital for ${a.platformName}`}
@@ -1597,167 +1698,54 @@ export function InvestmentsView() {
         </Modal>
       )}
 
-      {/* "Use amount from broker" fast path — enter your broker's "total
-          invested" per account; it sets the account-level P&L baseline
-          (amount you put in) and optionally pins the broker's current value,
-          so P&L matches StashAway without editing each fund's price. */}
       {costOpen && (
-        <Modal title="Use your broker’s amount" onClose={() => setCostOpen(false)}>
+        <Modal title="Match your broker's amounts" onClose={() => setCostOpen(false)}>
           <p className="small muted" style={{ marginTop: 0 }}>
-            <b>Amount invested</b> = the total you’ve put in (StashAway’s “Net deposits”,
-            HATA’s “Total invested”) — not the current value. This sets your profit/loss
-            baseline. <b>Current value from broker</b> (optional) = the exact value your
-            broker shows — when set, P&amp;L uses THAT number directly so it matches your
-            broker even when our live prices drift. Leave a field blank to skip.
+            Set each account's net deposits and (optionally) current broker value so P&amp;L matches your broker 1:1.
           </p>
-          {vault.accounts.length === 0 && (
-            <div className="row small muted" style={{ marginBottom: 8 }}>
-              Create an account first — cost basis is set per account.
-            </div>
-          )}
           <div className="list" style={{ marginTop: 8 }}>
             {vault.accounts.map((a) => {
               const line = live.portfolio?.byAccount.find((l) => l.account.id === a.id);
               const liveValue = line?.valueBase ?? 0;
-              const entered = parseFloat((costDrafts[a.id] ?? '').trim());
-              const brokerEntered = parseFloat((brokerValueDrafts[a.id] ?? '').trim());
-              // P&L preview: use the broker value when set (authoritative,
-              // matches StashAway 1:1), else the live quote-derived value.
-              const effectiveValue = Number.isFinite(brokerEntered) && brokerEntered > 0 ? brokerEntered : liveValue;
-              const previewPnl = Number.isFinite(entered) && entered > 0 ? effectiveValue - entered : null;
-              const previewPct = previewPnl != null ? (previewPnl / entered) * 100 : null;
-              // Platform-wide-figure guard preview: total invested far above
-              // this account's own value — the Monthly Portofolio 39,253 bug.
-              const suspicious = Number.isFinite(entered) && entered > 0 && effectiveValue > 0 && entered > effectiveValue * 1.05;
               return (
-                <div key={a.id} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '12px 14px', background: 'var(--bg-2)', border: '1px solid var(--line)', borderRadius: 13 }}>
-                  <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                    <div style={{ minWidth: 0 }}>
-                      <div className="title" style={{ fontWeight: 600, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.platformName}</div>
-                      <div className="small muted" style={{ marginTop: 2 }}>{a.accountType === 'robo' ? 'StashAway / robo-advisor' : a.accountType} · our live value {formatMoney(liveValue, base)}</div>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <label className="field" style={{ flex: 1, minWidth: 0, marginBottom: 0 }}>
+                <div key={a.id} className="subpanel" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ fontWeight: 700 }}>{a.platformName} <span className="small muted">· live {formatMoney(liveValue, base)}</span></div>
+                  <div className="grid-2">
+                    <label className="field" style={{ margin: 0 }}>
                       <span>Total invested ({base})</span>
                       <input
                         type="number"
                         inputMode="decimal"
-                        min={0}
                         value={costDrafts[a.id] ?? ''}
                         onChange={(e) => setCostDrafts((d) => ({ ...d, [a.id]: e.target.value }))}
                         placeholder="e.g. 6000"
-                        aria-label={`Total invested for ${a.platformName}`}
-                        style={{ width: '100%' }}
                       />
                     </label>
-                    <label className="field" style={{ flex: 1, minWidth: 0, marginBottom: 0 }}>
-                      <span>Paste StashAway's value (optional)</span>
+                    <label className="field" style={{ margin: 0 }}>
+                      <span>Current broker value (optional)</span>
                       <input
                         type="number"
                         inputMode="decimal"
-                        min={0}
                         value={brokerValueDrafts[a.id] ?? ''}
                         onChange={(e) => setBrokerValueDrafts((d) => ({ ...d, [a.id]: e.target.value }))}
-                        placeholder={a.accountType === 'robo' ? 'e.g. 63670' : 'what broker shows'}
-                        aria-label={`Paste ${a.platformName}'s current value`}
-                        style={{ width: '100%' }}
+                        placeholder="e.g. 46765"
                       />
                     </label>
                   </div>
-                  {previewPnl != null && (
-                    <div className="small" style={{ color: previewPnl < 0 ? 'var(--bad)' : previewPnl > 0 ? 'var(--good)' : 'var(--text-2, #9aa4b8)' }}>
-                      → P&amp;L will read {previewPnl >= 0 ? '+' : '−'}{formatMoney(Math.abs(previewPnl), base)}
-                      {previewPct != null ? ` (${previewPct >= 0 ? '+' : '−'}${Math.abs(previewPct).toFixed(1)}%)` : ''}
-                      <span className="muted"> · {Number.isFinite(brokerEntered) && brokerEntered > 0 ? `broker value ${formatMoney(effectiveValue, base)}` : `live value ${formatMoney(liveValue, base)}`}</span>
-                    </div>
-                  )}
-                  {suspicious && (
-                    <div className="small" style={{ color: 'var(--warn)', fontWeight: 600 }}>
-                      ⚠ Total invested is {(entered / effectiveValue).toFixed(1)}× this account's own value — likely a
-                      {' '}<b>platform-wide</b> figure (e.g. StashAway "Net deposits" across all accounts).
-                      Enter this account's own "Total invested" instead.
-                    </div>
-                  )}
                 </div>
               );
             })}
           </div>
           <div className="row" style={{ marginTop: 14, gap: 8 }}>
-            <button className="btn sm" style={{ flex: 1 }} onClick={() => void saveCostBasis()}>Save cost basis</button>
+            <button className="btn sm" style={{ flex: 1 }} onClick={() => void saveCostBasis()}>Save</button>
             <button className="btn ghost sm" onClick={() => setCostOpen(false)}>Cancel</button>
           </div>
         </Modal>
-      )}
-
-      {[...grouped.entries()].map(([plat, holds]) => (
-        <div key={plat}>
-          <h2 className="section-title">{plat}</h2>
-          <div className="list">
-            {holds.map((h) => {
-              const q = live.quotes[h.symbol];
-              const { valueBase: val, costBase: cost, ok } = valueInBase(
-                h,
-                q,
-                base,
-                rateToBase,
-              );
-              const ret = ok && cost > 0 ? ((val - cost) / cost) * 100 : 0;
-              const pnl = ok && cost > 0 ? val - cost : 0;
-              const par = isParClass(h.assetClass);
-              const price = q?.price ?? h.currentPriceBase;
-              const showVal = ok ? sym + val.toFixed(0) : '—';
-              const showPnl = ok && cost > 0 && !par ? (pnl >= 0 ? '+' : '') + sym + pnl.toFixed(0) + ` (${ret >= 0 ? '+' : ''}${ret.toFixed(1)}%)` : '';
-              return (
-                <div className="item" key={h.id}>
-                  <div className="grow">
-                    <div className="title">{h.symbol} <span className="muted small">× {Number.isFinite(h.units) ? h.units : '—'}</span></div>
-                    <div className="meta">
-                      {!par && cost > 0 ? <span className={pnl >= 0 ? 'pos' : 'neg'}>{showPnl}</span> : null}
-                      {ok ? '' : ' · no price found'}
-                    </div>
-                  </div>
-                  <div className="amt">
-                    {showVal}
-                  </div>
-                  <button
-                    className="edit"
-                    title={`Edit ${h.symbol}`}
-                    aria-label={`Edit ${h.symbol}`}
-                    onClick={() => startEdit(h)}
-                  >
-                    <IPencil size={16} />
-                  </button>
-                  <DelButton
-                    label={`Delete ${h.symbol}`}
-                    onConfirm={() => {
-                      store.deleteHolding(h.id);
-                      if (editHolding?.id === h.id) closeEdit();
-                      toast(`Deleted ${h.symbol}`);
-                    }}
-                  />
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ))}
-
-      {vault.holdings.length === 0 && (
-        <div className="empty">
-          No holdings yet. Create an account, then add a holding above — or log a
-          contribution below to start tracking invested capital.
-        </div>
       )}
     </>
   );
 }
 
-/** Themed overflow menu for an account card. A single 44px "⋯" button
- *  replaces three side-by-side ghost buttons that no longer fit on phones,
- *  keeping destructive delete inside a two-tap armed flow. The popover is a
- *  themed component (not a native control) and closes on outside tap or
- *  Escape. */
 function MenuButton({ items }: {
   items: {
     label: string;
@@ -1804,12 +1792,7 @@ function MenuButton({ items }: {
 
   return (
     <div className="acc-menu" ref={rootRef} onPointerDown={(e) => e.stopPropagation()}>
-      <button
-        className="menu-toggle"
-        aria-label="Account actions"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-      >
+      <button className="menu-toggle" aria-label="Account actions" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         <IDots size={18} />
       </button>
       {open && visible.length > 0 && (

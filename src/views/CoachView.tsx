@@ -422,11 +422,14 @@ export function CoachView() {
 
   return (
     <>
-      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-        <div className="row" style={{ gap: 8 }}>
-          <span className="chip ok sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <ICoach size={13} /> Coach
-          </span>
+      <div className="page-head" style={{ marginBottom: 14 }}>
+        <div>
+          <div className="page-badge">
+            <span className="dot" /> On-Device &amp; AI Advisory
+          </div>
+          <h1 className="page-title">Financial Coach</h1>
+        </div>
+        <div className="page-controls">
           <span className={`chip sm ${hasLLM && llmAllowed ? 'ok' : ''}`}>
             {hasLLM && llmAllowed
               ? adminLocked
@@ -465,32 +468,29 @@ export function CoachView() {
               {strategyName}
             </button>
             {strategyOpen && (
-              <div style={{ position: 'absolute', top: '100%', left: 0, zIndex: 20, marginTop: 6, background: 'var(--surface-2, #1e293b)', border: '1px solid var(--border, #334155)', borderRadius: 10, padding: 6, minWidth: 200, boxShadow: '0 8px 24px rgba(0,0,0,.4)' }}>
+              <div style={{ position: 'absolute', top: '100%', right: 0, zIndex: 20, marginTop: 6, background: 'var(--card)', border: '1px solid var(--card-border)', borderRadius: 12, padding: 6, minWidth: 220, boxShadow: '0 12px 30px rgba(0,0,0,.35)' }}>
                 {Object.values(FAMED_STRATEGIES).map((s) => (
                   <div
                     key={s.key}
                     onClick={() => setStrategy(s.key)}
-                    style={{ padding: '8px 10px', borderRadius: 8, cursor: 'pointer', background: s.key === coachStrategy ? 'var(--accent-bg, rgba(59,130,246,.15))' : 'transparent' }}
+                    style={{ padding: '8px 10px', borderRadius: 8, cursor: 'pointer', background: s.key === coachStrategy ? 'var(--accent-soft)' : 'transparent' }}
                   >
-                    <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text, #fff)' }}>{s.name}</div>
-                    <div style={{ fontSize: 11, color: 'var(--muted, #94a3b8)', marginTop: 2 }}>{s.blurb}</div>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)' }}>{s.name}</div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{s.blurb}</div>
                   </div>
                 ))}
               </div>
             )}
           </div>
-        </div>
-        <div className="row" style={{ gap: 4 }}>
           {/* Thread switcher trigger */}
           <button
             className="btn ghost sm"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 44, minHeight: 44 }}
             onClick={() => setSwitcherOpen(true)}
             aria-label="Switch chat"
-            >
+          >
             <span style={{ display: 'inline-flex', transform: 'rotate(-90deg)' }}><IChevron size={13} /></span>
             Chats
-            </button>
+          </button>
         </div>
       </div>
 
