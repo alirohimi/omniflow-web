@@ -195,10 +195,10 @@ export interface VaultStore {
   /** Wipe the entire vault (all accounts/holdings/contributions/budgets/
    *  recurring/liabilities/assets/dividends/disposals/emergency/goals/auto-
    *  invests) back to a fresh empty state, preserving the user's prefs and
-   *  llmKey. One persist. Used by the Settings "Delete all data" button —
+   *  llmKey. One persist. Used by the Settings "Reset all data" button —
    *  the only way to truly reset when orphaned data (e.g. contributions
    *  left behind by an older deleteAccount) keeps the hero P&L showing. */
-  wipeVault: () => void;
+  wipeVault: () => Promise<void>;
   /** Patch an existing account (platformName, accountType, deposit). */
   updateAccount: (id: string, patch: Partial<Omit<InvestmentAccount, 'id' | 'baseCurrencyValue' | 'lastUpdated'>>) => void;
   addHolding: (input: NewHoldingInput) => string;
@@ -371,6 +371,8 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<VaultStatus>('locked');
   const [error, setError] = useState<string | null>(null);
   const [vault, setVault] = useState<VaultBlob | null>(null);
+  const vaultRef = useRef<VaultBlob | null>(null);
+  vaultRef.current = vault;
   const [syncState, setSyncState] = useState<SyncState>('idle');
   // True once the current scope's DB probe has settled (row found/absent or
   // unreachable). Ref version is the authoritative same-commit gate: effects
@@ -492,6 +494,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
           }
         },
       );
+      return chainRef.current;
     },
     // Stable on purpose: the body reads scope/cloudOn from refs, so a single
     // first-render instance is correct for every later auth state. This is
@@ -778,7 +781,10 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   // per-user device handle written at last successful unlock. If present,
   // use it to unlock without showing the gate. The handle is scoped to the
   // Supabase user id, so it NEVER leaks across accounts.
-  const deviceHandle = cloudOn ? localStorage.getItem(`ofv:pass:${scope}`) : null;
+  const deviceHandle = (() => {
+    if (!cloudOn) return null;
+    try { return localStorage.getItem(`ofv:pass:${scope}`); } catch { return null; }
+  })();
   useEffect(() => {
     if (!probeSettledRef.current || !auth.user) return;
     // In-memory password from sign-in (pp) wins — it's always the current
@@ -867,15 +873,28 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   );
 
   const eraseAll = useCallback(async () => {
-    // DB-only: the DB row is the only persisted copy — delete it, not a cache.
-    if (cloudOn) await deleteCloudVault(scope);
+    // Drain any in-flight save first so an earlier upsert cannot re-create
+    // the row right after we delete it, and clear cipherRef immediately so
+    // an unload keepalive flush cannot resurrect the old blob.
+    await chainRef.current.catch(() => {});
+    cipherRef.current = null;
+    if (cloudOn) {
+      const deleted = await deleteCloudVault(scope);
+      if (deleted === false) {
+        setError('Could not erase cloud data — please try again.');
+        return;
+      }
+    }
+    if (cloudOn && scope !== 'local') {
+      try { localStorage.removeItem(`ofv:pass:${scope}`); } catch { /* ignore */ }
+    }
+    auth.setAccountPassword('');
     setVault(null);
     passRef.current = '';
-    cipherRef.current = null;
     setSyncState('idle');
     setStatus('creating');
     setError(null);
-  }, [scope, cloudOn]);
+  }, [scope, cloudOn, auth]);
 
   // ---- data mutators (guard: only when unlocked) ----
 
@@ -1064,21 +1083,31 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     [persist],
   );
 
-  const wipeVault = useCallback(() => {
-    setVault((prev) => {
-      if (!prev) return prev;
-      // Preserve user prefs + llmKey (those are settings, not data); wipe
-      // every data array back to an empty state. This clears orphaned
-      // contributions/auto-invests/accounts that a per-account delete may
-      // have left behind, so the hero P&L finally resets to nothing.
-      const next: VaultBlob = {
-        ...emptyVault(prev.prefs),
-        createdAt: prev.createdAt,
-        updatedAt: Date.now(),
-        llmKey: prev.llmKey,
-      };
-      void persist(next);
-      return next;
+  const wipeVault = useCallback((): Promise<void> => {
+    // Drop any cached ciphertext immediately so a pagehide/visibilitychange
+    // keepalive flush while the wiped blob is encrypting never re-sends
+    // the pre-wipe vault.
+    cipherRef.current = null;
+    if (!vaultRef.current) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      setVault((prev) => {
+        if (!prev) {
+          resolve();
+          return prev;
+        }
+        // Preserve user prefs + llmKey (those are settings, not data); wipe
+        // every data array back to an empty state. This clears orphaned
+        // contributions/auto-invests/accounts that a per-account delete may
+        // have left behind, so the hero P&L finally resets to nothing.
+        const next: VaultBlob = {
+          ...emptyVault(prev.prefs),
+          createdAt: prev.createdAt,
+          updatedAt: Date.now(),
+          llmKey: prev.llmKey,
+        };
+        void persist(next).then(resolve, resolve);
+        return next;
+      });
     });
   }, [persist]);
 
@@ -1203,7 +1232,24 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     (id: string) => {
       setVault((prev) => {
         if (!prev) return prev;
-        const next = { ...prev, holdings: prev.holdings.filter((h) => h.id !== id), updatedAt: Date.now() };
+        const target = prev.holdings.find((h) => h.id === id);
+        const holdings = prev.holdings.filter((h) => h.id !== id);
+        // If deleting this holding empties its account, drop any cached
+        // brokerValueBase on that account so the empty account cannot keep
+        // displaying stale portfolio value after all holdings are removed.
+        const accStillHasHoldings = target
+          ? holdings.some((h) => h.accountId === target.accountId)
+          : true;
+        const accounts =
+          target && !accStillHasHoldings
+            ? prev.accounts.map((a) => {
+                if (a.id !== target.accountId || a.brokerValueBase === undefined) return a;
+                const copy = { ...a };
+                delete copy.brokerValueBase;
+                return copy;
+              })
+            : prev.accounts;
+        const next = { ...prev, accounts, holdings, updatedAt: Date.now() };
         void persist(next);
         return next;
       });

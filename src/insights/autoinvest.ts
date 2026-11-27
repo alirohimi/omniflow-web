@@ -135,23 +135,29 @@ export function portfolioPnl(
     // app the user actually reconciles against (StashAway), and it stays
     // exact even when our live quote / FX rate / fund-NAV prices drift.
     const quoteValue = Number.isFinite(l.valueBase) ? l.valueBase : 0;
+    // An account with zero holdings AND zero live quote value has no active
+    // assets — a leftover brokerValueBase or initialDepositBase must NOT
+    // conjure up a ghost portfolio value (or a fake -100% loss) after the
+    // user deleted all holdings. Note: unit-test fakeSummary fixtures pass
+    // lines: [] with valueBase > 0, so checking BOTH keeps those working.
+    const hasAssets = (l.lines?.length ?? 0) > 0 || quoteValue > 0;
     const brokerValue =
-      Number.isFinite(acc.brokerValueBase) && (acc.brokerValueBase ?? 0) > 0
+      hasAssets && Number.isFinite(acc.brokerValueBase) && (acc.brokerValueBase ?? 0) > 0
         ? acc.brokerValueBase!
         : null;
-    const valueBase = brokerValue ?? quoteValue;
+    const valueBase = hasAssets ? (brokerValue ?? quoteValue) : 0;
     let capitalBase =
       Number.isFinite(acc.initialDepositBase) && (acc.initialDepositBase ?? 0) > 0
         ? acc.initialDepositBase!
         : 0;
     // Fall back to the ledger when no manual balance was recorded.
     if (capitalBase === 0) capitalBase = capFromContribs.get(acc.id) ?? 0;
-    const hasCapital = capitalBase > 0;
+    const hasCapital = hasAssets && capitalBase > 0;
     // Per-account P&L is measured against the same total cost basis the
     // summary computes, so each account shows its own gain/loss — a user
     // with StashAway down and a 401k up sees both, not a blended 0.00%.
     const accCost = Number.isFinite(l.costBase) ? l.costBase : 0;
-    const hasCost = accCost > 0;
+    const hasCost = hasAssets && accCost > 0;
     const costPnlBase = hasCost ? valueBase - accCost : null;
     const costReturnPct = hasCost ? ((valueBase - accCost) / accCost) * 100 : null;
     return {

@@ -809,7 +809,7 @@ export function InvestmentsView() {
             averageEntryPrice is the fund NAV, not your actual cash cost.
             Falls back to costPnlBase (value − sum of entry prices) when no
             total invested has been recorded for that account. */}
-        {pnl && pnl.accounts.length > 0 && (
+        {pnl && pnl.accounts.some((l) => l.valueBase > 0 || l.pnlBase != null || l.costPnlBase != null) && (
           <div className="card" style={{ marginBottom: 14 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Per-account P&amp;L</div>
             {pnl.accounts.map((l) => {
@@ -1099,7 +1099,7 @@ export function InvestmentsView() {
         })()}
       </div>
 
-      <Disclosure id="accounts" title={`Your Accounts${vault.accounts.length ? ` (${vault.accounts.length})` : ''}`} defaultOpen={vault.accounts.length === 0}>
+      <Disclosure id="accounts" title={`Your Accounts${vault.accounts.length ? ` (${vault.accounts.length})` : ''}`} defaultOpen={vault.accounts.length === 0 || vault.holdings.length === 0}>
       <div className="card">
         {/* One-tap presets so a fresh user doesn't have to type the broker
             name — the top platforms map to the right account type, and the

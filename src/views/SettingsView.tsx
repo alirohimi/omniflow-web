@@ -47,6 +47,8 @@ export function SettingsView() {
   // the installed app. Mirrors the DelButton armed-destructive pattern.
   const [eraseArmed, setEraseArmed] = useState(false);
   const [wipeArmed, setWipeArmed] = useState(false);
+  const [dangerBusy, setDangerBusy] = useState(false);
+  const [dangerMsg, setDangerMsg] = useState<string | null>(null);
   useEffect(() => {
     if (!eraseArmed) return;
     const t = window.setTimeout(() => setEraseArmed(false), 2500);
@@ -568,10 +570,13 @@ export function SettingsView() {
       <div className="card">
         <button
           className={`btn danger sm${eraseArmed ? ' active' : ''}`}
+          disabled={dangerBusy}
           onClick={() => {
             if (eraseArmed) {
               setEraseArmed(false);
-              void store.eraseAll();
+              setDangerBusy(true);
+              setDangerMsg(null);
+              void store.eraseAll().finally(() => setDangerBusy(false));
             } else {
               setEraseArmed(true);
             }
@@ -595,16 +600,23 @@ export function SettingsView() {
         <button
           className={`btn danger sm${wipeArmed ? ' active' : ''}`}
           style={{ marginTop: 12 }}
+          disabled={dangerBusy}
           onClick={() => {
             if (wipeArmed) {
               setWipeArmed(false);
-              store.wipeVault();
+              setDangerBusy(true);
+              setDangerMsg(null);
+              void store
+                .wipeVault()
+                .then(() => setDangerMsg('All data cleared.'))
+                .catch(() => setDangerMsg('Reset failed — please try again.'))
+                .finally(() => setDangerBusy(false));
             } else {
               setWipeArmed(true);
             }
           }}
         >
-          {wipeArmed ? 'Tap again to reset all data (stay signed in)' : 'Reset all data'}
+          {dangerBusy ? 'Clearing data…' : wipeArmed ? 'Tap again to reset all data (stay signed in)' : 'Reset all data'}
         </button>
         {!wipeArmed && (
           <div className="small muted" style={{ marginTop: 8 }}>
@@ -613,6 +625,7 @@ export function SettingsView() {
             after deleting accounts.
           </div>
         )}
+        {dangerMsg && <div className="small muted" style={{ marginTop: 10 }}>{dangerMsg}</div>}
       </div>
     </>
   );

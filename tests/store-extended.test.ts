@@ -490,6 +490,32 @@ describe('extended-entity CRUD (budgets/recurring/liabilities/assets/dividends/d
     await unmount();
   });
 
+  it('deleteHolding clears stale brokerValueBase when the last holding is removed', async () => {
+    const { storeRef, unmount } = await unlockFreshVault('user-del-last-holding');
+    const store = storeRef.current!;
+    let accId = '';
+    let hId = '';
+    await act(async () => {
+      accId = store.addAccount({ platformName: 'Stashaway Simple', accountType: 'robo', initialDepositBase: 25_000 });
+      store.updateAccount(accId, { brokerValueBase: 47_148.78 });
+      hId = store.addHolding({
+        accountId: accId, symbol: 'CASH', assetClass: 'cash',
+        holdingCurrency: 'MYR', units: 100, averageEntryPrice: 1,
+      });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(storeRef.current!.vault!.accounts[0].brokerValueBase).toBe(47_148.78);
+
+    await act(async () => {
+      store.deleteHolding(hId);
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    const v = storeRef.current!.vault!;
+    expect(v.holdings).toHaveLength(0);
+    expect(v.accounts[0].brokerValueBase).toBeUndefined();
+    await unmount();
+  });
+
   it('extended entities survive the encrypted cloud persist round-trip', async () => {
     const USER = 'user-ext-rt';
     const { storeRef, unmount } = await unlockFreshVault(USER);

@@ -102,12 +102,16 @@ export async function saveCloudVault(userId: string, cipher: VaultCipher): Promi
   return true;
 }
 
-/** Delete a user's cloud row (used on "Erase all data"). */
-export async function deleteCloudVault(userId: string): Promise<void> {
-  if (!isCloudEnabled()) return;
+/** Delete a user's cloud row (used on "Erase all data"). Returns true on success. */
+export async function deleteCloudVault(userId: string): Promise<boolean> {
+  if (!isCloudEnabled()) return true;
   const sb: SupabaseClient = getSupabase()!;
   const { error } = await sb.from(VAULT_TABLE).delete().eq('user_id', userId);
-  if (error) console.warn('[cloudVault] delete:', error.message);
+  if (error) {
+    console.warn('[cloudVault] delete:', error.message);
+    return false;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------

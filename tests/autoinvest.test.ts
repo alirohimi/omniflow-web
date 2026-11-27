@@ -384,6 +384,23 @@ describe('portfolioPnl', () => {
     expect(pnl.accounts[0].valueBase).toBe(39_632.57);
     expect(pnl.totalCostPnlBase).toBeCloseTo(39_632.57 - 39_253.39, 2);
   });
+
+  it('ignores stale brokerValueBase and deposit when account has 0 holdings and 0 quote value', () => {
+    // Regression: user deleted all holdings (0 HOLDINGS) while accounts
+    // remained with stale brokerValueBase + initialDepositBase. The hero
+    // must report MYR 0 and null P&L instead of phantom 63,670.37.
+    const acc: InvestmentAccount = {
+      id: 'acc-empty', platformName: 'Stashaway Simple', accountType: 'robo',
+      baseCurrencyValue: 0, lastUpdated: NOW,
+      initialDepositBase: 25_000, brokerValueBase: 47_148.78,
+    };
+    const summary = fakeSummary([{ id: 'acc-empty', value: 0, cost: 0 }], { value: 0, cost: 0 });
+    const pnl = portfolioPnl(summary, [acc], []);
+    expect(pnl.totalValueBase).toBe(0);
+    expect(pnl.totalPnlBase).toBeNull();
+    expect(pnl.accounts[0].valueBase).toBe(0);
+    expect(pnl.accounts[0].pnlBase).toBeNull();
+  });
 });
 
 // ---- real-provider test: addContribution bumps account capital ----
