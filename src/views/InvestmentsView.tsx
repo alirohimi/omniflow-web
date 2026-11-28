@@ -551,7 +551,6 @@ export function InvestmentsView() {
     const id = store.addAccount({
       platformName: name,
       accountType: acctType,
-      initialDepositBase: depositOk ? d : undefined,
     });
     setAccountId(id);
     setPlatform('');
@@ -1522,13 +1521,15 @@ export function InvestmentsView() {
                       aria-label="Account type"
                     />
                   </label>
-                  <label className="field"><span>Put in ({base})</span>
-                    <input type="number" inputMode="decimal" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="e.g. 15000" />
-                  </label>
                   {isRobo && (
-                    <label className="field"><span>Current value ({base}) (optional)</span>
-                      <input type="number" inputMode="decimal" value={roboCurrentStart} onChange={(e) => setRoboCurrentStart(e.target.value)} placeholder="Match StashAway today" />
-                    </label>
+                    <>
+                      <label className="field"><span>Put in ({base})</span>
+                        <input type="number" inputMode="decimal" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="e.g. 15000" />
+                      </label>
+                      <label className="field"><span>Current value ({base}) (optional)</span>
+                        <input type="number" inputMode="decimal" value={roboCurrentStart} onChange={(e) => setRoboCurrentStart(e.target.value)} placeholder="Match StashAway today" />
+                      </label>
+                    </>
                   )}
                 </div>
                 {isRobo && (
@@ -1742,8 +1743,11 @@ export function InvestmentsView() {
                           const line = accLines.get(a.id);
                           const hasDeposit = typeof a.initialDepositBase === 'number' && a.initialDepositBase > 0;
                           const reserved = reservedIds.has(a.id);
-                          const pnlGood = line?.pnlBase != null && line.pnlBase >= 0;
-                          const pnlBad = line?.pnlBase != null && line.pnlBase < 0;
+                          const effCost = line ? (line.depositBase ?? (line.costBase > 0 ? line.costBase : null)) : null;
+                          const effPnl = line && effCost != null && line.valueBase > 0 ? (line.pnlBase ?? line.valueBase - effCost) : null;
+                          const effRet = effPnl != null && effCost && effCost > 0 ? (effPnl / effCost) * 100 : null;
+                          const pnlGood = effPnl != null && effPnl >= 0;
+                          const pnlBad = effPnl != null && effPnl < 0;
                           return (
                             <div className="acc-card" key={a.id}>
                               <div className="acc-head">
@@ -1800,9 +1804,9 @@ export function InvestmentsView() {
                                 ) : (
                                   <span className="muted">—</span>
                                 )}
-                                {line?.depositBase != null && line.valueBase > 0 && (
+                                {effPnl != null && effRet != null && (
                                   <span className={`ret ${pnlGood ? 'pos' : pnlBad ? 'neg' : ''}`}>
-                                    {line.pnlBase! >= 0 ? '+' : ''}{formatMoney(line.pnlBase!, base)} ({line.depositReturnPct! >= 0 ? '+' : ''}{line.depositReturnPct!.toFixed(1)}%)
+                                    {effPnl >= 0 ? '+' : ''}{formatMoney(effPnl, base)} ({effRet >= 0 ? '+' : ''}{effRet.toFixed(1)}%)
                                   </span>
                                 )}
                               </div>
@@ -1815,12 +1819,17 @@ export function InvestmentsView() {
                                   {holdings > 0 ? ` · ${holdings} ${holdings === 1 ? 'asset' : 'assets'}` : ' · 0 assets'}
                                 </span>
                                 <button
-                                  className={`dep-edit${hasDeposit ? '' : ' empty'}`}
+                                  className={`dep-edit${hasDeposit || (line?.costBase ?? 0) > 0 ? '' : ' empty'}`}
                                   onClick={() => openDeposit(a.id)}
                                 >
                                   {hasDeposit ? (
                                     <>
                                       <span className="val">Put in {formatMoney(a.initialDepositBase!, base)}</span>
+                                      <IPencil size={13} />
+                                    </>
+                                  ) : (line?.costBase ?? 0) > 0 ? (
+                                    <>
+                                      <span className="val">Cost basis {formatMoney(line!.costBase, base)}</span>
                                       <IPencil size={13} />
                                     </>
                                   ) : (
