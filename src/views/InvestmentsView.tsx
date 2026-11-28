@@ -16,6 +16,7 @@ import { SavingsGoalsPanel } from './SavingsGoalsPanel';
 import { AutoInvestPanel, ContributionPanel } from './AutoInvestPanel';
 import { AllocationPie, colorForClass, type PieSlice } from '../components/AllocationPie';
 import { fxService, marketDataService } from '../services';
+import { classReferenceSymbol } from '../services/marketData';
 import { portfolioPnl, computeEmergency } from '../insights';
 import { calibrateRoboSleeves, valueInBase } from '../ai/portfolio';
 import type { AccountLine } from '../ai/portfolio';
@@ -114,9 +115,19 @@ export function InvestmentsView() {
   const [units, setUnits] = useState('');
   const [entry, setEntry] = useState('');
   const [amount, setAmount] = useState('');
-  const [roboValue, setRoboValue] = useState('');
+  const [roboSleevePct, setRoboSleevePct] = useState('');
   const [editHolding, setEditHolding] = useState<InvestmentHolding | null>(null);
   const parMode = isParClass(assetClass);
+
+  // Auto-select a sensible target account for Step 2 when accounts exist and
+  // no valid target is chosen yet (prefer non-robo accounts, since StashAway
+  // portfolios already create their sleeves in Step 1).
+  useEffect(() => {
+    if (vault.accounts.length === 0) return;
+    if (accountId && vault.accounts.some((a) => a.id === accountId)) return;
+    const preferred = vault.accounts.find((a) => a.accountType !== 'robo') ?? vault.accounts[0];
+    if (preferred) setAccountId(preferred.id);
+  }, [vault.accounts, accountId]);
 
   const [saRefs, setSaRefs] = useState<Record<string, number>>({});
   const [roboRows, setRoboRows] = useState<{ assetClass: InvestmentHolding['assetClass']; pct: string; ticker: string }[]>([
@@ -606,30 +617,45 @@ export function InvestmentsView() {
   const targetAcct = vault.accounts.find((a) => a.id === accountId) ?? null;
   const targetIsRobo = targetAcct?.accountType === 'robo';
 
-  const addRoboValue = async () => {
-    const v = parseFloat(roboValue);
-    if (!accountId || !isFinite(v) || v <= 0) return;
-    const sym = symbol.trim().toUpperCase() || (assetClass === 'equity-local' ? 'LOCAL EQUITY FUND' : assetClass === 'equity-us' ? 'GLOBAL EQUITY FUND' : 'FUND');
-    let priceBase = v;
-    try {
-      const rates = await fxService.latest(base);
-      if (holdCur !== base) {
-        const r = fxService.toBase(1, holdCur, rates);
-        priceBase = Number.isFinite(r) ? v * r : v;
+  const addRoboSleeve = async () => {
+    const pct = parseFloat(roboSleevePct);
+    if (!accountId || !Number.isFinite(pct) || pct <= 0) {
+      toast('Enter an allocation % greater than 0.', 'err');
+      return;
+    }
+    const cleanTicker = symbol.trim().toUpperCase();
+    const sym = cleanTicker || classReferenceSymbol(assetClass);
+    const par = isParClass(assetClass);
+    let ref = par ? 1 : 0;
+    let refFxRate: number | undefined;
+    if (!par) {
+      const rates = live.fx ?? (await fxService.latest(base).catch(() => null));
+      const q = await fetchSleeveQuote(assetClass, cleanTicker);
+      if (q.price > 0) {
+        ref = q.price;
+        const curFx = q.currency === base ? 1 : (rates ? fxService.toBase(1, q.currency, rates) : 0);
+        if (q.currency !== base && Number.isFinite(curFx) && curFx > 0) refFxRate = curFx;
       }
-    } catch { /* offline */ }
+    }
+    const dep = targetAcct?.initialDepositBase ?? 0;
+    const sliceBase = (pct / 100) * dep;
     store.addHolding({
       accountId,
       symbol: sym,
       assetClass,
-      holdingCurrency: holdCur,
-      units: 1,
-      averageEntryPrice: v,
-      currentPriceLocal: v,
-      currentPriceBase: priceBase,
+      holdingCurrency: base,
+      units: sliceBase,
+      averageEntryPrice: 1,
+      currentPriceLocal: 1,
+      currentPriceBase: 1,
+      isAllocation: true,
+      allocationPct: pct,
+      refPrice: ref,
+      ...(refFxRate ? { refFxRate } : {}),
     });
-    setSymbol(''); setRoboValue('');
-    toast(`Added ${sym} to ${targetAcct!.platformName}`);
+    setSymbol('');
+    setRoboSleevePct('');
+    toast(`Added ${sym} (${pct}%) sleeve to ${targetAcct!.platformName}`);
   };
 
   // ---- Modals state ----
@@ -641,6 +667,8 @@ export function InvestmentsView() {
   const [mAmount, setMAmount] = useState('');
   const [mValue, setMValue] = useState('');
   const [mIsRobo, setMIsRobo] = useState(false);
+  const [mIsAlloc, setMIsAlloc] = useState(false);
+  const [mAllocPct, setMAllocPct] = useState('');
   const mPar = isParClass(mClass);
 
   const openEdit = (h: InvestmentHolding) => {
@@ -648,9 +676,13 @@ export function InvestmentsView() {
     setMClass(h.assetClass);
     setMCur(h.holdingCurrency);
     const acct = vault.accounts.find((a) => a.id === h.accountId);
-    const robo = acct?.accountType === 'robo' && !isParClass(h.assetClass);
+    const isAlloc = Boolean(h.isAllocation);
+    const robo = !isAlloc && acct?.accountType === 'robo' && !isParClass(h.assetClass);
+    setMIsAlloc(isAlloc);
     setMIsRobo(robo);
-    if (robo) {
+    if (isAlloc) {
+      setMAllocPct(String(h.allocationPct ?? 0));
+    } else if (robo) {
       const v = (Number.isFinite(h.currentPriceLocal) ? h.currentPriceLocal : h.averageEntryPrice) * (Number.isFinite(h.units) ? h.units : 1);
       setMValue(String(Math.round(v * 100) / 100));
     } else if (isParClass(h.assetClass)) {
@@ -809,6 +841,34 @@ export function InvestmentsView() {
     const h = editHolding;
     if (!h) return;
     const par = isParClass(mClass);
+    if (mIsAlloc) {
+      const pct = parseFloat(mAllocPct);
+      if (!Number.isFinite(pct) || pct <= 0) { toast('Allocation % must be positive.', 'err'); return; }
+      const newSym = mSymbol.trim().toUpperCase() || classReferenceSymbol(mClass);
+      const patch: Partial<Omit<InvestmentHolding, 'id'>> = {
+        symbol: newSym,
+        assetClass: mClass,
+        allocationPct: pct,
+      };
+      if (newSym !== h.symbol || mClass !== h.assetClass) {
+        if (par) {
+          patch.refPrice = 1;
+          patch.refFxRate = undefined;
+        } else {
+          const rates = live.fx ?? (await fxService.latest(base).catch(() => null));
+          const q = await fetchSleeveQuote(mClass, mSymbol.trim());
+          if (q.price > 0) {
+            patch.refPrice = q.price;
+            const curFx = q.currency === base ? 1 : (rates ? fxService.toBase(1, q.currency, rates) : 0);
+            patch.refFxRate = q.currency !== base && Number.isFinite(curFx) && curFx > 0 ? curFx : undefined;
+          }
+        }
+      }
+      store.updateHolding(h.id, patch);
+      closeEdit();
+      toast(`Updated ${newSym} (${pct}%)`);
+      return;
+    }
     if (mIsRobo) {
       const v = parseFloat(mValue);
       if (!isFinite(v) || v <= 0) { toast('Enter how much it is worth.', 'err'); return; }
@@ -930,7 +990,7 @@ export function InvestmentsView() {
             <IRefresh size={15} /> {live.loading ? 'Refreshing…' : 'Refresh'}
           </button>
           <button className="btn sm" onClick={jumpToAdd}>
-            <IPlus size={15} /> Add Asset
+            <IPlus size={15} /> Add Account / Holding
           </button>
         </div>
       </div>
@@ -1407,7 +1467,7 @@ export function InvestmentsView() {
               Accounts &amp; Holdings ({vault.accounts.length})
             </button>
             <button type="button" className={manageTab === 'add' ? 'on' : ''} onClick={() => setManageTab('add')}>
-              + Add Account / Asset
+              + Add Account / Holding
             </button>
             <button type="button" className={manageTab === 'tools' ? 'on' : ''} onClick={() => setManageTab('tools')}>
               Reserve, Goals &amp; Auto-Invest
@@ -1417,13 +1477,18 @@ export function InvestmentsView() {
 
         {manageTab === 'add' && (
           <div className="grid-2">
-            <Disclosure id="accounts" title="1. Create Account" defaultOpen>
+            <Disclosure id="accounts" title="1. New Account" defaultOpen>
               <div className="card" style={{ margin: 0 }}>
-                <h2>1. Create Account</h2>
+                <h2 className="disclosure-desktop-title">1. New Account</h2>
+                <p className="small muted" style={{ margin: '0 0 10px' }}>
+                  {isRobo
+                    ? 'All-in-one setup: creates the account AND its target allocation sleeves together.'
+                    : 'Creates the account first — then add individual stocks, crypto, or cash holdings in Step 2.'}
+                </p>
                 <div className="row small" style={{ gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
                   {[
                     { name: 'StashAway', type: 'robo' as const },
-                    { name: 'Hata', type: 'robo' as const },
+                    { name: 'Hata', type: 'crypto' as const },
                     { name: 'Luno', type: 'crypto' as const },
                     { name: 'IBKR', type: 'broker' as const },
                     { name: 'Moomoo', type: 'broker' as const },
@@ -1505,6 +1570,7 @@ export function InvestmentsView() {
                             <button
                               type="button"
                               className="btn ghost sm"
+                              aria-label="Remove sleeve"
                               onClick={() => setRoboRows((prev) => prev.filter((_, j) => j !== i))}
                               disabled={roboRows.length <= 1}
                             >✕</button>
@@ -1546,80 +1612,100 @@ export function InvestmentsView() {
                   </div>
                 )}
                 <button className="btn sm" style={{ width: '100%', marginTop: 12 }} onClick={() => void addAccount()}>
-                  <IPlus size={15} /> {isRobo ? 'Create portfolio' : 'Create account'}
+                  <IPlus size={15} /> {isRobo ? 'Create portfolio & sleeves' : 'Create account'}
                 </button>
               </div>
             </Disclosure>
 
-            <Disclosure id="add-holding" title="2. Add Asset to Account" defaultOpen>
+            <Disclosure id="add-holding" title="2. Add Holding to Account" defaultOpen>
               <div className="card" style={{ margin: 0 }}>
-                <h2>2. Add Asset to Account</h2>
-                {vault.accounts.length > 0 && (
-                  <label className="field"><span>Target Account</span>
-                    <ThemedSelect
-                      value={accountId}
-                      onChange={(v: string) => setAccountId(v)}
-                      options={vault.accounts.map((a) => ({ value: a.id, label: a.platformName }))}
-                      placeholder="Select an account…"
-                      aria-label="Target account"
-                    />
-                  </label>
-                )}
-                {targetIsRobo ? (
-                  <>
-                    <div className="cols">
-                      <label className="field"><span>Asset class</span>
-                        <ThemedSelect
-                          value={assetClass}
-                          onChange={(v: string) => pickAssetClass(v as typeof assetClass)}
-                          options={ASSET_CLASSES.map((c) => ({ value: c, label: c }))}
-                          aria-label="What is it?"
-                        />
-                      </label>
-                      <label className="field"><span>Name (optional)</span>
-                        <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="Global Equity Fund" />
-                      </label>
-                      <label className="field"><span>Worth ({holdCur})</span>
-                        <input type="number" inputMode="decimal" value={roboValue} onChange={(e) => setRoboValue(e.target.value)} placeholder="4200" />
-                      </label>
-                      <label className="field"><span>Currency</span>
-                        <ThemedSelect value={holdCur} onChange={(v: string) => setHoldCur(v)} options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))} aria-label="Currency" />
-                      </label>
-                    </div>
-                    <button className="btn sm" style={{ width: '100%', marginTop: 12 }} disabled={!accountId} onClick={() => void addRoboValue()}>
-                      Add to portfolio
-                    </button>
-                  </>
+                <h2 className="disclosure-desktop-title">2. Add Holding to Account</h2>
+                {vault.accounts.length === 0 ? (
+                  <div className="empty">
+                    Create an account in Step 1 first — then add individual stocks, ETFs, crypto, or cash holdings here.
+                  </div>
                 ) : (
                   <>
-                    <div className="cols">
-                      <label className="field"><span>Symbol</span>
-                        <input value={symbol} onChange={(e) => setSymbol(e.target.value)} disabled={parMode} placeholder={parMode ? 'auto (par)' : 'AAPL / BTC / 1155.KL'} />
-                      </label>
-                      <label className="field"><span>Asset class</span>
-                        <ThemedSelect value={assetClass} onChange={(v: string) => pickAssetClass(v as typeof assetClass)} options={ASSET_CLASSES.map((c) => ({ value: c, label: c }))} aria-label="What is it?" />
-                      </label>
-                      {parMode ? (
-                        <label className="field"><span>Amount ({holdCur})</span>
-                          <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="4000" />
-                        </label>
-                      ) : (
-                        <>
-                          <label className="field"><span>Units</span>
-                            <input type="number" inputMode="decimal" value={units} onChange={(e) => setUnits(e.target.value)} placeholder="10" />
+                    <label className="field"><span>Target Account</span>
+                      <ThemedSelect
+                        value={accountId}
+                        onChange={(v: string) => setAccountId(v)}
+                        options={vault.accounts.map((a) => ({
+                          value: a.id,
+                          label: `${a.platformName}${a.accountType === 'robo' ? ' (Robo)' : ''}`,
+                        }))}
+                        placeholder="Select an account…"
+                        aria-label="Target account"
+                      />
+                    </label>
+                    {targetIsRobo ? (
+                      <>
+                        <p className="small muted" style={{ margin: '0 0 10px' }}>
+                          <strong>{targetAcct?.platformName}</strong> already tracks the allocation sleeves set in Step 1. Add another % sleeve below only if you want to expand its mix.
+                        </p>
+                        <div className="cols">
+                          <label className="field"><span>Asset class</span>
+                            <ThemedSelect
+                              value={assetClass}
+                              onChange={(v: string) => pickAssetClass(v as typeof assetClass)}
+                              options={[
+                                { value: 'equity-us', label: 'Global equities' },
+                                { value: 'equity-local', label: 'Local equities' },
+                                { value: 'etf', label: 'ETF / index fund' },
+                                { value: 'gold', label: 'Gold' },
+                                { value: 'crypto', label: 'Crypto' },
+                                { value: 'cash', label: 'Cash / MMF' },
+                                { value: 'mmf', label: 'Money market' },
+                              ]}
+                              aria-label="What is it?"
+                            />
                           </label>
-                          <label className="field"><span>Avg buy price</span>
-                            <input type="number" inputMode="decimal" value={entry} onChange={(e) => setEntry(e.target.value)} placeholder="12.40" />
+                          <label className="field"><span>Allocation %</span>
+                            <input type="number" inputMode="decimal" value={roboSleevePct} onChange={(e) => setRoboSleevePct(e.target.value)} placeholder="e.g. 15" />
                           </label>
-                        </>
-                      )}
-                      <label className="field"><span>Currency</span>
-                        <ThemedSelect value={holdCur} onChange={(v: string) => setHoldCur(v)} options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))} aria-label="Currency" />
-                      </label>
-                    </div>
-                    <button className="btn sm" style={{ width: '100%', marginTop: 12 }} disabled={!accountId} onClick={() => void addHolding()}>
-                      {accountId ? 'Add asset' : 'Pick an account first'}
-                    </button>
+                          <label className="field"><span>Ticker (optional)</span>
+                            <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="CSPX, GLD, QQQ" />
+                          </label>
+                        </div>
+                        <button className="btn sm" style={{ width: '100%', marginTop: 12 }} disabled={!accountId} onClick={() => void addRoboSleeve()}>
+                          <IPlus size={15} /> Add sleeve to {targetAcct?.platformName}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <p className="small muted" style={{ margin: '0 0 10px' }}>
+                          Add an individual stock, ETF, crypto coin, or cash balance to <strong>{targetAcct?.platformName ?? 'your account'}</strong>.
+                        </p>
+                        <div className="cols">
+                          <label className="field"><span>Symbol</span>
+                            <input value={symbol} onChange={(e) => setSymbol(e.target.value)} disabled={parMode} placeholder={parMode ? 'auto (par)' : 'AAPL / BTC / 1155.KL'} />
+                          </label>
+                          <label className="field"><span>Asset class</span>
+                            <ThemedSelect value={assetClass} onChange={(v: string) => pickAssetClass(v as typeof assetClass)} options={ASSET_CLASSES.map((c) => ({ value: c, label: c }))} aria-label="What is it?" />
+                          </label>
+                          {parMode ? (
+                            <label className="field"><span>Amount ({holdCur})</span>
+                              <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="4000" />
+                            </label>
+                          ) : (
+                            <>
+                              <label className="field"><span>Units</span>
+                                <input type="number" inputMode="decimal" value={units} onChange={(e) => setUnits(e.target.value)} placeholder="10" />
+                              </label>
+                              <label className="field"><span>Avg buy price</span>
+                                <input type="number" inputMode="decimal" value={entry} onChange={(e) => setEntry(e.target.value)} placeholder="12.40" />
+                              </label>
+                            </>
+                          )}
+                          <label className="field"><span>Currency</span>
+                            <ThemedSelect value={holdCur} onChange={(v: string) => setHoldCur(v)} options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))} aria-label="Currency" />
+                          </label>
+                        </div>
+                        <button className="btn sm" style={{ width: '100%', marginTop: 12 }} disabled={!accountId} onClick={() => void addHolding()}>
+                          <IPlus size={15} /> Add holding to {targetAcct?.platformName ?? 'account'}
+                        </button>
+                      </>
+                    )}
                   </>
                 )}
               </div>
@@ -1632,10 +1718,10 @@ export function InvestmentsView() {
             <div className="card" style={{ margin: 0 }}>
               <div className="row" style={{ marginBottom: 8 }}>
                 <h2 style={{ margin: 0 }}>Your Accounts ({vault.accounts.length})</h2>
-                <button className="btn ghost sm" onClick={() => setManageTab('add')}>+ New</button>
+                <button className="btn ghost sm" onClick={() => setManageTab('add')}>+ New Account</button>
               </div>
               {vault.accounts.length === 0 ? (
-                <div className="empty">No accounts yet — switch to "+ Add Account / Asset" to create one.</div>
+                <div className="empty">No accounts yet — switch to "+ Add Account / Holding" to create one.</div>
               ) : (
                 <div>
                   {(Object.keys(SECTION_META) as PortfolioSection[]).map((section) => {
@@ -1677,7 +1763,7 @@ export function InvestmentsView() {
                                 <MenuButton
                                   items={[
                                     { label: reserved ? 'Remove from reserve' : 'Add to reserve', icon: ICheck, onClick: () => (reserved ? unReserve(a.id) : toReserve(a.id)) },
-                                    { label: 'Add assets here', icon: ICheck, hide: isTarget, onClick: () => { setAccountId(a.id); setManageTab('add'); } },
+                                    { label: 'Add holding to this account', icon: ICheck, hide: isTarget, onClick: () => { setAccountId(a.id); setManageTab('add'); } },
                                     { label: 'Edit amount put in', icon: IPlus, onClick: () => openDeposit(a.id) },
                                     {
                                       label: a.accountType === 'robo' ? "Match StashAway's value" : 'Use broker value',
@@ -1758,10 +1844,10 @@ export function InvestmentsView() {
             <div className="card" style={{ margin: 0 }}>
               <div className="row" style={{ marginBottom: 8 }}>
                 <h2 style={{ margin: 0 }}>Holdings ({vault.holdings.length})</h2>
-                <button className="btn ghost sm" onClick={() => setManageTab('add')}>+ Add asset</button>
+                <button className="btn ghost sm" onClick={() => setManageTab('add')}>+ Add Holding</button>
               </div>
               {vault.holdings.length === 0 ? (
-                <div className="empty">No holdings yet — add one under "+ Add Account / Asset".</div>
+                <div className="empty">No holdings yet — add one under "+ Add Account / Holding".</div>
               ) : (
                 [...grouped.entries()].map(([plat, holds]) => (
                   <div key={plat} style={{ marginTop: 12 }}>
@@ -1880,10 +1966,10 @@ export function InvestmentsView() {
 
       {/* ==================== MODALS ==================== */}
       {editHolding && (
-        <Modal title={`Edit ${editHolding.symbol} holding`} onClose={closeEdit}>
+        <Modal title={`Edit ${editHolding.symbol} ${mIsAlloc ? 'sleeve' : 'holding'}`} onClose={closeEdit}>
           <div className="cols">
-            <label className="field"><span>Symbol</span>
-              <input value={mSymbol} onChange={(e) => setMSymbol(e.target.value)} disabled={mPar || mIsRobo} />
+            <label className="field"><span>{mIsAlloc ? 'Ticker (optional)' : 'Symbol'}</span>
+              <input value={mSymbol} onChange={(e) => setMSymbol(e.target.value)} disabled={(!mIsAlloc && mPar) || mIsRobo} placeholder={mIsAlloc ? 'CSPX, GLD, QQQ' : undefined} />
             </label>
             <label className="field"><span>Asset class</span>
               <ThemedSelect
@@ -1891,13 +1977,17 @@ export function InvestmentsView() {
                 onChange={(v: string) => {
                   const c = v as InvestmentHolding['assetClass'];
                   setMClass(c);
-                  if (isParClass(c)) setMSymbol(parSymbolFor(c));
+                  if (!mIsAlloc && isParClass(c)) setMSymbol(parSymbolFor(c));
                 }}
                 options={ASSET_CLASSES.map((c) => ({ value: c, label: c }))}
                 aria-label="What is it?"
               />
             </label>
-            {mIsRobo ? (
+            {mIsAlloc ? (
+              <label className="field"><span>Allocation %</span>
+                <input type="number" inputMode="decimal" value={mAllocPct} onChange={(e) => setMAllocPct(e.target.value)} />
+              </label>
+            ) : mIsRobo ? (
               <label className="field"><span>Worth ({mCur})</span>
                 <input type="number" inputMode="decimal" value={mValue} onChange={(e) => setMValue(e.target.value)} />
               </label>
@@ -1915,9 +2005,11 @@ export function InvestmentsView() {
                 </label>
               </>
             )}
-            <label className="field"><span>Currency</span>
-              <ThemedSelect value={mCur} onChange={(v: string) => setMCur(v)} options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))} aria-label="Currency" />
-            </label>
+            {!mIsAlloc && (
+              <label className="field"><span>Currency</span>
+                <ThemedSelect value={mCur} onChange={(v: string) => setMCur(v)} options={CURRENCIES.map((c) => ({ value: c.code, label: c.code }))} aria-label="Currency" />
+              </label>
+            )}
           </div>
           <div className="row" style={{ marginTop: 14, gap: 10 }}>
             <button className="btn ghost sm" style={{ flex: 1 }} onClick={closeEdit}>Cancel</button>

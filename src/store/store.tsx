@@ -112,6 +112,10 @@ export interface NewHoldingInput {
   averageEntryPrice: number;
   currentPriceLocal?: number;
   currentPriceBase?: number;
+  isAllocation?: boolean;
+  allocationPct?: number;
+  refPrice?: number;
+  refFxRate?: number;
 }
 
 export interface NewAccountInput {
