@@ -830,8 +830,9 @@ textarea { resize: vertical; min-height: 44px; }
 .tsel-value[data-empty] { color: var(--faint); }
 .tsel-caret { color: var(--muted); display: grid; place-items: center; flex: none; }
 .tsel-menu {
-  list-style: none; margin: 0; padding: 6px; z-index: 100;
+  list-style: none; margin: 0; padding: 6px; z-index: 120;
   max-height: min(280px, 60vh); overflow-y: auto;
+  -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
   background: var(--card-2); border: 1px solid var(--line-2);
   border-radius: var(--radius-sm); box-shadow: var(--shadow);
 }
@@ -1186,6 +1187,10 @@ button.chip { cursor: pointer; font: inherit; font-weight: 600; }
   .kpi .num { font-size: 16px; }
   .cols { grid-template-columns: 1fr; gap: 10px; }
   .cols > .field { margin: 0; }
+  .subtabs { width: 100%; }
+  .subtabs button { flex: 1 1 auto; text-align: center; min-height: 40px; padding: 8px 10px; font-size: 12.5px; }
+  .rebalancer-card { padding: 16px; }
+  .pf-table-head { padding: 14px 16px; flex-wrap: wrap; gap: 8px; }
   .ex-donut-wrap { grid-template-columns: 116px minmax(0,1fr); gap: 10px; }
   .ex-hero { flex-direction: column; }
   .ex-hero-stats { width: 100%; min-width: 0; }

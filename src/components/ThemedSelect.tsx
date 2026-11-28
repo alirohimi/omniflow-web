@@ -64,7 +64,14 @@ export function ThemedSelect({
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0); // highlighted option index (keyboard)
   const rootRef = useRef<HTMLDivElement>(null);
-  const [menuPos, setMenuPos] = useState<{ left: number; top: number; width: number } | null>(null);
+  const menuRef = useRef<HTMLUListElement>(null);
+  const [menuPos, setMenuPos] = useState<{
+    left: number;
+    top?: number;
+    bottom?: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
 
   const selectedIdx = Math.max(0, options.findIndex((o) => o.value === value));
 
@@ -74,23 +81,55 @@ export function ThemedSelect({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // Position the ported menu directly under the trigger, above all other
-  // content (fixed + body-level portal = no stacking-context surprises).
+  // Position the ported menu above or below the trigger based on available
+  // viewport space, clamping width/left/maxHeight so the last option is
+  // always reachable via scroll on both desktop and mobile viewports.
   useLayoutEffect(() => {
     if (!open || !rootRef.current) { setMenuPos(null); return; }
-    const trigger = rootRef.current.querySelector<HTMLButtonElement>('.tsel-trigger');
-    if (!trigger) return;
-    const r = trigger.getBoundingClientRect();
-    const width = Math.max(r.width, 180);
-    setMenuPos({ left: r.left, top: r.bottom + 6, width });
+    const updatePos = () => {
+      if (!rootRef.current) return;
+      const trigger = rootRef.current.querySelector<HTMLButtonElement>('.tsel-trigger');
+      if (!trigger) return;
+      const r = trigger.getBoundingClientRect();
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const pad = 12;
+      const gap = 6;
+      const width = Math.min(Math.max(r.width, 180), vw - 16);
+      const left = Math.max(8, Math.min(r.left, vw - width - 8));
+      const spaceBelow = vh - r.bottom - pad - gap;
+      const spaceAbove = r.top - pad - gap;
+      const openUp = spaceBelow < 200 && spaceAbove > spaceBelow;
+      const available = openUp ? spaceAbove : spaceBelow;
+      const maxHeight = Math.max(120, Math.min(280, Math.floor(available)));
+      setMenuPos(
+        openUp
+          ? { left, bottom: vh - r.top + gap, width, maxHeight }
+          : { left, top: r.bottom + gap, width, maxHeight },
+      );
+    };
+    updatePos();
+    window.addEventListener('scroll', updatePos, { passive: true, capture: true });
+    window.addEventListener('resize', updatePos, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', updatePos, true);
+      window.removeEventListener('resize', updatePos);
+    };
   }, [open]);
 
-  // Click-outside + Escape close. One document listener, removed on close.
-  // The menu is ported to document.body, so "inside" = trigger container OR
-  // the ported menu element. We track the menu via a data attribute.
+  // Scroll the currently selected option into view when opening.
+  useEffect(() => {
+    if (!open || !menuRef.current) return;
+    const el = menuRef.current.querySelectorAll<HTMLElement>('.tsel-opt')[selectedIdx];
+    el?.scrollIntoView({ block: 'nearest' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // Click/tap-outside + Escape close. Uses pointerdown so touch taps on
+  // mobile close the menu immediately without waiting for mouse compatibility.
   useEffect(() => {
     if (!open) return;
-    const onDoc = (e: MouseEvent) => {
+    const onDoc = (e: PointerEvent) => {
       const target = e.target as HTMLElement;
       if (rootRef.current && rootRef.current.contains(target)) return;
       if (target.closest?.('[data-tsel-menu]')) return;
@@ -102,10 +141,10 @@ export function ThemedSelect({
         setOpen(false);
       }
     };
-    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('pointerdown', onDoc);
     window.addEventListener('keydown', onKey, true);
     return () => {
-      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('pointerdown', onDoc);
       window.removeEventListener('keydown', onKey, true);
     };
   }, [open]);
@@ -141,11 +180,19 @@ export function ThemedSelect({
 
   const menu = open ? (
     <ul
+      ref={menuRef}
       role="listbox"
       data-tsel-menu=""
       className="tsel-menu"
       aria-label={ariaLabel}
-      style={{ position: 'fixed', left: menuPos?.left ?? 0, top: menuPos?.top ?? 0, width: menuPos?.width ?? 240 }}
+      style={{
+        position: 'fixed',
+        left: menuPos?.left ?? 0,
+        top: menuPos?.top,
+        bottom: menuPos?.bottom,
+        width: menuPos?.width ?? 240,
+        maxHeight: menuPos?.maxHeight ?? 280,
+      }}
     >
       {options.map((o, i) => {
         const isSel = o.value === value;
