@@ -116,14 +116,19 @@ export function buildPortfolio(
     if (h.isAllocation && Number.isFinite(h.allocationPct) && (h.allocationPct ?? 0) > 0) {
       const deposit = depositById.get(h.accountId) ?? 0;
       const isPar = h.assetClass === 'cash' || h.assetClass === 'mmf';
-      // Non-par sleeves created while offline used to store refPrice: 1; treat
-      // refPrice <= 1 on non-par sleeves as unseeded so a later live quote (e.g.
-      // 786.42) never multiplies the slice by 786x.
+      // Non-par sleeves created while offline used to store exact refPrice: 1;
+      // treat exact 1 (without refFxRate) as unseeded so a live quote never
+      // scales a slice by 786x, while preserving calibrated prices <= 1.
       const rawRef = Number.isFinite(h.refPrice) && (h.refPrice ?? 0) > 0 ? h.refPrice! : 0;
-      const ref = !isPar && rawRef <= 1 ? 0 : rawRef;
+      const unseededFallback = !isPar && rawRef === 1 && !(h.refFxRate && h.refFxRate > 0);
+      const ref = unseededFallback ? 0 : rawRef;
       const live = q && Number.isFinite(q.price) && q.price > 0 ? q.price : ref; // offline -> flat
       const scale = ref > 0 ? live / ref : 1; // no ref -> value = the slice (flat)
-      const valueBase = ((h.allocationPct ?? 0) / 100) * deposit * scale;
+      const quoteCur = isPar ? h.holdingCurrency : (q?.currency ?? h.holdingCurrency);
+      const curFxRaw = quoteCur === base ? 1 : rates(quoteCur);
+      const curFx = Number.isFinite(curFxRaw) && curFxRaw > 0 ? curFxRaw : 0;
+      const fxScale = (h.refFxRate && h.refFxRate > 0 && curFx > 0) ? (curFx / h.refFxRate) : 1;
+      const valueBase = ((h.allocationPct ?? 0) / 100) * deposit * scale * fxScale;
       // valueBase is authoritative (totals + P&L are base-currency). Local is
       // only a display hint for these sleeves — mirror valueBase when the
       // holding currency IS the base, else it's shown "—" by the UI anyway.
@@ -199,6 +204,70 @@ export function buildPortfolio(
 export function fmtBase(value: number, base: string): string {
   const sym = currencyInfo(base).symbol;
   return `${sym}${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
+export interface SleeveCalibrationInput {
+  id: string;
+  assetClass: AssetClass;
+  allocationPct: number;
+  livePrice: number;
+  refPrice: number;
+  quoteCurrency: string;
+  curFxRate: number;
+}
+
+export interface CalibratedSleevePatch {
+  id: string;
+  refPrice: number;
+  refFxRate?: number;
+}
+
+/**
+ * One-time StashAway calibration: solves per-sleeve `refPrice = livePrice / k`
+ * (and captures `refFxRate`) so that buildPortfolio() matches `targetValueBase`
+ * today AND automatically tracks tomorrow's ticker + FX moves without needing
+ * daily manual broker updates. Cash/MMF sleeves stay flat at par (1.0).
+ */
+export function calibrateRoboSleeves(
+  sleeves: SleeveCalibrationInput[],
+  depositBase: number,
+  targetValueBase: number,
+  baseCurrency: string,
+): CalibratedSleevePatch[] | null {
+  if (!(depositBase > 0) || !(targetValueBase > 0)) return null;
+  let parBase = 0;
+  let marketBase = 0;
+  for (const s of sleeves) {
+    if (!(s.allocationPct > 0)) continue;
+    const isPar = s.assetClass === 'cash' || s.assetClass === 'mmf';
+    const slice = (s.allocationPct / 100) * depositBase;
+    const price = s.livePrice > 0 ? s.livePrice : s.refPrice;
+    if (isPar || !(price > 0)) {
+      parBase += slice;
+    } else {
+      marketBase += slice;
+    }
+  }
+  const remaining = targetValueBase - parBase;
+  if (!(marketBase > 0) || !(remaining > 0)) return null;
+  const k = remaining / marketBase;
+
+  const patches: CalibratedSleevePatch[] = [];
+  for (const s of sleeves) {
+    if (!(s.allocationPct > 0)) continue;
+    const isPar = s.assetClass === 'cash' || s.assetClass === 'mmf';
+    if (isPar) continue;
+    const price = s.livePrice > 0 ? s.livePrice : s.refPrice;
+    if (!(price > 0)) continue;
+    const newRef = price / k;
+    if (!Number.isFinite(newRef) || !(newRef > 0)) continue;
+    patches.push({
+      id: s.id,
+      refPrice: newRef,
+      refFxRate: s.quoteCurrency !== baseCurrency && s.curFxRate > 0 ? s.curFxRate : undefined,
+    });
+  }
+  return patches.length > 0 ? patches : null;
 }
 
 export const __test = { valueInBase, buildPortfolio };

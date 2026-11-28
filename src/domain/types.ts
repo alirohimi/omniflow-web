@@ -106,6 +106,10 @@ export interface InvestmentHolding {
   isAllocation?: boolean;
   allocationPct?: number;    // target weight, 0-100
   refPrice?: number;         // liveTicker value when the allocation was set
+  /** FX rate (base currency per 1 unit of quote currency) captured when
+   *  refPrice was calibrated/seeded. Allows StashAway MYR portfolios to track
+   *  USD/MYR moves automatically alongside ticker moves. */
+  refFxRate?: number;
 }
 
 /** BYOK LLM providers. 'none' = free on-device rule engine only.

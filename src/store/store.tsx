@@ -126,6 +126,8 @@ export interface AllocationSleeveInput {
   assetClass: InvestmentHolding['assetClass'];
   allocationPct: number;     // target weight, 0-100
   refPrice?: number;         // class ticker level when the allocation was set
+  /** FX rate (base per 1 quote currency) when refPrice was captured. */
+  refFxRate?: number;
   /** Optional explicit ticker symbol (e.g. 'CSPX', 'GLD', 'QQQ'). When set
    *  the live quote fetches THIS symbol instead of the class-level reference
    *  index, so P&L tracks the actual fund the user holds. Falls back to the
@@ -1223,6 +1225,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
               isAllocation: true,
               allocationPct: s.allocationPct,
               refPrice: ref,
+              ...(s.refFxRate && s.refFxRate > 0 ? { refFxRate: s.refFxRate } : {}),
             } as InvestmentHolding;
           });
         const next: VaultBlob = {

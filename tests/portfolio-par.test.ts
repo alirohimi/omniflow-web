@@ -9,7 +9,7 @@
 // ============================================================================
 
 import { describe, expect, it } from 'vitest';
-import { valueInBase, buildPortfolio } from '../src/ai/portfolio';
+import { valueInBase, buildPortfolio, calibrateRoboSleeves } from '../src/ai/portfolio';
 import { fxService } from '../src/services/fx';
 import type { RatesForBase } from '../src/services/fx';
 import type { InvestmentAccount, InvestmentHolding, QuoteSnapshot } from '../src/domain/types';
@@ -335,5 +335,68 @@ describe('buildPortfolio — StashAway-style allocation sleeves', () => {
     const p = buildPortfolio([a], [s1], quotes, 'MYR', ratesOf(fx));
     expect(p.byAccount[0].valueBase).toBe(10000);
     expect(p.byAccount[0].pnlBase).toBe(0);
+  });
+
+  it('one-time StashAway calibration matches today 1:1 and auto-tracks tomorrow ticker + FX moves', () => {
+    const deposit = 49_323.39;
+    const brokerToday = 53_500.0;
+    const a = accOf({ initialDepositBase: deposit });
+    const s1 = sleeve({ id: 's1', symbol: 'CSPX LN', assetClass: 'etf', isAllocation: true, allocationPct: 93.07 });
+    const s2 = sleeve({ id: 's2', symbol: 'GLDM', assetClass: 'gold', isAllocation: true, allocationPct: 5.96 });
+    const s3 = sleeve({ id: 's3', symbol: 'USD', assetClass: 'cash', isAllocation: true, allocationPct: 0.97, refPrice: 1 });
+
+    const fxToday = myrFx(4.45);
+    const quotesToday: Record<string, QuoteSnapshot> = {
+      'CSPX LN': { symbol: 'CSPX LN', assetClass: 'etf', price: 786.42, currency: 'USD', asOf: 0, source: 'yahoo' },
+      GLDM: { symbol: 'GLDM', assetClass: 'gold', price: 3668.5, currency: 'USD', asOf: 0, source: 'yahoo' },
+    };
+
+    const patches = calibrateRoboSleeves(
+      [
+        { id: 's1', assetClass: 'etf', allocationPct: 93.07, livePrice: 786.42, refPrice: 0, quoteCurrency: 'USD', curFxRate: 4.45 },
+        { id: 's2', assetClass: 'gold', allocationPct: 5.96, livePrice: 3668.5, refPrice: 0, quoteCurrency: 'USD', curFxRate: 4.45 },
+        { id: 's3', assetClass: 'cash', allocationPct: 0.97, livePrice: 1, refPrice: 1, quoteCurrency: 'MYR', curFxRate: 1 },
+      ],
+      deposit,
+      brokerToday,
+      'MYR',
+    );
+    expect(patches).not.toBeNull();
+    const byId = new Map(patches!.map((p) => [p.id, p]));
+    const cs = [s1, s2, s3].map((h) => {
+      const p = byId.get(h.id);
+      return p ? { ...h, refPrice: p.refPrice, refFxRate: p.refFxRate } : h;
+    });
+
+    // Today: total value matches StashAway's RM 53,500.00 to the exact cent.
+    const todaySum = buildPortfolio([a], cs, quotesToday, 'MYR', ratesOf(fxToday));
+    expect(todaySum.byAccount[0].valueBase).toBeCloseTo(brokerToday, 2);
+    expect(todaySum.byAccount[0].pnlBase).toBeCloseTo(brokerToday - deposit, 2);
+
+    // Tomorrow: CSPX +2%, Gold -1%, USD/MYR +1% (4.45 -> 4.4945).
+    const fxTomorrow = myrFx(4.4945);
+    const quotesTomorrow: Record<string, QuoteSnapshot> = {
+      'CSPX LN': { symbol: 'CSPX LN', assetClass: 'etf', price: 786.42 * 1.02, currency: 'USD', asOf: 1, source: 'yahoo' },
+      GLDM: { symbol: 'GLDM', assetClass: 'gold', price: 3668.5 * 0.99, currency: 'USD', asOf: 1, source: 'yahoo' },
+    };
+    const tomorrowSum = buildPortfolio([a], cs, quotesTomorrow, 'MYR', ratesOf(fxTomorrow));
+    const cspxToday = todaySum.byAccount[0].lines[0].valueBase;
+    const goldToday = todaySum.byAccount[0].lines[1].valueBase;
+    const cashToday = todaySum.byAccount[0].lines[2].valueBase;
+    const expectedTomorrow = cspxToday * 1.02 * 1.01 + goldToday * 0.99 * 1.01 + cashToday;
+    expect(tomorrowSum.byAccount[0].valueBase).toBeCloseTo(expectedTomorrow, 2);
+  });
+
+  it('calibrateRoboSleeves returns null if targetValue <= par cash slice', () => {
+    const patches = calibrateRoboSleeves(
+      [
+        { id: 's1', assetClass: 'etf', allocationPct: 80, livePrice: 500, refPrice: 0, quoteCurrency: 'USD', curFxRate: 4 },
+        { id: 's2', assetClass: 'cash', allocationPct: 20, livePrice: 1, refPrice: 1, quoteCurrency: 'MYR', curFxRate: 1 },
+      ],
+      10000,
+      1500, // <= 2000 par cash slice
+      'MYR',
+    );
+    expect(patches).toBeNull();
   });
 });

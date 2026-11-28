@@ -17,7 +17,7 @@ import { AutoInvestPanel, ContributionPanel } from './AutoInvestPanel';
 import { AllocationPie, colorForClass, type PieSlice } from '../components/AllocationPie';
 import { fxService, marketDataService } from '../services';
 import { portfolioPnl, computeEmergency } from '../insights';
-import { valueInBase } from '../ai/portfolio';
+import { calibrateRoboSleeves, valueInBase } from '../ai/portfolio';
 import type { AccountLine } from '../ai/portfolio';
 import { CURRENCIES, currencyInfo, EMERGENCY_DEFAULT, FAMED_STRATEGIES, formatMoney } from '../domain/enums';
 import { ThemedSelect } from '../components/ThemedSelect';
@@ -106,6 +106,7 @@ export function InvestmentsView() {
   const [platform, setPlatform] = useState('');
   const [acctType, setAcctType] = useState<InvestmentAccount['accountType']>('broker');
   const [deposit, setDeposit] = useState('');
+  const [roboCurrentStart, setRoboCurrentStart] = useState('');
   const [accountId, setAccountId] = useState('');
   const [symbol, setSymbol] = useState('');
   const [assetClass, setAssetClass] = useState<InvestmentHolding['assetClass']>('equity-us');
@@ -200,19 +201,23 @@ export function InvestmentsView() {
   }, [live.portfolio]);
 
   // Auto-heal non-par allocation sleeves created while offline (refPrice <= 1):
-  // once a live quote lands, anchor refPrice to that live price so future
-  // market moves calculate P&L automatically without needing to recreate.
+  // once a live quote lands, anchor refPrice + refFxRate so future market
+  // and FX moves calculate P&L automatically without needing to recreate.
   useEffect(() => {
     for (const h of vault.holdings) {
       if (!h.isAllocation || isParClass(h.assetClass)) continue;
       if (Number.isFinite(h.refPrice) && (h.refPrice ?? 0) > 1) continue;
       const q = live.quotes[h.symbol];
       if (q && (q.source === 'yahoo' || q.source === 'coingecko') && Number.isFinite(q.price) && q.price > 1) {
-        store.updateHolding(h.id, { refPrice: q.price });
+        const curFx = q.currency === base ? 1 : (live.fx ? fxService.toBase(1, q.currency, live.fx) : 0);
+        store.updateHolding(h.id, {
+          refPrice: q.price,
+          ...(q.currency !== base && curFx > 0 ? { refFxRate: curFx } : {}),
+        });
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live.quotes, vault.holdings]);
+  }, [live.quotes, live.fx, vault.holdings]);
 
   const pnl = useMemo(() => {
     if (!live.portfolio) return null;
@@ -416,7 +421,10 @@ export function InvestmentsView() {
   };
 
   // ---- CRUD handlers ----
-  const fetchSleeveRefPrice = async (assetClassName: InvestmentHolding['assetClass'], tickerStr: string): Promise<number> => {
+  const fetchSleeveQuote = async (
+    assetClassName: InvestmentHolding['assetClass'],
+    tickerStr: string,
+  ): Promise<{ price: number; currency: string }> => {
     const cleanTicker = tickerStr.trim().toUpperCase();
     try {
       if (cleanTicker) {
@@ -426,11 +434,15 @@ export function InvestmentsView() {
           holdingCurrency: base, units: 1, averageEntryPrice: 1,
           currentPriceLocal: 0, currentPriceBase: 0,
         });
-        return Number.isFinite(q.price) && q.price > 0 ? q.price : 0;
+        return {
+          price: Number.isFinite(q.price) && q.price > 0 ? q.price : 0,
+          currency: q.currency || base,
+        };
       }
-      return await marketDataService.referencePriceFor(assetClassName, base);
+      const p = await marketDataService.referencePriceFor(assetClassName, base);
+      return { price: p, currency: base };
     } catch {
-      return 0;
+      return { price: 0, currency: base };
     }
   };
 
@@ -439,29 +451,75 @@ export function InvestmentsView() {
     if (!name) return;
     const d = parseFloat(deposit);
     const depositOk = Number.isFinite(d) && d > 0;
+    const curStart = parseFloat(roboCurrentStart);
+    const curStartOk = Number.isFinite(curStart) && curStart > 0;
     if (isRobo) {
       const validRows = roboRows.filter((r) => Number.isFinite(parseFloat(r.pct)) && parseFloat(r.pct) > 0);
       if (validRows.length === 0) {
         toast('Pick at least one asset to allocate to');
         return;
       }
-      const sleeves = await Promise.all(
-        validRows.map(async (r) => {
+      const rates = live.fx ?? (await fxService.latest(base).catch(() => null));
+      const rawSleeves = await Promise.all(
+        validRows.map(async (r, idx) => {
           const cleanTicker = r.ticker.trim().toUpperCase();
           const cacheKey = cleanTicker || r.assetClass;
           let ref = saRefs[cacheKey] || 0;
-          if (ref <= 0 && !isParClass(r.assetClass)) {
-            ref = await fetchSleeveRefPrice(r.assetClass, cleanTicker);
-            if (ref > 0) setSaRefs((prev) => ({ ...prev, [cacheKey]: ref }));
+          let quoteCur = base;
+          if (!isParClass(r.assetClass)) {
+            const q = await fetchSleeveQuote(r.assetClass, cleanTicker);
+            if (q.price > 0) {
+              ref = q.price;
+              quoteCur = q.currency;
+              setSaRefs((prev) => ({ ...prev, [cacheKey]: q.price }));
+            }
           }
+          const curFx = quoteCur === base ? 1 : (rates ? fxService.toBase(1, quoteCur, rates) : 0);
           return {
+            id: `tmp-${idx}`,
             assetClass: r.assetClass,
             allocationPct: parseFloat(r.pct),
             refPrice: ref,
+            refFxRate: quoteCur !== base && Number.isFinite(curFx) && curFx > 0 ? curFx : undefined,
+            quoteCurrency: quoteCur,
+            curFxRate: Number.isFinite(curFx) ? curFx : 0,
             ticker: cleanTicker || undefined,
           };
         }),
       );
+      if (depositOk && curStartOk) {
+        const patches = calibrateRoboSleeves(
+          rawSleeves.map((s) => ({
+            id: s.id,
+            assetClass: s.assetClass,
+            allocationPct: s.allocationPct,
+            livePrice: s.refPrice,
+            refPrice: s.refPrice,
+            quoteCurrency: s.quoteCurrency,
+            curFxRate: s.curFxRate,
+          })),
+          d,
+          curStart,
+          base,
+        );
+        if (patches) {
+          const byId = new Map(patches.map((p) => [p.id, p]));
+          for (const s of rawSleeves) {
+            const p = byId.get(s.id);
+            if (p) {
+              s.refPrice = p.refPrice;
+              s.refFxRate = p.refFxRate;
+            }
+          }
+        }
+      }
+      const sleeves = rawSleeves.map(({ assetClass: ac, allocationPct, refPrice, refFxRate, ticker }) => ({
+        assetClass: ac,
+        allocationPct,
+        refPrice,
+        refFxRate,
+        ticker,
+      }));
       const id = store.addAllocationPortfolio({
         platformName: name,
         netDepositBase: depositOk ? d : 0,
@@ -471,7 +529,12 @@ export function InvestmentsView() {
       setAccountId(id);
       setPlatform('');
       setDeposit('');
-      toast(`Created ${name} — ${sleeves.length} asset${sleeves.length > 1 ? 's' : ''} tracking live prices`);
+      setRoboCurrentStart('');
+      toast(
+        depositOk && curStartOk
+          ? `Created & calibrated ${name} to ${formatMoney(curStart, base)} — future moves track live prices`
+          : `Created ${name} — ${sleeves.length} asset${sleeves.length > 1 ? 's' : ''} tracking live prices`,
+      );
       return;
     }
     const id = store.addAccount({
@@ -636,19 +699,67 @@ export function InvestmentsView() {
   const saveCostBasis = async () => {
     let touched = 0;
     let brokerSet = 0;
+    let calibrated = 0;
+    const rates = live.fx ?? (await fxService.latest(base).catch(() => null));
     for (const a of vault.accounts) {
       const raw = (costDrafts[a.id] ?? '').trim();
       const totalInvested = parseFloat(raw);
       const braw = (brokerValueDrafts[a.id] ?? '').trim();
       const brokerVal = parseFloat(braw);
       const patch: Partial<InvestmentAccount> = {};
-      if (braw !== '' && Number.isFinite(brokerVal) && brokerVal > 0) {
-        patch.brokerValueBase = brokerVal;
-        brokerSet++;
-      } else if (a.brokerValueBase != null) {
-        patch.brokerValueBase = undefined;
+      const depositValid = raw !== '' && Number.isFinite(totalInvested) && totalInvested > 0;
+      const acctAllocSleeves = a.accountType === 'robo'
+        ? vault.holdings.filter((h) => h.accountId === a.id && h.isAllocation)
+        : [];
+      let didCalibrate = false;
+
+      if (braw !== '' && Number.isFinite(brokerVal) && brokerVal > 0 && acctAllocSleeves.length > 0) {
+        const depositForCalib = depositValid ? totalInvested : (a.initialDepositBase ?? 0);
+        if (depositForCalib > 0) {
+          const needBatch = acctAllocSleeves.some((s) => !isParClass(s.assetClass) && !(live.quotes[s.symbol]?.price > 0));
+          const freshQuotes = needBatch ? await marketDataService.batch(acctAllocSleeves).catch(() => ({} as typeof live.quotes)) : {};
+          const mergedQuotes = { ...live.quotes, ...freshQuotes };
+          const patches = calibrateRoboSleeves(
+            acctAllocSleeves.map((s) => {
+              const q = mergedQuotes[s.symbol];
+              const qCur = isParClass(s.assetClass) ? s.holdingCurrency : (q?.currency ?? s.holdingCurrency);
+              const curFx = qCur === base ? 1 : (rates ? fxService.toBase(1, qCur, rates) : 0);
+              return {
+                id: s.id,
+                assetClass: s.assetClass,
+                allocationPct: s.allocationPct ?? 0,
+                livePrice: q && Number.isFinite(q.price) && q.price > 0 ? q.price : 0,
+                refPrice: Number.isFinite(s.refPrice) && (s.refPrice ?? 0) > 1 ? s.refPrice! : 0,
+                quoteCurrency: qCur,
+                curFxRate: Number.isFinite(curFx) ? curFx : 0,
+              };
+            }),
+            depositForCalib,
+            brokerVal,
+            base,
+          );
+          if (patches) {
+            for (const p of patches) {
+              store.updateHolding(p.id, { refPrice: p.refPrice, refFxRate: p.refFxRate });
+            }
+            // Clear any static brokerValueBase so live ticker + FX moves track StashAway automatically from here on.
+            if (a.brokerValueBase != null) patch.brokerValueBase = undefined;
+            didCalibrate = true;
+            calibrated++;
+          }
+        }
       }
-      if (raw !== '' && Number.isFinite(totalInvested) && totalInvested > 0) {
+
+      if (!didCalibrate) {
+        if (braw !== '' && Number.isFinite(brokerVal) && brokerVal > 0) {
+          patch.brokerValueBase = brokerVal;
+          brokerSet++;
+        } else if (a.brokerValueBase != null) {
+          patch.brokerValueBase = undefined;
+        }
+      }
+
+      if (depositValid) {
         const line = live.portfolio?.byAccount.find((l) => l.account.id === a.id);
         const acctValue = braw !== '' && Number.isFinite(brokerVal) && brokerVal > 0
           ? brokerVal
@@ -658,7 +769,7 @@ export function InvestmentsView() {
         }
         patch.initialDepositBase = totalInvested;
         const distributable = (line?.lines ?? []).filter(
-          (l) => !isParClass(l.holding.assetClass) && l.valueBase > 0 && Number.isFinite(l.holding.units) && l.holding.units > 0,
+          (l) => !l.holding.isAllocation && !isParClass(l.holding.assetClass) && l.valueBase > 0 && Number.isFinite(l.holding.units) && l.holding.units > 0,
         );
         const totalDistValue = distributable.reduce((s, l) => s + l.valueBase, 0);
         if (totalDistValue > 0) {
@@ -679,6 +790,7 @@ export function InvestmentsView() {
     }
     setCostOpen(false);
     const bits: string[] = [];
+    if (calibrated > 0) bits.push(`calibrated ${calibrated} StashAway portfolio${calibrated === 1 ? '' : 's'} (auto-tracks live)`);
     if (brokerSet > 0) bits.push(`${brokerSet} broker value${brokerSet === 1 ? '' : 's'}`);
     if (touched > 0) bits.push(`${touched} holding${touched === 1 ? '' : 's'}`);
     toast(bits.length > 0 ? `Saved · ${bits.join(', ')}` : 'Cost basis saved');
@@ -1348,6 +1460,11 @@ export function InvestmentsView() {
                   <label className="field"><span>Put in ({base})</span>
                     <input type="number" inputMode="decimal" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="e.g. 15000" />
                   </label>
+                  {isRobo && (
+                    <label className="field"><span>Current value ({base}) (optional)</span>
+                      <input type="number" inputMode="decimal" value={roboCurrentStart} onChange={(e) => setRoboCurrentStart(e.target.value)} placeholder="Match StashAway today" />
+                    </label>
+                  )}
                 </div>
                 {isRobo && (
                   <div className="field" style={{ marginTop: 10 }}>
@@ -1654,10 +1771,54 @@ export function InvestmentsView() {
                     <div className="list" style={{ marginTop: 0 }}>
                       {holds.map((h) => {
                         const q = live.quotes[h.symbol];
+                        const par = isParClass(h.assetClass);
+                        if (h.isAllocation) {
+                          const acct = vault.accounts.find((a) => a.id === h.accountId);
+                          const accLine = accLines.get(h.accountId);
+                          const sleeveLine = accLine?.lines.find((l) => l.holding.id === h.id);
+                          const val = sleeveLine?.valueBase ?? 0;
+                          const sliceCost = ((h.allocationPct ?? 0) / 100) * (acct?.initialDepositBase ?? 0);
+                          const hasSlicePnl = !par && sliceCost > 0 && val > 0;
+                          const profit = hasSlicePnl ? val - sliceCost : 0;
+                          const ret = hasSlicePnl ? (profit / sliceCost) * 100 : 0;
+                          const ok = sleeveLine ? sleeveLine.ok : val > 0;
+                          return (
+                            <div className="item" key={h.id}>
+                              <div className="grow">
+                                <div className="title">
+                                  {h.symbol}{' '}
+                                  <span className="muted small">
+                                    · {(h.allocationPct ?? 0).toFixed(1)}%
+                                    {!par && q && q.price > 0 ? ` · ${q.currency} ${q.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : ''}
+                                  </span>
+                                </div>
+                                <div className="meta">
+                                  {hasSlicePnl && (
+                                    <span className={profit >= 0 ? 'pos' : 'neg'}>
+                                      {profit >= 0 ? '+' : ''}{formatMoney(profit, base)} ({ret >= 0 ? '+' : ''}{ret.toFixed(1)}%)
+                                    </span>
+                                  )}
+                                  {!ok && ' · awaiting price'}
+                                </div>
+                              </div>
+                              <div className="amt">{ok ? formatMoney(val, base) : '—'}</div>
+                              <button className="edit" aria-label={`Edit ${h.symbol}`} onClick={() => openEdit(h)}>
+                                <IPencil size={15} />
+                              </button>
+                              <DelButton
+                                label={`Delete ${h.symbol}`}
+                                onConfirm={() => {
+                                  store.deleteHolding(h.id);
+                                  if (editHolding?.id === h.id) closeEdit();
+                                  toast(`Deleted ${h.symbol}`);
+                                }}
+                              />
+                            </div>
+                          );
+                        }
                         const { valueBase: val, costBase: cost, ok } = valueInBase(h, q, base, rateToBase);
                         const ret = ok && cost > 0 ? ((val - cost) / cost) * 100 : 0;
                         const profit = ok && cost > 0 ? val - cost : 0;
-                        const par = isParClass(h.assetClass);
                         const showVal = ok ? formatMoney(val, base) : '—';
                         return (
                           <div className="item" key={h.id}>
@@ -1801,7 +1962,7 @@ export function InvestmentsView() {
       {costOpen && (
         <Modal title="Match your broker's amounts" onClose={() => setCostOpen(false)}>
           <p className="small muted" style={{ marginTop: 0 }}>
-            Set each account's net deposits and (optionally) current broker value so P&amp;L matches your broker 1:1.
+            Enter your net deposits and StashAway&apos;s current value once. For robo/StashAway accounts, OmniFlow calibrates each sleeve so today matches 1:1 and tomorrow tracks live ticker &amp; FX moves automatically.
           </p>
           <div className="list" style={{ marginTop: 8 }}>
             {vault.accounts.map((a) => {
