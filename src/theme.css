@@ -745,9 +745,11 @@ input[type='range'].custom-slider::-webkit-slider-thumb {
 }
 .disclosure-toggle[aria-expanded="true"] .disclosure-chev { transform: rotate(45deg); }
 .disclosure-body { padding: 4px 0; }
+.disclosure-desktop-title { display: none; }
 @media (pointer: fine) {
   .disclosure-toggle { display: none; }
   .disclosure-body { padding: 0; }
+  .disclosure-desktop-title { display: block; }
 }
 
 /* ---------- Hero / Stat Helpers ---------- */
