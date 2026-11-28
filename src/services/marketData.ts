@@ -40,6 +40,48 @@ const STASHAWAY_INDEX_MAP: Record<string, string> = {
   GLD:   'GC=F',  // user may type either gold ticker
 };
 
+/** Bloomberg-style exchange suffix -> Yahoo Finance suffix.
+ *  Users copying from StashAway factsheets often type `CSPX LN` or `1155 MK`
+ *  instead of `CSPX.L` / `1155.KL`. */
+const BLOOMBERG_EXCHANGE_MAP: Record<string, string> = {
+  LN: '.L',   // London Stock Exchange
+  MK: '.KL',  // Bursa Malaysia
+  SP: '.SI',  // Singapore Exchange
+  HK: '.HK',  // Hong Kong
+  US: '',     // US equities/ETFs (no suffix on Yahoo)
+  UP: '',
+  UQ: '',
+  UA: '',
+};
+
+/** Normalize user-entered equity/ETF/gold ticker into a Yahoo Finance symbol. */
+export function normalizeYahooSymbol(raw: string): string {
+  const up = raw.trim().toUpperCase();
+  if (STASHAWAY_INDEX_MAP[up]) return STASHAWAY_INDEX_MAP[up];
+  const parts = up.split(/\s+/);
+  if (parts.length === 2 && parts[1] in BLOOMBERG_EXCHANGE_MAP) {
+    return `${parts[0]}${BLOOMBERG_EXCHANGE_MAP[parts[1]]}`;
+  }
+  return up;
+}
+
+/** Build the Yahoo Finance v8 chart URL, routing through the CORS-open
+ *  Supabase Edge Function when configured so browser PWAs aren't blocked. */
+export function yahooChartUrl(symbol: string): string {
+  const env = (import.meta as unknown as { env?: Record<string, string | undefined> })?.env;
+  const explicit = env?.VITE_YAHOO_RELAY_URL?.trim();
+  const supa = env?.VITE_SUPABASE_URL?.trim();
+  const derived =
+    supa && !/^https?:\/\/(localhost|127\.0\.0\.1)\b/i.test(supa)
+      ? `${supa.replace(/\/+$/, '').replace('.supabase.co', '.functions.supabase.co')}/yahoo-quote`
+      : '';
+  const relay = explicit || derived;
+  if (relay) {
+    return `${relay}?symbol=${encodeURIComponent(symbol)}`;
+  }
+  return `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
+}
+
 /** Per-ASSET-CLASS reference ticker — the broad index/coin that a StashAway-style
  *  allocation sleeve tracks. When a user builds a StashAway allocation, each
  *  sleeve's value is its target % × net deposit × (livePrice / refPrice), where
@@ -146,20 +188,16 @@ export class MarketDataService {
         case 'equity-local':
         case 'etf':
           // StashAway model sleeves (CSPX, GLDM, …) price off the BROAD
-          // INDEX their UCITS fund tracks — the same reference the fund's
-          // daily NAV uses. Fetch THAT index so our live quote tracks the
-          // same thing (minimal drift = fund fee + FX only, no instrument
-          // mismatch). Unknown symbols fall through to the raw ticker.
-          const idx = STASHAWAY_INDEX_MAP[h.symbol.toUpperCase()] ?? h.symbol;
+          // INDEX their UCITS fund tracks, and Bloomberg-style tickers like
+          // `CSPX LN` normalize to `CSPX.L` for Yahoo Finance.
+          const idx = normalizeYahooSymbol(h.symbol);
           return await this.yahooQuote(idx, h.holdingCurrency, h.symbol);
         case 'gold':
           // Gold: track the spot reference the StashAway gold sleeve uses.
           // 'GC=F' = front-month COMEX gold futures (close proxy for spot).
-          // A user who types GLD/GLDM/GOLD gets the same gold reference so
-          // the quote lines up with the fund's daily NAV (drift = fee only).
           {
-            const g = STASHAWAY_INDEX_MAP[h.symbol.toUpperCase()]
-              ?? (h.symbol === 'GOLD' || h.symbol === 'GLD' || h.symbol === 'GLDM' ? 'GC=F' : h.symbol);
+            const norm = normalizeYahooSymbol(h.symbol);
+            const g = norm === 'GOLD' ? 'GC=F' : norm;
             return await this.yahooQuote(g, h.holdingCurrency, h.symbol === g ? undefined : h.symbol);
           }
         case 'cash':
@@ -227,7 +265,7 @@ export class MarketDataService {
 
   private async yahooQuote(symbol: string, holdingCurrency: string, displaySymbol?: string): Promise<QuoteResult> {
     const res = await fetchWithTimeout(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`,
+      yahooChartUrl(symbol),
       { headers: { Accept: 'application/json' } },
     );
     if (!res.ok) throw new Error(`yahoo ${res.status}`);

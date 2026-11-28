@@ -7,7 +7,7 @@
 // ============================================================================
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { MarketDataService, baseCoin } from '../src/services/marketData';
+import { MarketDataService, baseCoin, normalizeYahooSymbol } from '../src/services/marketData';
 import { CurrencyExchangeService } from '../src/services/fx';
 import type { InvestmentHolding } from '../src/domain/types';
 
@@ -216,6 +216,17 @@ describe('MarketDataService.quote — equity (yahoo)', () => {
     expect(r.price).toBe(4_074.9);
     expect(String(f.mock.calls[0][0])).toContain('GC%3DF');
     expect(r.symbol).toBe('GLDM');
+  });
+
+  it('normalizes Bloomberg-style tickers (CSPX LN -> CSPX.L, 1155 MK -> 1155.KL)', async () => {
+    expect(normalizeYahooSymbol('CSPX LN')).toBe('CSPX.L');
+    expect(normalizeYahooSymbol('1155 MK')).toBe('1155.KL');
+    expect(normalizeYahooSymbol('GLDM US')).toBe('GLDM');
+    const f = mockFetchJson(yahooBody(612.5, 'USD'));
+    const r = await svc.quote(h({ assetClass: 'etf', symbol: 'CSPX LN', holdingCurrency: 'USD' }));
+    expect(r.ok).toBe(true);
+    expect(r.price).toBe(612.5);
+    expect(String(f.mock.calls[0][0])).toContain('CSPX.L');
   });
 });
 
