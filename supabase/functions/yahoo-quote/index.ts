@@ -23,45 +23,44 @@ function jsonError(status: number, message: string): Response {
   });
 }
 
-export default {
-  async handler(req: Request): Promise<Response> {
-    if (req.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: CORS });
-    }
-    if (req.method !== "GET") {
-      return jsonError(405, "GET only");
-    }
+Deno.serve(async (req: Request): Promise<Response> => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: CORS });
+  }
+  if (req.method !== "GET") {
+    return jsonError(405, "GET only");
+  }
 
-    const url = new URL(req.url);
-    const symbol = (url.searchParams.get("symbol") ?? "").trim();
-    if (!symbol || !SYMBOL_RE.test(symbol)) {
-      return jsonError(400, "Invalid or missing ?symbol=");
-    }
+  const url = new URL(req.url);
+  const symbol = (url.searchParams.get("symbol") ?? "").trim();
+  if (!symbol || !SYMBOL_RE.test(symbol)) {
+    return jsonError(400, "Invalid or missing ?symbol=");
+  }
 
-    const upstream = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
-    let up: Response;
-    try {
-      up = await fetch(upstream, {
-        headers: {
-          Accept: "application/json",
-          "User-Agent": "Mozilla/5.0 (compatible; OmniFlow/1.0)",
-        },
-      });
-    } catch (e) {
-      return jsonError(
-        502,
-        `Yahoo fetch failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
-
-    const text = await up.text();
-    return new Response(text, {
-      status: up.status,
+  const upstream = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
+  let up: Response;
+  try {
+    up = await fetch(upstream, {
+      signal: AbortSignal.timeout(8000),
       headers: {
-        ...CORS,
-        "content-type": up.headers.get("content-type") ?? "application/json",
-        "cache-control": up.ok ? "public, max-age=60" : "no-store",
+        Accept: "application/json",
+        "User-Agent": "Mozilla/5.0 (compatible; OmniFlow/1.0)",
       },
     });
-  },
-};
+  } catch (e) {
+    return jsonError(
+      502,
+      `Yahoo fetch failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
+  const text = await up.text();
+  return new Response(text, {
+    status: up.status,
+    headers: {
+      ...CORS,
+      "content-type": up.headers.get("content-type") ?? "application/json",
+      "cache-control": up.ok ? "public, max-age=60" : "no-store",
+    },
+  });
+});
