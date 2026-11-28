@@ -1201,7 +1201,10 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         const sleeves: InvestmentHolding[] = input.sleeves
           .filter((s) => Number.isFinite(s.allocationPct) && s.allocationPct > 0)
           .map((s, i) => {
-            const ref = Number.isFinite(s.refPrice) && (s.refPrice ?? 0) > 0 ? s.refPrice! : 1;
+            const isPar = s.assetClass === 'cash' || s.assetClass === 'mmf';
+            const ref = Number.isFinite(s.refPrice) && (s.refPrice ?? 0) > 0
+              ? s.refPrice!
+              : (isPar ? 1 : 0);
             const sliceBase = (s.allocationPct / 100) * dep;
             // Use the user's explicit ticker when provided; fall back to the
             // class-level reference index (e.g. ^GSPC for equity-us) so the

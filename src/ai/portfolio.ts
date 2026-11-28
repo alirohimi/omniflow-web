@@ -115,7 +115,12 @@ export function buildPortfolio(
     // this is what makes a StashAway-style allocation track auto-rebalance.
     if (h.isAllocation && Number.isFinite(h.allocationPct) && (h.allocationPct ?? 0) > 0) {
       const deposit = depositById.get(h.accountId) ?? 0;
-      const ref = Number.isFinite(h.refPrice) && (h.refPrice ?? 0) > 0 ? h.refPrice! : 0;
+      const isPar = h.assetClass === 'cash' || h.assetClass === 'mmf';
+      // Non-par sleeves created while offline used to store refPrice: 1; treat
+      // refPrice <= 1 on non-par sleeves as unseeded so a later live quote (e.g.
+      // 786.42) never multiplies the slice by 786x.
+      const rawRef = Number.isFinite(h.refPrice) && (h.refPrice ?? 0) > 0 ? h.refPrice! : 0;
+      const ref = !isPar && rawRef <= 1 ? 0 : rawRef;
       const live = q && Number.isFinite(q.price) && q.price > 0 ? q.price : ref; // offline -> flat
       const scale = ref > 0 ? live / ref : 1; // no ref -> value = the slice (flat)
       const valueBase = ((h.allocationPct ?? 0) / 100) * deposit * scale;

@@ -325,4 +325,15 @@ describe('buildPortfolio — StashAway-style allocation sleeves', () => {
     expect(p.byAccount[0].valueBase).toBeCloseTo(10800);
     expect(p.byAccount[0].pnlBase).toBeCloseTo(800);
   });
+
+  it('treats unseeded refPrice=1 on non-par sleeves as flat instead of scaling by 786x', () => {
+    const a = accOf({ initialDepositBase: 10000 });
+    const s1 = sleeve({ id: 's1', symbol: 'CSPX LN', assetClass: 'etf', isAllocation: true, allocationPct: 100, refPrice: 1 });
+    const quotes: Record<string, QuoteSnapshot> = {
+      'CSPX LN': { symbol: 'CSPX LN', assetClass: 'etf', price: 786.42, currency: 'USD', asOf: 0, source: 'yahoo' },
+    };
+    const p = buildPortfolio([a], [s1], quotes, 'MYR', ratesOf(fx));
+    expect(p.byAccount[0].valueBase).toBe(10000);
+    expect(p.byAccount[0].pnlBase).toBe(0);
+  });
 });

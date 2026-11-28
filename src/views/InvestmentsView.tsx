@@ -199,6 +199,21 @@ export function InvestmentsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live.portfolio]);
 
+  // Auto-heal non-par allocation sleeves created while offline (refPrice <= 1):
+  // once a live quote lands, anchor refPrice to that live price so future
+  // market moves calculate P&L automatically without needing to recreate.
+  useEffect(() => {
+    for (const h of vault.holdings) {
+      if (!h.isAllocation || isParClass(h.assetClass)) continue;
+      if (Number.isFinite(h.refPrice) && (h.refPrice ?? 0) > 1) continue;
+      const q = live.quotes[h.symbol];
+      if (q && (q.source === 'yahoo' || q.source === 'coingecko') && Number.isFinite(q.price) && q.price > 1) {
+        store.updateHolding(h.id, { refPrice: q.price });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live.quotes, vault.holdings]);
+
   const pnl = useMemo(() => {
     if (!live.portfolio) return null;
     return portfolioPnl(live.portfolio, vault.accounts, vault.contributions ?? []);
