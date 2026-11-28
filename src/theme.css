@@ -628,81 +628,442 @@ input[type='range'].custom-slider::-webkit-slider-thumb {
 .detail-dl-row dt { color: var(--muted); }
 .detail-dl-row dd { margin: 0; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
 
-/* ---------- Coach (chat) ---------- */
-.coach-chat {
-  display: flex; flex-direction: column; gap: 10px;
-  min-height: 44vh; max-height: 60vh; overflow-y: auto;
-  padding: 14px 2px 8px;
+/* ---------- Coach (Gemini AI Web Chat) ---------- */
+.gem-shell {
+  display: flex;
+  position: relative;
+  height: calc(100dvh - 156px);
+  min-height: 480px;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow);
 }
-.coach-welcome { text-align: center; padding: 24px 8px; }
-.coach-welcome-ico {
-  width: 46px; height: 46px; margin: 0 auto 10px;
-  display: grid; place-items: center; border-radius: 14px;
-  background: var(--accent-soft); color: var(--accent);
+@media (min-width: 768px) {
+  .gem-shell { height: calc(100dvh - 108px); }
 }
-.coach-welcome h3 { margin: 0 0 6px; font-size: 17px; }
-.coach-welcome p { margin: 0 auto 14px; max-width: 44ch; font-size: 13.5px; color: var(--muted); line-height: 1.5; }
-.coach-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
-.coach-chips .chip {
-  cursor: pointer; border: 1px solid var(--line-2); background: var(--bg-2);
-  font-size: 12.5px; padding: 7px 13px; border-radius: 999px;
-}
-.coach-chips .chip:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 
-.msg { display: flex; }
-.msg.user { justify-content: flex-end; }
-.msg.coach { justify-content: flex-start; }
-.msg-body { max-width: 82%; display: flex; flex-direction: column; gap: 3px; }
-.msg.user .msg-body { align-items: flex-end; }
-.bubble {
-  padding: 11px 14px; border-radius: 14px; font-size: 14px; line-height: 1.55;
+.gem-backdrop {
+  position: fixed; inset: 0; z-index: 70;
+  background: rgba(2, 6, 23, 0.55);
+  backdrop-filter: blur(2px);
+}
+@media (min-width: 900px) { .gem-backdrop { display: none; } }
+
+.gem-sidebar {
+  position: fixed; top: 0; bottom: 0; left: 0; z-index: 75;
+  width: 272px;
+  background: var(--bg-2);
+  border-right: 1px solid var(--line);
+  display: flex; flex-direction: column;
+  padding: 14px 12px calc(14px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-100%);
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.gem-sidebar.open { transform: translateX(0); }
+
+@media (min-width: 900px) {
+  .gem-sidebar {
+    position: static;
+    transform: none;
+    width: 0;
+    padding: 0;
+    border-right: 0;
+    overflow: hidden;
+    flex-shrink: 0;
+    transition: width 200ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .gem-sidebar.open {
+    width: 264px;
+    padding: 14px 12px;
+    border-right: 1px solid var(--line);
+  }
+}
+
+.gem-sidebar-top {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 14px;
+}
+.gem-new-btn {
+  flex: 1; min-height: 42px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  background: var(--card);
+  color: var(--text);
+  font: inherit; font-size: 13.5px; font-weight: 600;
+  cursor: pointer; transition: border-color .15s, background .15s;
+}
+.gem-new-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+.gem-sidebar-lbl {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.7px; color: var(--muted);
+  padding: 4px 10px 8px;
+}
+
+.gem-thread-list {
+  flex: 1; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.gem-thread {
+  display: flex; align-items: center; gap: 6px;
+  min-height: 44px; padding: 6px 8px 6px 10px;
+  border-radius: 10px;
+  transition: background .12s;
+}
+.gem-thread:hover { background: var(--bg-3); }
+.gem-thread.active { background: var(--accent-soft); }
+.gem-thread-main {
+  flex: 1; min-width: 0; cursor: pointer;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.gem-thread-title {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gem-thread.active .gem-thread-title { color: var(--accent); }
+.gem-thread-sub { font-size: 11px; color: var(--faint); }
+.gem-rename-input {
+  width: 100%; background: var(--bg-2);
+  border: 1px solid var(--accent); border-radius: 6px;
+  padding: 4px 8px; color: var(--text); font: inherit; font-size: 13px;
+}
+
+.gem-thread-acts { display: flex; gap: 2px; flex-shrink: 0; }
+.gem-thread-act {
+  min-width: 30px; min-height: 30px; padding: 0 6px;
+  border-radius: 7px; border: 0; background: transparent;
+  color: var(--muted); font: inherit; font-size: 11px; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; opacity: 0.75;
+}
+.gem-thread-act:hover { background: var(--card-2); color: var(--text); opacity: 1; }
+.gem-thread-act.armed { background: var(--bad); color: #fff; opacity: 1; }
+@media (pointer: coarse) {
+  .gem-thread-act { min-width: 44px; min-height: 44px; }
+}
+
+.gem-sidebar-foot {
+  margin-top: 10px; padding: 10px 10px 2px;
+  border-top: 1px solid var(--line);
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11.5px; color: var(--muted);
+}
+.gem-engine-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  background: var(--faint);
+}
+.gem-engine-dot.live { background: var(--good); box-shadow: 0 0 8px var(--good); }
+.gem-engine-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.gem-main {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column;
+  background: var(--card);
+}
+
+.gem-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.gem-head-left, .gem-head-right {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+}
+.gem-brand {
+  display: flex; align-items: baseline; gap: 6px; min-width: 0;
+  overflow: hidden; white-space: nowrap;
+}
+.gem-brand-name {
+  font-family: var(--font-display); font-weight: 700; font-size: 15px;
+  letter-spacing: -0.2px;
+}
+.gem-brand-thread {
+  font-size: 12.5px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gem-icon-btn {
+  width: 36px; height: 36px; flex: none;
+  display: inline-grid; place-items: center;
+  border-radius: 10px; border: 1px solid transparent;
+  background: transparent; color: var(--muted);
+  cursor: pointer; transition: background .12s, color .12s;
+}
+.gem-icon-btn:hover { background: var(--bg-2); color: var(--text); }
+@media (pointer: coarse) {
+  .gem-icon-btn { width: 44px; height: 44px; }
+}
+@media (min-width: 900px) { .gem-mobile-only { display: none; } }
+
+.gem-scroll {
+  flex: 1; overflow-y: auto;
+  padding: 20px 16px 12px;
+}
+.gem-col {
+  width: 100%; max-width: 780px; margin: 0 auto;
+}
+
+/* Welcome greeting & suggestion cards */
+.gem-welcome {
+  padding: clamp(20px, 5vh, 52px) 4px 16px;
+  display: flex; flex-direction: column; align-items: flex-start;
+}
+.gem-spark-ring {
+  width: 44px; height: 44px; border-radius: 14px;
+  display: grid; place-items: center;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(14, 165, 233, 0.2));
+  color: var(--accent); margin-bottom: 14px;
+}
+.gem-hello {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(28px, 4.5vw, 40px);
+  font-weight: 800; letter-spacing: -0.9px; line-height: 1.12;
+  background: linear-gradient(90deg, #818cf8 0%, #38bdf8 55%, #34d399 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.gem-sub {
+  margin: 6px 0 22px;
+  font-size: clamp(16px, 2.2vw, 20px);
+  color: var(--muted); font-weight: 500;
+}
+.gem-suggestions {
+  width: 100%;
+  display: grid; grid-template-columns: 1fr; gap: 10px;
+}
+@media (min-width: 600px) {
+  .gem-suggestions { grid-template-columns: repeat(2, 1fr); }
+}
+.gem-sug-card {
+  text-align: left;
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--text); font: inherit; cursor: pointer;
+  transition: border-color .15s, background .15s, transform .12s;
+}
+.gem-sug-card:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  transform: translateY(-1px);
+}
+.gem-sug-tag {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.6px; color: var(--accent);
+}
+.gem-sug-title { font-size: 14px; font-weight: 700; }
+.gem-sug-prompt { font-size: 12.5px; color: var(--muted); }
+
+.gem-extra-chip {
+  margin-top: 12px;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 14px; min-height: 40px;
+  border-radius: 999px; border: 1px solid var(--line-2);
+  background: transparent; color: var(--muted);
+  font: inherit; font-size: 12.5px; cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.gem-extra-chip:hover { border-color: var(--accent); color: var(--text); }
+
+/* Messages feed (Gemini editorial AI + user pill) */
+.gem-feed {
+  display: flex; flex-direction: column; gap: 20px;
+  padding-bottom: 10px;
+}
+.gem-turn-user {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+}
+.gem-user-bubble {
+  max-width: min(82%, 560px);
+  padding: 11px 16px;
+  border-radius: 20px 20px 6px 20px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  color: var(--text);
+  font-size: 14.5px; line-height: 1.55;
   white-space: pre-wrap; word-break: break-word;
 }
-.msg.user .bubble { background: var(--accent-2); color: #fff; border-bottom-right-radius: 5px; }
-.msg.coach .bubble { background: var(--bg-2); border: 1px solid var(--line); border-bottom-left-radius: 5px; }
-.bubble.thinking { color: var(--muted); font-style: italic; }
-.msg-meta { display: flex; gap: 8px; font-size: 11px; color: var(--faint); padding: 0 4px; }
+.gem-turn-time { font-size: 11px; color: var(--faint); padding: 0 6px; }
 
-.msg-body .md * + * { margin-top: 6px; }
-.msg-body .md p { margin: 0; }
-.msg-body .md-h {
-  margin: 0; font-size: 13.5px; font-weight: 700; color: var(--text);
-  text-transform: uppercase; letter-spacing: .4px; font-family: var(--font-display);
+.gem-turn-ai {
+  display: flex; align-items: flex-start; gap: 12px;
 }
-.msg-body .md-list, .msg-body .md-list ul, .msg-body .md-list ol { margin: 2px 0 0; padding-left: 18px; }
-.msg-body .md-list li { margin: 3px 0; }
-.msg-body .md blockquote {
-  margin: 4px 0; padding: 4px 10px;
+.gem-ai-avatar {
+  width: 30px; height: 30px; flex: none; margin-top: 2px;
+  border-radius: 50%;
+  display: grid; place-items: center;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.22), rgba(56, 189, 248, 0.22));
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  color: var(--accent);
+}
+.gem-ai-avatar.spin { animation: spin 2.2s linear infinite; }
+.gem-ai-body { flex: 1; min-width: 0; }
+.gem-ai-prose {
+  font-size: 14.5px; line-height: 1.65; color: var(--text);
+  word-break: break-word;
+}
+.gem-ai-foot {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 8px; font-size: 11.5px; color: var(--faint);
+}
+.gem-copy-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: 4px; padding: 3px 8px; border-radius: 6px;
+  border: 1px solid transparent; background: transparent;
+  color: var(--muted); font: inherit; font-size: 11px; font-weight: 600;
+  cursor: pointer; transition: background .12s, color .12s;
+}
+.gem-copy-btn:hover { background: var(--bg-2); color: var(--text); border-color: var(--line); }
+
+/* Markdown inside Gemini editorial response */
+.gem-ai-prose .md * + * { margin-top: 8px; }
+.gem-ai-prose .md p { margin: 0; }
+.gem-ai-prose .md-h {
+  margin: 4px 0 0; font-size: 14px; font-weight: 700; color: var(--text);
+  font-family: var(--font-display);
+}
+.gem-ai-prose .md-list, .gem-ai-prose .md-list ul, .gem-ai-prose .md-list ol { margin: 4px 0 0; padding-left: 20px; }
+.gem-ai-prose .md-list li { margin: 4px 0; }
+.gem-ai-prose .md blockquote {
+  margin: 6px 0; padding: 6px 12px;
   border-left: 2px solid var(--accent); background: var(--accent-soft);
-  border-radius: 6px; color: var(--muted);
+  border-radius: 6px; color: var(--text-2);
 }
-.msg-body .md code {
+.gem-ai-prose .md code {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  font-size: 12.5px; background: var(--bg-3);
+  font-size: 12.5px; background: var(--bg-2);
   border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px;
 }
-.msg.user .md code { background: rgba(255,255,255,0.18); border-color: rgba(255,255,255,0.2); }
-.msg-body .md pre {
-  margin: 6px 0; padding: 10px 12px;
+.gem-ai-prose .md pre {
+  margin: 6px 0; padding: 12px;
   background: var(--bg-2); border: 1px solid var(--line);
   border-radius: var(--radius-sm); overflow-x: auto;
 }
-.msg-body .md pre code { background: none; border: none; padding: 0; }
-.msg.user .md strong { color: #fff; }
+.gem-ai-prose .md pre code { background: none; border: none; padding: 0; }
 
-.coach-composer {
+/* Thinking pulse */
+.gem-thinking {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 6px 0; color: var(--muted); font-size: 13.5px;
+}
+.gem-dots { display: inline-flex; gap: 4px; }
+.gem-dots i {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); display: block;
+  animation: gem-pulse 1.2s infinite ease-in-out;
+}
+.gem-dots i:nth-child(2) { animation-delay: 0.2s; }
+.gem-dots i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes gem-pulse {
+  0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1.1); }
+}
+
+/* Bottom prompt box (Gemini floating rounded container) */
+.gem-bottom {
+  padding: 8px 16px 12px;
+  background: linear-gradient(to top, var(--card) 75%, transparent);
+  flex-shrink: 0;
+}
+.gem-action-card {
+  padding: 12px 14px; margin-bottom: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--accent);
+  border-radius: 16px;
+}
+.gem-composer {
   display: flex; flex-direction: column; gap: 8px;
-  padding: 10px 2px 6px; border-top: 1px solid var(--line); margin-top: 4px;
+  padding: 12px 14px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  border-radius: 24px;
+  transition: border-color .15s, box-shadow .15s;
 }
-.coach-composer-row { display: flex; gap: 8px; align-items: center; }
-.coach-composer-row input {
-  flex: 1; min-height: 44px; border-radius: 12px;
-  background: var(--bg-2); border: 1px solid var(--line-2);
-  color: var(--text); font: inherit; font-size: 14px; padding: 0 13px;
+.gem-composer:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
+.gem-textarea {
+  width: 100%; border: 0; background: transparent;
+  color: var(--text); font: inherit; font-size: 15px; line-height: 1.45;
+  resize: none; outline: none; max-height: 160px;
+  padding: 2px 4px;
+}
+@media (pointer: coarse) {
+  .gem-textarea { font-size: 16px; }
+}
+.gem-composer-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.gem-composer-tools {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0;
+}
+.gem-tool-btn {
+  width: 36px; height: 36px; border-radius: 50%;
+  border: 1px solid transparent; background: transparent;
+  color: var(--muted); display: inline-grid; place-items: center;
+  cursor: pointer; transition: background .12s, color .12s;
+}
+.gem-tool-btn:hover { background: var(--bg-3); color: var(--text); }
+.gem-tool-pill {
+  height: 32px; padding: 0 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card);
+  color: var(--muted); font: inherit; font-size: 12px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 5px;
+  cursor: pointer; transition: border-color .12s, color .12s, background .12s;
+}
+.gem-tool-pill:hover { border-color: var(--accent); color: var(--text); }
+.gem-tool-pill.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+@media (pointer: coarse) {
+  .gem-tool-btn { width: 42px; height: 42px; }
+  .gem-tool-pill { min-height: 36px; }
+}
+
+.gem-strategy-pop {
+  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 40;
+  width: min(260px, 78vw);
+  background: var(--card-2); border: 1px solid var(--line-2);
+  border-radius: 14px; padding: 6px;
+  box-shadow: var(--shadow);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.gem-strategy-opt {
+  text-align: left; width: 100%; border: 0; border-radius: 9px;
+  padding: 8px 10px; background: transparent; color: var(--text);
+  font: inherit; cursor: pointer;
+}
+.gem-strategy-opt:hover { background: var(--bg-3); }
+.gem-strategy-opt.on { background: var(--accent-soft); }
+.gem-strategy-name { font-size: 13px; font-weight: 650; }
+.gem-strategy-blurb { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+.gem-send-btn {
+  width: 38px; height: 38px; border-radius: 50%; border: 0; flex: none;
+  background: linear-gradient(135deg, #6366f1 0%, #3b82f6 100%);
+  color: #fff; display: inline-grid; place-items: center;
+  cursor: pointer; box-shadow: 0 3px 12px var(--accent-glow);
+  transition: transform .1s, filter .15s, opacity .15s;
+}
+.gem-send-btn:hover:not(:disabled) { filter: brightness(1.1); transform: scale(1.04); }
+.gem-send-btn:disabled {
+  background: var(--bg-3); color: var(--faint);
+  box-shadow: none; cursor: not-allowed;
+}
+.gem-disclaimer {
+  margin: 6px 0 0; text-align: center;
+  font-size: 11px; color: var(--faint);
+}
+
 .coach-attach-strip {
   display: flex; gap: 8px; align-items: center; padding: 6px;
-  background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; max-width: 220px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px; max-width: 220px;
 }
 .coach-attach-thumb { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; }
 .coach-msg-img { max-width: 220px; max-height: 220px; border-radius: 10px; border: 1px solid var(--line); object-fit: contain; }

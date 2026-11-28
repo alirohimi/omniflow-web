@@ -192,3 +192,31 @@ export const IMoon = (p: P) => (
     <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11Z" />
   </S>
 );
+
+export const ISparkle = (p: P) => (
+  <S {...p}>
+    <path d="M12 3l1.9 5.3L19.2 10l-5.3 1.9L12 17.2l-1.9-5.3L4.8 10l5.3-1.7L12 3Z" />
+    <path d="M18.5 16.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z" />
+  </S>
+);
+
+export const IArrowUp = (p: P) => (
+  <S {...p}>
+    <path d="M12 19V5" />
+    <path d="M6.5 10.5 12 5l5.5 5.5" />
+  </S>
+);
+
+export const ISidebar = (p: P) => (
+  <S {...p}>
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+    <path d="M9.5 4.5v15" />
+  </S>
+);
+
+export const ICopy = (p: P) => (
+  <S {...p}>
+    <rect x="9" y="9" width="11" height="11" rx="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </S>
+);

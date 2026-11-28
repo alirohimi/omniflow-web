@@ -1,41 +1,65 @@
 // ============================================================================
-// Coach — conversational financial advisor (chat).
+// Coach — Gemini-style conversational financial advisor.
 //
-// Multi-session: chat history is split into named threads persisted
-// encrypted inside the vault. The user can switch, rename, and delete
-// threads (armed destructive). Selecting a thread re-points the chat and
-// feeds that thread's history into coachAsk.
-//
-// Grounded in the user's real encrypted data via useLiveData; answers come
-// from the 3-tier coach engine (BYOK LLM -> deterministic rule engine).
-// Bubble chat: per-thread continuity, collapsible "Quick starts" replacing
-// the old blocking suggestion menu, image attach + action confirm card kept.
+// Desktop: collapsible persistent thread sidebar + centered editorial chat
+// canvas + floating multi-line prompt composer with upward strategy picker.
+// Mobile (<900px): slide-over thread drawer + full-height chat + HIG targets.
+// Grounded in the user's real encrypted vault via useLiveData (BYOK LLM or
+// $0 on-device rule engine fallback).
 // ============================================================================
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVaultStore } from '../store/store';
 import { useLiveData } from '../hooks/useLiveData';
-import { coachAsk, applyAction as applyAiAction, type Action, type ActionStore } from '../ai';
+import { coachAsk, applyAction as applyAiAction, type Action } from '../ai';
 import { FAMED_STRATEGIES } from '../domain/enums';
 import type { CoachContext } from '../ai/coach';
 import type { CoachThread } from '../domain/types';
-import { ICoach, IClose, IImage, IPlus, IChevron, IPencil, IX, ICheck } from '../icons';
+import {
+  IArrowUp,
+  ICheck,
+  IClose,
+  ICopy,
+  IImage,
+  IPencil,
+  IPlus,
+  ISidebar,
+  ISparkle,
+  IX,
+} from '../icons';
 import Markdown from '../components/Markdown';
 import { useToast } from '../components/Toast';
 import { compressImageToDataUrl } from '../lib/image';
 
-const QUICK_STARTS = [
-  'Where should I put new money?',
-  'How is my portfolio allocated?',
-  'Am I overspending?',
-  'What is my currency exposure?',
-  'If the market crashed, what survives?',
+const SUGGESTIONS: { title: string; prompt: string; tag: string }[] = [
+  {
+    title: 'Deploy new capital',
+    prompt: 'Where should I put new money?',
+    tag: 'Allocation',
+  },
+  {
+    title: 'Portfolio health check',
+    prompt: 'How is my portfolio allocated?',
+    tag: 'Portfolio',
+  },
+  {
+    title: 'Monthly spend audit',
+    prompt: 'Am I overspending?',
+    tag: 'Budget',
+  },
+  {
+    title: 'Currency & FX exposure',
+    prompt: 'What is my currency exposure?',
+    tag: 'FX Risk',
+  },
 ];
 
+const EXTRA_PROMPT = 'If the market crashed, what survives?';
+
 const BADGE: Record<string, string> = {
-  llm: 'AI advisor',
-  rules: 'Rule engine',
-  system: 'Rule engine',
+  llm: 'AI Advisor',
+  rules: 'On-Device Rules',
+  system: 'System',
 };
 
 /** Verb-aware confirm-card copy for any of the 5 action types. */
@@ -66,8 +90,7 @@ function actionDetail(a: Action): string {
 
 /** Relative "last updated" label for a thread row. */
 function relTime(ts: number): string {
-  const now = Date.now();
-  const diff = now - ts;
+  const diff = Date.now() - ts;
   if (diff < 60_000) return 'just now';
   const m = Math.floor(diff / 60_000);
   if (m < 60) return `${m}m ago`;
@@ -78,32 +101,51 @@ function relTime(ts: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// ThreadSwitcher — custom-themed panel (NO native <select>).
-// Mobile: bottom sheet. Wide: dropdown card. Rows >=44px. Armed delete.
+// ThreadSidebar — Gemini-style Recent threads panel (persistent on desktop,
+// slide-over drawer on mobile). Preserves inline rename + 2-tap armed delete.
 // ---------------------------------------------------------------------------
 
-interface ThreadSwitcherProps {
+interface ThreadSidebarProps {
+  open: boolean;
   threads: CoachThread[];
   activeId: string;
+  engineLabel: string;
+  engineLive: boolean;
   onSelect: (id: string) => void;
   onNew: () => void;
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
-  onClose: () => void;
+  onCloseMobile: () => void;
   toast: (msg: string, kind?: 'ok' | 'err') => void;
 }
 
-function ThreadSwitcher({
-  threads, activeId, onSelect, onNew, onRename, onDelete, onClose, toast,
-}: ThreadSwitcherProps) {
+function ThreadSidebar({
+  open,
+  threads,
+  activeId,
+  engineLabel,
+  engineLive,
+  onSelect,
+  onNew,
+  onRename,
+  onDelete,
+  onCloseMobile,
+  toast,
+}: ThreadSidebarProps) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameText, setRenameText] = useState('');
   const [armedDelete, setArmedDelete] = useState<string | null>(null);
   const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  useEffect(() => () => {
+    if (deleteTimer.current) clearTimeout(deleteTimer.current);
+  }, []);
+
   const armDelete = (id: string) => {
     if (armedDelete === id) {
-      deleteCoachThreadSafe(id);
+      const wasActive = id === activeId;
+      onDelete(id);
+      toast(wasActive ? 'Thread deleted. Switched to another chat.' : 'Thread deleted.', 'ok');
       setArmedDelete(null);
       if (deleteTimer.current) clearTimeout(deleteTimer.current);
       return;
@@ -113,46 +155,43 @@ function ThreadSwitcher({
     deleteTimer.current = setTimeout(() => setArmedDelete(null), 3000);
   };
 
-  const deleteCoachThreadSafe = (id: string) => {
-    const wasActive = id === activeId;
-    onDelete(id);
-    toast(wasActive ? 'Thread deleted. Switched to another chat.' : 'Thread deleted.', 'ok');
-  };
-
-  useEffect(() => () => { if (deleteTimer.current) clearTimeout(deleteTimer.current); }, []);
-
   const sorted = [...threads].sort((a, b) => b.updatedAt - a.updatedAt);
 
   return (
     <>
-      {/* Backdrop */}
-      <div
-        style={{
-          position: 'fixed', inset: 0, zIndex: 900,
-          background: 'rgba(0,0,0,0.3)',
-        }}
-        onClick={onClose}
-      />
-      {/* Panel */}
-      <div
-        style={{
-          position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 901,
-          background: 'var(--surface, #1a1a2e)',
-          borderTop: '1px solid var(--border, #333)',
-          borderRadius: '16px 16px 0 0',
-          padding: '16px 16px calc(16px + env(safe-area-inset-bottom, 0px))',
-          maxHeight: '70vh',
-          display: 'flex', flexDirection: 'column',
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <strong style={{ fontSize: 15 }}>Chats</strong>
-          <button className="btn ghost sm" onClick={onClose} aria-label="Close"><IClose size={16} /></button>
+      {open && (
+        <div
+          className="gem-backdrop"
+          aria-hidden="true"
+          onClick={onCloseMobile}
+        />
+      )}
+      <aside className={`gem-sidebar${open ? ' open' : ''}`} aria-label="Chat history">
+        <div className="gem-sidebar-top">
+          <button
+            type="button"
+            className="gem-new-btn"
+            onClick={() => {
+              onNew();
+              onCloseMobile();
+            }}
+          >
+            <IPlus size={16} />
+            <span>New chat</span>
+          </button>
+          <button
+            type="button"
+            className="gem-icon-btn gem-mobile-only"
+            aria-label="Close sidebar"
+            onClick={onCloseMobile}
+          >
+            <IClose size={16} />
+          </button>
         </div>
 
-        {/* Thread list */}
-        <div style={{ flex: 1, overflowY: 'auto', maxHeight: '50vh' }}>
+        <div className="gem-sidebar-lbl">Recent</div>
+
+        <div className="gem-thread-list">
           {sorted.map((t) => {
             const isActive = t.id === activeId;
             const isArmed = armedDelete === t.id;
@@ -160,24 +199,22 @@ function ThreadSwitcher({
             return (
               <div
                 key={t.id}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  minHeight: 44, padding: '6px 8px',
-                  borderRadius: 10,
-                  background: isActive ? 'var(--accent-bg, rgba(59,130,246,0.12))' : 'transparent',
-                  borderLeft: isActive ? '3px solid var(--accent, #3b82f6)' : '3px solid transparent',
-                  marginBottom: 2,
-                }}
+                className={`gem-thread${isActive ? ' active' : ''}`}
               >
-                {/* Row content */}
                 <div
-                  style={{ flex: 1, cursor: 'pointer', minHeight: 32, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}
-                  onClick={() => { if (!isRenaming) { onSelect(t.id); onClose(); } }}
+                  className="gem-thread-main"
+                  onClick={() => {
+                    if (!isRenaming) {
+                      onSelect(t.id);
+                      onCloseMobile();
+                    }
+                  }}
                 >
                   {isRenaming ? (
                     <input
                       value={renameText}
                       maxLength={80}
+                      className="gem-rename-input"
                       onChange={(e) => setRenameText(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && renameText.trim()) {
@@ -192,66 +229,61 @@ function ThreadSwitcher({
                         }
                         if (e.key === 'Escape') setRenaming(null);
                       }}
-                      style={{
-                        width: '100%', background: 'transparent',
-                        border: '1px solid var(--accent, #3b82f6)',
-                        borderRadius: 6, padding: '4px 8px',
-                        color: 'var(--text, #fff)', fontSize: 14,
-                      }}
                       autoFocus
                       onClick={(e) => e.stopPropagation()}
                     />
                   ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {t.title || 'New chat'}
+                    <>
+                      <span className="gem-thread-title">{t.title || 'New chat'}</span>
+                      <span className="gem-thread-sub">
+                        {relTime(t.updatedAt)} · {t.messages.length} msg
                       </span>
-                      {isActive && <ICheck size={12} />}
-                    </div>
-                  )}
-                  {!isRenaming && (
-                    <span className="muted" style={{ fontSize: 11, marginTop: 2 }}>
-                      {relTime(t.updatedAt)} · {t.messages.length} msg
-                    </span>
+                    </>
                   )}
                 </div>
 
-                {/* Row actions — 44px min hit targets (P2-1). */}
-                <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                  <button
-                    className="btn ghost sm"
-                    style={{ minWidth: 44, minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-                    onClick={(e) => { e.stopPropagation(); setRenaming(t.id); setRenameText(t.title); }}
-                    aria-label="Rename"
-                  >
-                    <IPencil size={14} />
-                  </button>
-                  <button
-                    className={`btn sm ${isArmed ? 'danger' : 'ghost'}`}
-                    style={{ minWidth: 44, minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: isArmed ? 11 : 14, gap: 4 }}
-                    onClick={(e) => { e.stopPropagation(); armDelete(t.id); }}
-                    aria-label="Delete thread"
-                  >
-                    {isArmed ? 'Confirm' : <IX size={14} />}
-                  </button>
-                </div>
+                {!isRenaming && (
+                  <div className="gem-thread-acts">
+                    <button
+                      type="button"
+                      className="gem-thread-act"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRenaming(t.id);
+                        setRenameText(t.title);
+                      }}
+                      aria-label="Rename"
+                      title="Rename chat"
+                    >
+                      <IPencil size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className={`gem-thread-act${isArmed ? ' armed' : ''}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        armDelete(t.id);
+                      }}
+                      aria-label="Delete thread"
+                      title={isArmed ? 'Click again to delete' : 'Delete chat'}
+                    >
+                      {isArmed ? 'Confirm' : <IX size={13} />}
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}
           {sorted.length === 0 && (
-            <p className="muted" style={{ padding: 16, textAlign: 'center' }}>No chats yet</p>
+            <p className="muted small" style={{ padding: '14px 10px', margin: 0 }}>No chats yet</p>
           )}
         </div>
 
-        {/* Footer: New chat */}
-        <button
-          className="btn sm"
-          style={{ marginTop: 12, minHeight: 44, width: '100%' }}
-          onClick={() => { onNew(); onClose(); }}
-        >
-          <IPlus size={14} /> New chat
-        </button>
-      </div>
+        <div className="gem-sidebar-foot">
+          <span className={`gem-engine-dot${engineLive ? ' live' : ''}`} aria-hidden="true" />
+          <span className="gem-engine-txt">{engineLabel}</span>
+        </div>
+      </aside>
     </>
   );
 }
@@ -268,16 +300,17 @@ export function CoachView() {
 
   const [draft, setDraft] = useState('');
   const [attach, setAttach] = useState<string | null>(null);
-  // "Thinking…" is backed by the provider's session-scoped pending registry
-  // (not local state), so it survives navigating to another menu and back:
-  // the LLM call keeps running in the background and the indicator
-  // re-appears on the chat while the answer is in flight.
   const pending = store.coachPendingThreads.includes(activeCoachThread);
   const [pendingAction, setPendingAction] = useState<Action | null>(null);
-  const [switcherOpen, setSwitcherOpen] = useState(false);
-  const [quickStartsOpen, setQuickStartsOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 900 : true,
+  );
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const strategyRef = useRef<HTMLDivElement | null>(null);
 
   const hasLLM = store.llmConfig != null;
   const llmAllowed = store.entitlements.has('llm-coach');
@@ -300,11 +333,19 @@ export function CoachView() {
     };
   }, [vault, live.quotes, live.portfolio, live.fx, store.categories]);
 
-  // Scroll to bottom when the active thread's messages grow or we switch thread.
+  // Scroll feed to bottom on new messages / thread switch / pending state.
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [coachMessages.length, activeCoachThread, pending]);
+
+  // Auto-grow textarea cleanly up to 160px.
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(160, Math.max(24, ta.scrollHeight))}px`;
+  }, [draft]);
 
   const pickImage = async (f: File | null) => {
     if (!f) return;
@@ -316,15 +357,13 @@ export function CoachView() {
     setAttach(url);
   };
 
-  // Thinking mode (coachThinking pref, default ON). Persisted in the
-  // encrypted vault so it survives reloads and syncs across devices.
+  // Thinking mode (coachThinking pref, default ON).
   const coachThinking = store.vault?.prefs.coachThinking ?? true;
   const toggleThinking = () => {
     store.setPrefs({ coachThinking: !coachThinking });
   };
 
-  // Portfolio strategy picker (FAMED_STRATEGIES). The coach grounds its
-  // new-money advice in the target allocation of the picked strategy.
+  // Portfolio strategy picker (FAMED_STRATEGIES).
   const coachStrategy = store.vault?.prefs.coachStrategy ?? '60-40';
   const [strategyOpen, setStrategyOpen] = useState(false);
   const setStrategy = (key: string) => {
@@ -332,6 +371,25 @@ export function CoachView() {
     setStrategyOpen(false);
   };
   const strategyName = FAMED_STRATEGIES[coachStrategy as keyof typeof FAMED_STRATEGIES]?.name ?? coachStrategy;
+
+  // Close strategy popover on outside tap / Escape.
+  useEffect(() => {
+    if (!strategyOpen) return;
+    const onDoc = (e: PointerEvent) => {
+      if (strategyRef.current && !strategyRef.current.contains(e.target as Node)) {
+        setStrategyOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setStrategyOpen(false);
+    };
+    document.addEventListener('pointerdown', onDoc);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDoc);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [strategyOpen]);
 
   const send = async (text: string, image?: string) => {
     const q = text.trim();
@@ -416,239 +474,347 @@ export function CoachView() {
     setPendingAction(null);
   };
 
+  const copyMessage = async (id: string, text: string) => {
+    try {
+      await navigator.clipboard?.writeText(text);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 2000);
+    } catch {
+      toast('Clipboard unavailable', 'err');
+    }
+  };
+
   if (!vault) return null;
 
   const hasMessages = coachMessages.length > 0;
+  const activeThread = coachThreads.find((t) => t.id === activeCoachThread);
+  const rawName = (vault.prefs.displayName ?? '').trim();
+  const greetingName = !rawName || rawName.toLowerCase() === 'you' ? 'there' : rawName;
+  const engineLive = hasLLM && llmAllowed;
+  const engineLabel = engineLive
+    ? adminLocked
+      ? 'OmniFlow AI · Managed'
+      : `OmniFlow AI · ${store.llmConfig!.provider}`
+    : hasLLM && !llmAllowed
+      ? 'Pro required · On-device rules'
+      : 'On-device Rules (free)';
 
   return (
-    <>
-      <div className="page-head" style={{ marginBottom: 14 }}>
-        <div>
-          <div className="page-badge">
-            <span className="dot" /> On-Device &amp; AI Advisory
-          </div>
-          <h1 className="page-title">Financial Coach</h1>
-        </div>
-        <div className="page-controls">
-          <span className={`chip sm ${hasLLM && llmAllowed ? 'ok' : ''}`}>
-            {hasLLM && llmAllowed
-              ? adminLocked
-                ? 'LIVE · Managed'
-                : `LIVE · ${store.llmConfig!.provider}`
-              : hasLLM && !llmAllowed
-                ? 'LLM requires Pro — using on-device rules'
-                : 'ON-DEVICE RULES (free)'}
-          </span>
-          {/* Thinking-mode toggle: ON = coach shows a short "Thinking:" block
-              of reasoning before the answer (thorough, slower); OFF = fast,
-              concise answer-first replies. Persisted in the encrypted vault. */}
-          <button
-            className={`chip sm ${coachThinking ? 'ok' : ''}`}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
-            onClick={toggleThinking}
-            aria-pressed={coachThinking}
-            title={coachThinking
-              ? 'Thinking mode ON — the coach shows its reasoning before answering. Tap for fast replies.'
-              : 'Fast mode — concise, answer-first replies. Tap to enable thinking.'}
-          >
-            <span style={{ opacity: 0.7, fontSize: 13, lineHeight: 1 }}>⚡</span>
-            {coachThinking ? 'Thinking' : 'Fast'}
-          </button>
-          {/* Strategy picker: the target allocation the coach anchors its
-              new-money advice to. Click to open the dropdown. */}
-          <div style={{ position: 'relative' }}>
-            <button
-              className="chip sm"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
-              onClick={() => setStrategyOpen((o) => !o)}
-              aria-expanded={strategyOpen}
-              title="Portfolio strategy — the target allocation the coach follows for new money"
-            >
-              <span style={{ opacity: 0.7, fontSize: 12, lineHeight: 1 }}>◉</span>
-              {strategyName}
-            </button>
-            {strategyOpen && (
-              <div style={{ position: 'absolute', top: '100%', right: 0, zIndex: 20, marginTop: 6, background: 'var(--card)', border: '1px solid var(--card-border)', borderRadius: 12, padding: 6, minWidth: 220, boxShadow: '0 12px 30px rgba(0,0,0,.35)' }}>
-                {Object.values(FAMED_STRATEGIES).map((s) => (
-                  <div
-                    key={s.key}
-                    onClick={() => setStrategy(s.key)}
-                    style={{ padding: '8px 10px', borderRadius: 8, cursor: 'pointer', background: s.key === coachStrategy ? 'var(--accent-soft)' : 'transparent' }}
-                  >
-                    <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)' }}>{s.name}</div>
-                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{s.blurb}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          {/* Thread switcher trigger */}
-          <button
-            className="btn ghost sm"
-            onClick={() => setSwitcherOpen(true)}
-            aria-label="Switch chat"
-          >
-            <span style={{ display: 'inline-flex', transform: 'rotate(-90deg)' }}><IChevron size={13} /></span>
-            Chats
-          </button>
-        </div>
-      </div>
+    <div className={`gem-shell${sidebarOpen ? ' with-side' : ''}`}>
+      <ThreadSidebar
+        open={sidebarOpen}
+        threads={coachThreads}
+        activeId={activeCoachThread}
+        engineLabel={engineLabel}
+        engineLive={engineLive}
+        onSelect={(id) => store.setActiveCoachThread(id)}
+        onNew={() => store.addCoachThread()}
+        onRename={(id, title) => store.renameCoachThread(id, title)}
+        onDelete={(id) => store.deleteCoachThread(id)}
+        onCloseMobile={() => {
+          if (typeof window !== 'undefined' && window.innerWidth < 900) {
+            setSidebarOpen(false);
+          }
+        }}
+        toast={toast}
+      />
 
-      <div className="coach-chat" ref={scrollRef}>
-        {/* Quick starts accordion — shown only when the active thread is empty */}
-        {!hasMessages && (
-          <div className="coach-welcome">
-            <div className="coach-welcome-ico"><ICoach size={22} /></div>
-            <h3>Ask me about your money</h3>
-            <p>
-              I reason over your real numbers — net worth, allocation, spend
-              pace, currency exposure. No key configured? I answer with the
-              on-device rule engine, so it stays free and offline.
-            </p>
-            {/* Collapsible quick starts */}
-            <div style={{ marginTop: 8 }}>
-              <button
-                className="btn ghost sm"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: 44 }}
-                onClick={() => setQuickStartsOpen(!quickStartsOpen)}
-              >
-                <span style={{ display: 'inline-flex', transform: quickStartsOpen ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.2s' }}>
-                  <IChevron size={12} />
-                </span>
-                Quick starts
-              </button>
-              {quickStartsOpen && (
-                <div className="coach-chips" style={{ marginTop: 8 }}>
-                  {QUICK_STARTS.map((s) => (
-                    <button key={s} className="chip" onClick={() => void send(s)}>
-                      {s}
-                    </button>
-                  ))}
-                </div>
+      <main className="gem-main">
+        {/* Top bar inside chat canvas */}
+        <header className="gem-head">
+          <div className="gem-head-left">
+            <button
+              type="button"
+              className="gem-icon-btn"
+              onClick={() => setSidebarOpen((o) => !o)}
+              aria-label={sidebarOpen ? 'Hide chat history' : 'Show chat history'}
+              title="Chats"
+            >
+              <ISidebar size={17} />
+            </button>
+            <div className="gem-brand">
+              <span className="gem-brand-name">OmniFlow Coach</span>
+              {activeThread?.title && activeThread.title !== 'New chat' && (
+                <span className="gem-brand-thread">· {activeThread.title}</span>
               )}
             </div>
           </div>
-        )}
 
-        {coachMessages.map((m) => (
-          <div key={m.id} className={`msg ${m.role}`}>
-            <div className="msg-body">
-              {m.image ? <img className="coach-msg-img" src={m.image} alt="Attached" /> : null}
-              {m.text ? (
-                <div className="bubble">
-                  {m.role === 'coach' ? <Markdown text={m.text} className="md" /> : m.text}
-                </div>
-              ) : null}
-              <div className="msg-meta">
-                {m.role === 'coach' && m.source ? (
-                  <span>{BADGE[m.source] ?? m.source}</span>
-                ) : null}
-                <span>
-                  {new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              </div>
-            </div>
-          </div>
-        ))}
-
-        {pending && (
-          <div className="msg coach">
-            <div className="msg-body">
-              <div className="bubble thinking">Thinking…</div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {pendingAction && (
-        <div className="card" style={{ marginTop: 10, border: '1px solid var(--accent, #3b82f6)' }}>
-          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <strong style={{ fontSize: 13 }}>{actionTitle(pendingAction)}</strong>
-            <span className="muted small">not applied yet</span>
-          </div>
-          <p className="muted small" style={{ margin: '0 0 8px' }}>
-            {actionDetail(pendingAction)}
-          </p>
-          {pendingAction.action === 'create_portfolio' ? (
-            <div className="coach-action-list">
-              {pendingAction.holdings.map((h) => (
-                <div key={h.symbol} className="row" style={{ justifyContent: 'space-between', gap: 8, padding: '3px 0' }}>
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>{h.symbol}</span>
-                  <span className="muted small">
-                    {h.units.toLocaleString()} @ {h.entryPrice > 0 ? h.entryPrice.toLocaleString() : 'n/a'} {h.currency}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <div className="row" style={{ gap: 8, marginTop: 10 }}>
-            <button className="btn sm" onClick={applyAction}>
-              Apply to my portfolio
-            </button>
-            <button className="btn ghost sm" onClick={dismissAction}>
-              Dismiss
-            </button>
-          </div>
-        </div>
-      )}
-
-      <form
-        className="coach-composer"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void send(draft);
-        }}
-      >
-        {attach && (
-          <div className="coach-attach-strip">
-            <img className="coach-attach-thumb" src={attach} alt="Attachment preview" />
+          <div className="gem-head-right">
+            <span className={`chip sm${engineLive ? ' ok' : ''}`}>
+              {engineLive ? (adminLocked ? 'LIVE · Managed' : `LIVE · ${store.llmConfig!.provider}`) : 'On-Device'}
+            </span>
             <button
               type="button"
-              className="btn ghost sm"
-              aria-label="Remove attachment"
-              onClick={() => setAttach(null)}
+              className="gem-icon-btn"
+              onClick={() => store.addCoachThread()}
+              aria-label="New chat"
+              title="New chat"
             >
-              <IClose size={14} />
+              <IPlus size={17} />
             </button>
           </div>
-        )}
-        <div className="coach-composer-row">
-          <button
-            type="button"
-            className="btn ghost sm"
-            aria-label="Attach image"
-            title="Attach an image (receipt, screenshot)"
-            onClick={() => fileRef.current?.click()}
-            disabled={pending}
-          >
-            <IImage size={16} />
-          </button>
-          <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { void pickImage(e.target.files?.[0] ?? null); e.target.value = ''; }} />
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="Ask about your portfolio, spend, or exposure…"
-            aria-label="Ask the coach"
-            disabled={pending}
-          />
-          <button className="btn sm" type="submit" disabled={pending || (!draft.trim() && !attach)}>
-            Send
-          </button>
-        </div>
-      </form>
+        </header>
 
-      {switcherOpen && (
-        <ThreadSwitcher
-          threads={coachThreads}
-          activeId={activeCoachThread}
-          onSelect={(id) => store.setActiveCoachThread(id)}
-          onNew={() => store.addCoachThread()}
-          onRename={(id, title) => store.renameCoachThread(id, title)}
-          onDelete={(id) => store.deleteCoachThread(id)}
-          onClose={() => setSwitcherOpen(false)}
-          toast={toast}
-        />
-      )}
-    </>
+        {/* Scrollable message canvas */}
+        <div className="gem-scroll" ref={scrollRef}>
+          <div className="gem-col">
+            {!hasMessages ? (
+              <div className="gem-welcome">
+                <div className="gem-spark-ring" aria-hidden="true">
+                  <ISparkle size={24} />
+                </div>
+                <h1 className="gem-hello">Hello, {greetingName}</h1>
+                <p className="gem-sub">
+                  How can I help with your portfolio, spending, or runway today?
+                </p>
+
+                <div className="gem-suggestions">
+                  {SUGGESTIONS.map((s) => (
+                    <button
+                      key={s.prompt}
+                      type="button"
+                      className="gem-sug-card"
+                      onClick={() => void send(s.prompt)}
+                    >
+                      <span className="gem-sug-tag">{s.tag}</span>
+                      <span className="gem-sug-title">{s.title}</span>
+                      <span className="gem-sug-prompt">{s.prompt}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  className="gem-extra-chip"
+                  onClick={() => void send(EXTRA_PROMPT)}
+                >
+                  <ISparkle size={13} />
+                  <span>{EXTRA_PROMPT}</span>
+                </button>
+              </div>
+            ) : (
+              <div className="gem-feed">
+                {coachMessages.map((m) =>
+                  m.role === 'user' ? (
+                    <div key={m.id} className="gem-turn-user">
+                      <div className="gem-user-bubble">
+                        {m.image ? <img className="coach-msg-img" src={m.image} alt="Attached" /> : null}
+                        {m.text ? <div>{m.text}</div> : null}
+                      </div>
+                      <span className="gem-turn-time">
+                        {new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                  ) : (
+                    <div key={m.id} className="gem-turn-ai">
+                      <div className="gem-ai-avatar" aria-hidden="true">
+                        <ISparkle size={15} />
+                      </div>
+                      <div className="gem-ai-body">
+                        {m.image ? <img className="coach-msg-img" src={m.image} alt="Attached" /> : null}
+                        {m.text ? (
+                          <div className="gem-ai-prose">
+                            <Markdown text={m.text} className="md" />
+                          </div>
+                        ) : null}
+                        <div className="gem-ai-foot">
+                          <span>{m.source ? (BADGE[m.source] ?? m.source) : 'AI Advisor'}</span>
+                          <span>·</span>
+                          <span>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          {m.text && (
+                            <button
+                              type="button"
+                              className="gem-copy-btn"
+                              onClick={() => void copyMessage(m.id, m.text)}
+                              aria-label="Copy response"
+                            >
+                              {copiedId === m.id ? <ICheck size={12} /> : <ICopy size={12} />}
+                              <span>{copiedId === m.id ? 'Copied' : 'Copy'}</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ),
+                )}
+
+                {pending && (
+                  <div className="gem-turn-ai">
+                    <div className="gem-ai-avatar spin" aria-hidden="true">
+                      <ISparkle size={15} />
+                    </div>
+                    <div className="gem-ai-body">
+                      <div className="gem-thinking">
+                        <span className="gem-dots" aria-hidden="true">
+                          <i /><i /><i />
+                        </span>
+                        <span>{coachThinking ? 'Thinking over your vault…' : 'Generating…'}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Pending Action Confirm Card + Floating Gemini Composer */}
+        <div className="gem-bottom">
+          <div className="gem-col">
+            {pendingAction && (
+              <div className="gem-action-card">
+                <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <strong style={{ fontSize: 13 }}>{actionTitle(pendingAction)}</strong>
+                  <span className="muted small">not applied yet</span>
+                </div>
+                <p className="muted small" style={{ margin: '0 0 8px' }}>
+                  {actionDetail(pendingAction)}
+                </p>
+                {pendingAction.action === 'create_portfolio' ? (
+                  <div className="coach-action-list">
+                    {pendingAction.holdings.map((h) => (
+                      <div key={h.symbol} className="row" style={{ justifyContent: 'space-between', gap: 8, padding: '3px 0' }}>
+                        <span style={{ fontSize: 13, fontWeight: 600 }}>{h.symbol}</span>
+                        <span className="muted small">
+                          {h.units.toLocaleString()} @ {h.entryPrice > 0 ? h.entryPrice.toLocaleString() : 'n/a'} {h.currency}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="row" style={{ gap: 8, marginTop: 10 }}>
+                  <button className="btn sm" onClick={applyAction}>
+                    Apply to my portfolio
+                  </button>
+                  <button className="btn ghost sm" onClick={dismissAction}>
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <form
+              className="gem-composer"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void send(draft);
+              }}
+            >
+              {attach && (
+                <div className="coach-attach-strip">
+                  <img className="coach-attach-thumb" src={attach} alt="Attachment preview" />
+                  <button
+                    type="button"
+                    className="btn ghost sm"
+                    aria-label="Remove attachment"
+                    onClick={() => setAttach(null)}
+                  >
+                    <IClose size={14} />
+                  </button>
+                </div>
+              )}
+
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                className="gem-textarea"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    void send(draft);
+                  }
+                }}
+                placeholder="Ask OmniFlow Coach…"
+                aria-label="Ask the coach"
+                disabled={pending}
+              />
+
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={(e) => {
+                  void pickImage(e.target.files?.[0] ?? null);
+                  e.target.value = '';
+                }}
+              />
+
+              <div className="gem-composer-bar">
+                <div className="gem-composer-tools">
+                  <button
+                    type="button"
+                    className="gem-tool-btn"
+                    aria-label="Attach image"
+                    title="Attach receipt or screenshot"
+                    onClick={() => fileRef.current?.click()}
+                    disabled={pending}
+                  >
+                    <IImage size={16} />
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`gem-tool-pill${coachThinking ? ' on' : ''}`}
+                    onClick={toggleThinking}
+                    aria-pressed={coachThinking}
+                    title={coachThinking
+                      ? 'Thinking mode ON — shows reasoning before answering'
+                      : 'Fast mode — concise, answer-first replies'}
+                  >
+                    <span>⚡</span>
+                    <span>{coachThinking ? 'Thinking' : 'Fast'}</span>
+                  </button>
+
+                  <div ref={strategyRef} style={{ position: 'relative' }}>
+                    <button
+                      type="button"
+                      className="gem-tool-pill"
+                      onClick={() => setStrategyOpen((o) => !o)}
+                      aria-expanded={strategyOpen}
+                      title="Portfolio strategy the coach follows for new money"
+                    >
+                      <span>◉</span>
+                      <span>{strategyName}</span>
+                    </button>
+                    {strategyOpen && (
+                      <div className="gem-strategy-pop">
+                        {Object.values(FAMED_STRATEGIES).map((s) => (
+                          <button
+                            key={s.key}
+                            type="button"
+                            className={`gem-strategy-opt${s.key === coachStrategy ? ' on' : ''}`}
+                            onClick={() => setStrategy(s.key)}
+                          >
+                            <div className="gem-strategy-name">{s.name}</div>
+                            <div className="gem-strategy-blurb">{s.blurb}</div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  className="gem-send-btn"
+                  type="submit"
+                  aria-label="Send message"
+                  disabled={pending || (!draft.trim() && !attach)}
+                >
+                  <IArrowUp size={17} />
+                </button>
+              </div>
+            </form>
+
+            <p className="gem-disclaimer">
+              OmniFlow Coach reads only your encrypted vault. Verify key figures before acting.
+            </p>
+          </div>
+        </div>
+      </main>
+    </div>
   );
 }
