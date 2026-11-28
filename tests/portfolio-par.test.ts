@@ -310,4 +310,19 @@ describe('buildPortfolio — StashAway-style allocation sleeves', () => {
     expect(viaBuild.byAccount[0].valueBase).toBe(6000);
     expect(viaInBase.valueBase).not.toBe(6000);
   });
+
+  it('custom ticker sleeves auto-calculate total value & P&L from live quotes', () => {
+    const a = accOf({ initialDepositBase: 10000 });
+    const s1 = sleeve({ id: 's1', symbol: 'CSPX', assetClass: 'etf', isAllocation: true, allocationPct: 70, refPrice: 500 });
+    const s2 = sleeve({ id: 's2', symbol: 'GLDM', assetClass: 'gold', isAllocation: true, allocationPct: 20, refPrice: 200 });
+    const s3 = sleeve({ id: 's3', symbol: 'CASH', assetClass: 'cash', isAllocation: true, allocationPct: 10, refPrice: 1 });
+    const quotes: Record<string, QuoteSnapshot> = {
+      CSPX: { symbol: 'CSPX', assetClass: 'etf', price: 550, currency: 'USD', asOf: 0, source: 'yahoo' },
+      GLDM: { symbol: 'GLDM', assetClass: 'gold', price: 210, currency: 'USD', asOf: 0, source: 'yahoo' },
+    };
+    const p = buildPortfolio([a], [s1, s2, s3], quotes, 'MYR', ratesOf(fx));
+    // 7000 * 1.10 + 2000 * 1.05 + 1000 * 1.0 = 7700 + 2100 + 1000 = 10800 -> +800 P&L
+    expect(p.byAccount[0].valueBase).toBeCloseTo(10800);
+    expect(p.byAccount[0].pnlBase).toBeCloseTo(800);
+  });
 });

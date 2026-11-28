@@ -118,25 +118,46 @@ export function InvestmentsView() {
   const parMode = isParClass(assetClass);
 
   const [saRefs, setSaRefs] = useState<Record<string, number>>({});
-  const [roboRows, setRoboRows] = useState<{ assetClass: InvestmentHolding['assetClass']; pct: string }[]>([
-    { assetClass: 'equity-us', pct: '60' },
-    { assetClass: 'gold', pct: '20' },
-    { assetClass: 'cash', pct: '20' },
+  const [roboRows, setRoboRows] = useState<{ assetClass: InvestmentHolding['assetClass']; pct: string; ticker: string }[]>([
+    { assetClass: 'equity-us', pct: '60', ticker: '' },
+    { assetClass: 'gold', pct: '20', ticker: '' },
+    { assetClass: 'cash', pct: '20', ticker: '' },
   ]);
   const isRobo = acctType === 'robo';
-  const seedRoboRefs = async (classes: string[]) => {
+  /**
+   * Seed the reference price for a sleeve.
+   * When the row has a custom ticker the quote engine fetches THAT instrument
+   * (so refPrice anchors to CSPX, GLD, QQQ, etc., not the broad index).
+   * Cache key is `TICKER` when set, or `assetClass` otherwise, so changing
+   * the ticker field triggers a fresh fetch and overwrites the stale ref.
+   */
+  const seedRoboRefs = async (rows: { assetClass: string; ticker: string }[]) => {
     await Promise.all(
-      classes.map(async (c) => {
-        if (saRefs[c] && saRefs[c] > 0) return;
+      rows.map(async (r) => {
+        const cacheKey = (r.ticker && r.ticker.trim()) ? r.ticker.trim().toUpperCase() : r.assetClass;
+        if (saRefs[cacheKey] && saRefs[cacheKey] > 0) return;
         try {
-          const p = await marketDataService.referencePriceFor(c, base);
-          if (p > 0) setSaRefs((prev) => ({ ...prev, [c]: p }));
+          let p = 0;
+          if (r.ticker && r.ticker.trim()) {
+            // Build a synthetic holding so the existing quote() routing handles
+            // crypto (CoinGecko) vs equity/ETF/gold (Yahoo) automatically.
+            const q = await marketDataService.quote({
+              id: '__ref__', accountId: '', symbol: r.ticker.trim().toUpperCase(),
+              assetClass: r.assetClass as InvestmentHolding['assetClass'],
+              holdingCurrency: base, units: 1, averageEntryPrice: 1,
+              currentPriceLocal: 0, currentPriceBase: 0,
+            });
+            p = Number.isFinite(q.price) && q.price > 0 ? q.price : 0;
+          } else {
+            p = await marketDataService.referencePriceFor(r.assetClass, base);
+          }
+          if (p > 0) setSaRefs((prev) => ({ ...prev, [cacheKey]: p }));
         } catch { /* offline */ }
       }),
     );
   };
   useEffect(() => {
-    if (isRobo) void seedRoboRefs(roboRows.map((r) => r.assetClass));
+    if (isRobo) void seedRoboRefs(roboRows.map((r) => ({ assetClass: r.assetClass, ticker: r.ticker })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isRobo]);
 
@@ -380,23 +401,52 @@ export function InvestmentsView() {
   };
 
   // ---- CRUD handlers ----
-  const addAccount = () => {
+  const fetchSleeveRefPrice = async (assetClassName: InvestmentHolding['assetClass'], tickerStr: string): Promise<number> => {
+    const cleanTicker = tickerStr.trim().toUpperCase();
+    try {
+      if (cleanTicker) {
+        const q = await marketDataService.quote({
+          id: '__ref__', accountId: '', symbol: cleanTicker,
+          assetClass: assetClassName,
+          holdingCurrency: base, units: 1, averageEntryPrice: 1,
+          currentPriceLocal: 0, currentPriceBase: 0,
+        });
+        return Number.isFinite(q.price) && q.price > 0 ? q.price : 0;
+      }
+      return await marketDataService.referencePriceFor(assetClassName, base);
+    } catch {
+      return 0;
+    }
+  };
+
+  const addAccount = async () => {
     const name = platform.trim();
     if (!name) return;
     const d = parseFloat(deposit);
     const depositOk = Number.isFinite(d) && d > 0;
     if (isRobo) {
-      const sleeves = roboRows
-        .filter((r) => Number.isFinite(parseFloat(r.pct)) && parseFloat(r.pct) > 0)
-        .map((r) => ({
-          assetClass: r.assetClass,
-          allocationPct: parseFloat(r.pct),
-          refPrice: saRefs[r.assetClass] || 0,
-        }));
-      if (sleeves.length === 0) {
+      const validRows = roboRows.filter((r) => Number.isFinite(parseFloat(r.pct)) && parseFloat(r.pct) > 0);
+      if (validRows.length === 0) {
         toast('Pick at least one asset to allocate to');
         return;
       }
+      const sleeves = await Promise.all(
+        validRows.map(async (r) => {
+          const cleanTicker = r.ticker.trim().toUpperCase();
+          const cacheKey = cleanTicker || r.assetClass;
+          let ref = saRefs[cacheKey] || 0;
+          if (ref <= 0 && !isParClass(r.assetClass)) {
+            ref = await fetchSleeveRefPrice(r.assetClass, cleanTicker);
+            if (ref > 0) setSaRefs((prev) => ({ ...prev, [cacheKey]: ref }));
+          }
+          return {
+            assetClass: r.assetClass,
+            allocationPct: parseFloat(r.pct),
+            refPrice: ref,
+            ticker: cleanTicker || undefined,
+          };
+        }),
+      );
       const id = store.addAllocationPortfolio({
         platformName: name,
         netDepositBase: depositOk ? d : 0,
@@ -1287,48 +1337,83 @@ export function InvestmentsView() {
                 {isRobo && (
                   <div className="field" style={{ marginTop: 10 }}>
                     <span>Assets &amp; allocation %</span>
-                    {roboRows.map((r, i) => (
-                      <div key={i} className="row" style={{ gap: 8, marginBottom: 6 }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <ThemedSelect
-                            value={r.assetClass}
-                            onChange={(v: string) => {
-                              setRoboRows((prev) => prev.map((row, j) => (j === i ? { ...row, assetClass: v as typeof r.assetClass } : row)));
-                              void seedRoboRefs([v]);
-                            }}
-                            options={[
-                              { value: 'equity-us', label: 'Global equities' },
-                              { value: 'equity-local', label: 'Local equities' },
-                              { value: 'etf', label: 'ETF / index fund' },
-                              { value: 'gold', label: 'Gold' },
-                              { value: 'crypto', label: 'Crypto' },
-                              { value: 'cash', label: 'Cash / MMF' },
-                              { value: 'mmf', label: 'Money market' },
-                            ]}
-                            aria-label="Asset class"
-                          />
+                    {roboRows.map((r, i) => {
+                      const cacheKey = (r.ticker && r.ticker.trim()) ? r.ticker.trim().toUpperCase() : r.assetClass;
+                      const liveRef = saRefs[cacheKey];
+                      return (
+                        <div key={i} style={{ marginBottom: 10, padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 10, border: '1px solid var(--line)' }}>
+                          <div className="row" style={{ gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+                            <div style={{ flex: '1 1 140px', minWidth: 0 }}>
+                              <ThemedSelect
+                                value={r.assetClass}
+                                onChange={(v: string) => {
+                                  setRoboRows((prev) => prev.map((row, j) => (j === i ? { ...row, assetClass: v as typeof r.assetClass } : row)));
+                                  void seedRoboRefs([{ assetClass: v, ticker: r.ticker }]);
+                                }}
+                                options={[
+                                  { value: 'equity-us', label: 'Global equities' },
+                                  { value: 'equity-local', label: 'Local equities' },
+                                  { value: 'etf', label: 'ETF / index fund' },
+                                  { value: 'gold', label: 'Gold' },
+                                  { value: 'crypto', label: 'Crypto' },
+                                  { value: 'cash', label: 'Cash / MMF' },
+                                  { value: 'mmf', label: 'Money market' },
+                                ]}
+                                aria-label="Asset class"
+                              />
+                            </div>
+                            <input
+                              type="number"
+                              value={r.pct}
+                              onChange={(e) => setRoboRows((prev) => prev.map((row, j) => (j === i ? { ...row, pct: e.target.value } : row)))}
+                              style={{ width: 68, textAlign: 'right' }}
+                              aria-label="Allocation percent"
+                              placeholder="%"
+                            />
+                            <button
+                              type="button"
+                              className="btn ghost sm"
+                              onClick={() => setRoboRows((prev) => prev.filter((_, j) => j !== i))}
+                              disabled={roboRows.length <= 1}
+                            >✕</button>
+                          </div>
+                          {/* Ticker row — optional. When set, live quotes track this exact instrument */}
+                          <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <input
+                                value={r.ticker}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setRoboRows((prev) => prev.map((row, j) => (j === i ? { ...row, ticker: val } : row)));
+                                }}
+                                onBlur={() => {
+                                  if (r.ticker.trim()) void seedRoboRefs([{ assetClass: r.assetClass, ticker: r.ticker }]);
+                                }}
+                                placeholder="Ticker (optional) — e.g. CSPX, GLD, QQQ"
+                                style={{ width: '100%', fontSize: 12 }}
+                                aria-label="Ticker symbol"
+                              />
+                            </div>
+                            {liveRef && liveRef > 0 && (
+                              <span className="chip sm ok" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+                                ref {liveRef.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                              </span>
+                            )}
+                          </div>
+                          {r.ticker.trim() && (
+                            <div className="small muted" style={{ marginTop: 4, fontSize: 11 }}>
+                              P&L will auto-calculate using live <strong>{r.ticker.trim().toUpperCase()}</strong> price
+                            </div>
+                          )}
                         </div>
-                        <input
-                          type="number"
-                          value={r.pct}
-                          onChange={(e) => setRoboRows((prev) => prev.map((row, j) => (j === i ? { ...row, pct: e.target.value } : row)))}
-                          style={{ width: 68, textAlign: 'right' }}
-                          aria-label="Allocation percent"
-                        />
-                        <button
-                          type="button"
-                          className="btn ghost sm"
-                          onClick={() => setRoboRows((prev) => prev.filter((_, j) => j !== i))}
-                          disabled={roboRows.length <= 1}
-                        >✕</button>
-                      </div>
-                    ))}
-                    <button type="button" className="btn ghost sm" onClick={() => setRoboRows((prev) => [...prev, { assetClass: 'equity-us', pct: '0' }])}>
+                      );
+                    })}
+                    <button type="button" className="btn ghost sm" onClick={() => setRoboRows((prev) => [...prev, { assetClass: 'equity-us', pct: '0', ticker: '' }])}>
                       <IPlus size={14} /> Add sleeve
                     </button>
                   </div>
                 )}
-                <button className="btn sm" style={{ width: '100%', marginTop: 12 }} onClick={addAccount}>
+                <button className="btn sm" style={{ width: '100%', marginTop: 12 }} onClick={() => void addAccount()}>
                   <IPlus size={15} /> {isRobo ? 'Create portfolio' : 'Create account'}
                 </button>
               </div>

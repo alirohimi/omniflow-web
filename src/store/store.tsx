@@ -126,6 +126,11 @@ export interface AllocationSleeveInput {
   assetClass: InvestmentHolding['assetClass'];
   allocationPct: number;     // target weight, 0-100
   refPrice?: number;         // class ticker level when the allocation was set
+  /** Optional explicit ticker symbol (e.g. 'CSPX', 'GLD', 'QQQ'). When set
+   *  the live quote fetches THIS symbol instead of the class-level reference
+   *  index, so P&L tracks the actual fund the user holds. Falls back to the
+   *  class reference ticker when omitted or empty. */
+  ticker?: string;
 }
 
 export interface NewAllocationPortfolioInput {
@@ -1198,7 +1203,10 @@ export function VaultProvider({ children }: { children: ReactNode }) {
           .map((s, i) => {
             const ref = Number.isFinite(s.refPrice) && (s.refPrice ?? 0) > 0 ? s.refPrice! : 1;
             const sliceBase = (s.allocationPct / 100) * dep;
-            const sym = classReferenceSymbol(s.assetClass);
+            // Use the user's explicit ticker when provided; fall back to the
+            // class-level reference index (e.g. ^GSPC for equity-us) so the
+            // live-quote engine fetches the same benchmark StashAway uses.
+            const sym = (s.ticker && s.ticker.trim()) ? s.ticker.trim().toUpperCase() : classReferenceSymbol(s.assetClass);
             return {
               id: `h-${now.toString(36)}-${i}-${Math.random().toString(36).slice(2, 5)}`,
               accountId: accId,
